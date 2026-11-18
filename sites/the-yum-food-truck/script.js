@@ -6,6 +6,71 @@
   var row = document.querySelector('#week li[data-day="' + today + '"]');
   if (row) row.classList.add("today");
 
+  /* Scroll reveals */
+  var revealEls = document.querySelectorAll(".reveal, .stagger");
+  if ("IntersectionObserver" in window) {
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (entry) {
+        if (entry.isIntersecting) {
+          entry.target.classList.add("in");
+          io.unobserve(entry.target);
+        }
+      });
+    }, { rootMargin: "0px 0px -8% 0px", threshold: 0.12 });
+    revealEls.forEach(function (el) { io.observe(el); });
+  } else {
+    revealEls.forEach(function (el) { el.classList.add("in"); });
+  }
+
+  /* Header shadow once the page scrolls */
+  var header = document.querySelector(".site-header");
+  if (header) {
+    var onScroll = function () { header.classList.toggle("scrolled", window.scrollY > 8); };
+    onScroll();
+    window.addEventListener("scroll", onScroll, { passive: true });
+  }
+
+  /* Highlight the nav link for the section in view */
+  var navLinks = document.querySelectorAll('.nav a[href^="#"]');
+  if (navLinks.length && "IntersectionObserver" in window) {
+    var byId = {};
+    navLinks.forEach(function (a) { byId[a.getAttribute("href").slice(1)] = a; });
+    var spy = new IntersectionObserver(function (entries) {
+      entries.forEach(function (entry) {
+        var link = byId[entry.target.id];
+        if (!link) return;
+        if (entry.isIntersecting) {
+          navLinks.forEach(function (a) { a.classList.remove("active"); });
+          link.classList.add("active");
+        }
+      });
+    }, { rootMargin: "-45% 0px -50% 0px" });
+    Object.keys(byId).forEach(function (id) {
+      var sec = document.getElementById(id);
+      if (sec) spy.observe(sec);
+    });
+  }
+
+  /* Mobile menu */
+  var toggle = document.querySelector(".menu-toggle");
+  if (toggle && header) {
+    var label = toggle.querySelector(".sr-only");
+    var setOpen = function (open) {
+      header.classList.toggle("menu-open", open);
+      toggle.setAttribute("aria-expanded", open ? "true" : "false");
+      label.textContent = open ? "Close menu" : "Open menu";
+    };
+    toggle.addEventListener("click", function () {
+      setOpen(!header.classList.contains("menu-open"));
+    });
+    document.querySelectorAll(".mobile-nav a").forEach(function (a) {
+      a.addEventListener("click", function () { setOpen(false); });
+    });
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape") setOpen(false);
+    });
+  }
+
   var form = document.getElementById("catering-form");
   if (!form) return;
   var status = document.getElementById("form-status");
