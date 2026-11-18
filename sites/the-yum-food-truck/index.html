@@ -34,7 +34,7 @@
     <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></symbol>
   </svg>
 
-  <div class="sample-note">Sample homepage prepared for The Yum Food Truck. <mark>Highlighted</mark> items are placeholders until you confirm them.</div>
+  <div class="sample-note">Sample homepage prepared for The Yum Food Truck. <mark>Highlighted</mark> items are placeholders until you confirm them. Photos are stand-ins until we shoot your food.</div>
 
   <header class="site-header">
     <div class="wrap">
@@ -50,7 +50,7 @@
   </header>
 
   <main id="top">
-    <section class="hero">
+    <section class="hero hero-dark">
       <div class="wrap hero-grid">
         <div>
           <h1>Wings worth coming back for seconds.</h1>
@@ -61,9 +61,9 @@
           </div>
           <p class="rating"><span class="stars" aria-hidden="true">★★★★½</span> 4.5 stars from 12 Google reviews</p>
         </div>
-        <div class="photo-ph" role="img" aria-label="Photo placeholder for a close-up of the wings">
-          <strong>Photo placeholder</strong>
-          <p>A close-up of a fresh basket of wings, shot at the truck. Send us your favourite photo and it goes here.</p>
+        <div class="hero-photos">
+          <img class="hero-main" src="images/wings-ranch-1600.jpg" srcset="images/wings-ranch-800.jpg 800w, images/wings-ranch-1600.jpg 1600w" sizes="(min-width: 900px) 46vw, 92vw" width="1600" height="1933" alt="Saucy chicken wings with ranch dip and celery" fetchpriority="high">
+          <img class="hero-inset" src="images/wings-basket-800.jpg" width="800" height="1067" alt="A paper-lined basket of glazed wings next to hot sauce" loading="lazy">
         </div>
       </div>
     </section>
@@ -107,10 +107,7 @@
         <p class="lede">The wings are the reason people line up. Everything else is built to go with them.</p>
         <div class="menu-grid">
           <article class="feature">
-            <div class="photo-ph wide" role="img" aria-label="Photo placeholder for the wings">
-              <strong>Photo placeholder</strong>
-              <p>Wings with sauce, straight out of the fryer.</p>
-            </div>
+            <img class="photo wide" src="images/wings-board-1600.jpg" srcset="images/wings-board-800.jpg 800w, images/wings-board-1600.jpg 1600w" sizes="(min-width: 900px) 520px, 92vw" width="1600" height="1089" alt="Sticky glazed wings on a wooden board with a creamy dip" loading="lazy">
             <h3>Wings</h3>
             <p>The dish our Google reviewers rave about. Order a basket, pick your sauce, and see why people come back for seconds.</p>
             <ul class="flavors" aria-label="Sauces">
@@ -130,7 +127,10 @@
               </ul>
             </div>
             <div class="menu-group">
-              <h3>Sides and drinks</h3>
+              <div class="sides-head">
+                <img src="images/fries-800.jpg" width="800" height="1200" alt="Fries in a newspaper-lined basket" loading="lazy">
+                <h3>Sides and drinks</h3>
+              </div>
               <ul class="menu-list">
                 <li><span class="name"><span class="ph">Side 1</span></span><span class="leader"></span><span class="price"><span class="ph">$ __</span></span></li>
                 <li><span class="name"><span class="ph">Side 2</span></span><span class="leader"></span><span class="price"><span class="ph">$ __</span></span></li>
@@ -146,6 +146,7 @@
     <section class="section schedule" id="catering">
       <div class="wrap catering-grid">
         <div>
+          <img class="photo catering-photo" src="images/wings-tray-1600.jpg" srcset="images/wings-tray-800.jpg 800w, images/wings-tray-1600.jpg 1600w" sizes="(min-width: 900px) 440px, 92vw" width="1600" height="1300" alt="A full party tray of wings with lime and dipping sauce" loading="lazy">
           <h2>Feed your party or office without the hassle</h2>
           <p>Birthdays, office lunches, block parties, game nights. We park, we cook, your guests eat hot wings straight from the truck.</p>
           <ol class="steps">
@@ -206,7 +207,7 @@
       </div>
     </section>
 
-    <section class="section" id="find-us">
+    <section class="section find-dark" id="find-us">
       <div class="wrap find-grid">
         <div>
           <h2>Hungry now?</h2>
@@ -214,7 +215,7 @@
         </div>
         <div class="find-actions">
           <a class="btn btn-primary" href="https://www.google.com/maps/dir/?api=1&amp;destination=503+SW+2nd+Ave+Fort+Lauderdale+FL" target="_blank" rel="noopener"><svg class="icon"><use href="#i-pin"/></svg>Get directions</a>
-          <a class="btn btn-ghost" href="tel:+19545573972"><svg class="icon"><use href="#i-phone"/></svg>Call us</a>
+          <a class="btn btn-ghost btn-light" href="tel:+19545573972"><svg class="icon"><use href="#i-phone"/></svg>Call us</a>
         </div>
       </div>
     </section>

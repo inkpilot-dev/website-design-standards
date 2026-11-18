@@ -1,0 +1,8 @@
+Stand-in photos from Unsplash (Unsplash License: free to use, no attribution required).
+Replace with real photos of The Yum Food Truck before launch. Keep the same filenames to swap them in.
+
+wings-ranch   images.unsplash.com/photo-1567620832903-9fc6debc209f
+wings-basket  images.unsplash.com/photo-1608039755401-742074f0548d
+wings-board   images.unsplash.com/photo-1527477396000-e27163b481c2
+wings-tray    images.unsplash.com/photo-1614398751058-eb2e0bf63e53
+fries         images.unsplash.com/photo-1573080496219-bb080dd4f877
