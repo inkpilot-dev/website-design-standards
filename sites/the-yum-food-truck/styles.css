@@ -130,7 +130,10 @@ p { margin: 0 0 var(--s4); }
   text-decoration: none;
   line-height: 1.1;
 }
-.brand span { color: var(--primary); }
+.brand { display: inline-flex; align-items: center; gap: var(--s3); }
+.brand em { font-style: normal; color: var(--primary); }
+.brand-mark { width: 2.75rem; height: 2.75rem; flex: none; transition: transform 0.6s var(--ease); }
+.brand:hover .brand-mark { transform: rotate(-8deg); }
 .nav { display: none; gap: var(--s5); }
 .nav a { color: var(--ink); text-decoration: none; font-weight: 500; }
 .nav a:hover { color: var(--primary); }
@@ -317,8 +320,9 @@ textarea { min-height: 7rem; resize: vertical; }
 .site-footer a { color: #f3ead9; }
 .footer-grid { display: grid; gap: var(--s6); }
 @media (min-width: 760px) { .footer-grid { grid-template-columns: 1.4fr 1fr 1fr; } }
-.site-footer .brand { color: var(--paper); font-size: 1.5rem; display: inline-block; margin-bottom: var(--s3); }
-.site-footer .brand span { color: var(--accent); }
+.footer-badge { display: inline-block; margin-bottom: var(--s4); }
+.footer-badge img { width: 7.5rem; height: 7.5rem; transition: transform 0.8s var(--ease); }
+.footer-badge:hover img { transform: rotate(-10deg); }
 .site-footer h4 { font-family: var(--body); font-size: 1rem; color: var(--white); margin: 0 0 var(--s3); }
 .site-footer ul { list-style: none; padding: 0; margin: 0; display: grid; gap: var(--s2); }
 .legal { margin-top: var(--s7); padding-top: var(--s5); border-top: 1px solid #3a332e; display: flex; flex-wrap: wrap; justify-content: space-between; gap: var(--s3); font-size: 0.9rem; }
@@ -562,3 +566,50 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--p
   .js .reveal, .js .stagger > * { opacity: 1; transform: none; }
   .media:hover img { transform: none; }
 }
+
+/* ---------- Photo and surface cohesion ---------- */
+/* Fine film grain over every surface, matched to the grain baked into the graded photos */
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  pointer-events: none;
+  opacity: 0.07;
+  mix-blend-mode: multiply;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0.11 0 0 0 0 0.08 0 0 0 0 0.07 0 0 0 1 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+/* Dark sections pick up the warm shadow tone of the photos */
+.hero-dark { background: linear-gradient(180deg, #231a15 0%, var(--ink) 55%, #160f0c 100%); }
+.find-dark { background: linear-gradient(180deg, #231a15 0%, var(--ink) 70%); }
+.band { background: linear-gradient(180deg, #ba3a1e 0%, var(--primary) 50%, #a8311a 100%); }
+
+/* Photos sit on the page with a warm, soft shadow instead of a hard edge */
+.hero-main, .media {
+  box-shadow: 0 2px 0 rgba(255, 240, 220, 0.04) inset, 0 40px 70px -40px rgba(10, 6, 4, 0.75);
+}
+.section .media { box-shadow: 0 30px 60px -36px rgba(60, 30, 15, 0.45); }
+.hero-inset { box-shadow: 0 24px 50px -20px rgba(0, 0, 0, 0.7); }
+.sides-head img { box-shadow: 0 10px 22px -12px rgba(60, 30, 15, 0.5); }
+
+/* Logo badge stamped on the hero photo */
+.hero-badge {
+  position: absolute;
+  top: calc(-1 * var(--s6));
+  right: calc(-1 * var(--s5));
+  width: 8rem;
+  height: 8rem;
+  z-index: 2;
+  filter: drop-shadow(0 14px 22px rgba(0, 0, 0, 0.45));
+  transform: rotate(-10deg);
+}
+@media (max-width: 899px) {
+  .hero-badge { width: 5.75rem; height: 5.75rem; top: calc(-1 * var(--s4)); right: calc(-1 * var(--s2)); }
+}
+@media (max-width: 1240px) and (min-width: 900px) { .hero-badge { right: calc(-1 * var(--s3)); } }
+@keyframes badge-in {
+  from { opacity: 0; transform: rotate(-40deg) scale(0.6); }
+  to { opacity: 1; transform: rotate(-10deg) scale(1); }
+}
+.js .enter-badge { animation: badge-in 1s var(--ease) both; animation-delay: 900ms; }

@@ -6,3 +6,10 @@ wings-basket  images.unsplash.com/photo-1608039755401-742074f0548d
 wings-board   images.unsplash.com/photo-1527477396000-e27163b481c2
 wings-tray    images.unsplash.com/photo-1614398751058-eb2e0bf63e53
 fries         images.unsplash.com/photo-1573080496219-bb080dd4f877
+
+All photos are colour-graded to one warm look that matches the site palette
+(warm white balance, shadows toned to the page's dark brown, highlights toned
+to its cream, fine grain). Grade real photos the same way when swapping them in.
+
+logo-mark.svg and logo-badge.svg are an original proposed logo, drawn for this
+sample. The badge lettering is Fraunces (SIL Open Font License) converted to outlines.
