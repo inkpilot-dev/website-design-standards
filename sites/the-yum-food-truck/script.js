@@ -3,30 +3,8 @@
   year.forEach(function (el) { el.textContent = new Date().getFullYear(); });
 
   var today = new Date().getDay();
-  var row = document.querySelector('.days li[data-day="' + today + '"]');
+  var row = document.querySelector('.hours tr[data-day="' + today + '"]');
   if (row) row.classList.add("today");
-
-  /* Gentle parallax on large photos */
-  var reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  var layers = document.querySelectorAll(".parallax");
-  if (layers.length && !reduce) {
-    var ticking = false;
-    var update = function () {
-      var vh = window.innerHeight;
-      layers.forEach(function (img) {
-        var r = img.parentElement.getBoundingClientRect();
-        if (r.bottom < 0 || r.top > vh) return;
-        var progress = (r.top + r.height / 2 - vh / 2) / (vh + r.height);
-        img.style.transform = "translate3d(0," + (-8 + progress * -14).toFixed(2) + "%,0)";
-      });
-      ticking = false;
-    };
-    update();
-    window.addEventListener("scroll", function () {
-      if (!ticking) { ticking = true; requestAnimationFrame(update); }
-    }, { passive: true });
-    window.addEventListener("resize", update);
-  }
 
   /* Scroll reveals */
   var revealEls = document.querySelectorAll(".reveal, .stagger");

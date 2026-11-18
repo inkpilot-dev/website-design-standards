@@ -4,11 +4,11 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>The Yum Food Truck | Wings and catering in Fort Lauderdale</title>
-  <meta name="description" content="The Yum Food Truck serves wings at 503 SW 2nd Ave, Fort Lauderdale. See this week's hours and the menu, or book the truck for a private event or office lunch.">
+  <meta name="description" content="The Yum Food Truck serves wings at 503 SW 2nd Ave, Fort Lauderdale. See hours and the menu, or book the truck for a private event or office lunch.">
   <link rel="icon" href="images/logo-mark.svg" type="image/svg+xml">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400..900;1,9..144,400..900&family=Karla:wght@400;500;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght,SOFT@9..144,500..700,60&family=Karla:wght@400;500;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="styles.css">
   <script>document.documentElement.classList.add("js")</script>
   <script type="application/ld+json">
@@ -34,8 +34,10 @@
     <symbol id="i-pin" viewBox="0 0 24 24"><path d="M20 10c0 6-8 12-8 12S4 16 4 10a8 8 0 0 1 16 0z"/><circle cx="12" cy="10" r="3"/></symbol>
     <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></symbol>
     <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></symbol>
-    <symbol id="i-chili" viewBox="0 0 24 24"><path d="M14.5 6.5c2.2-.3 4.4.8 5.3 2.9 1.2 2.9-.6 6.5-4.4 8.7-3.3 1.9-7.6 2.6-10.9 1.6 3.4-.9 5.6-3.3 6.6-6.4.8-2.6 1.4-5.6 3.4-6.8zM14.5 6.5c-.2-1.6.4-3 1.8-4"/></symbol>
-    <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 2v6M12 16v6M2 12h6M16 12h6M5 5l4 4M15 15l4 4M19 5l-4 4M9 15l-4 4"/></symbol>
+    <symbol id="i-share" viewBox="0 0 24 24"><path d="M4 12v7a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7M16 6l-4-4-4 4M12 2v13"/></symbol>
+    <symbol id="i-calendar" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+    <symbol id="i-photo" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21"/></symbol>
   </svg>
 
   <div class="sample-note">Sample homepage prepared for The Yum Food Truck. <mark>Highlighted</mark> items are placeholders until you confirm them. Photos are stand-ins until we shoot your food.</div>
@@ -45,7 +47,7 @@
       <a class="brand" href="#top"><img class="brand-mark" src="images/logo-mark.svg" width="44" height="44" alt=""><span class="brand-name">The Yum <em>Food Truck</em></span></a>
       <nav class="nav" aria-label="Main">
         <a href="#menu">Menu</a>
-        <a href="#week">This week</a>
+        <a href="#hours">Location &amp; hours</a>
         <a href="#catering">Catering</a>
         <a href="#reviews">Reviews</a>
       </nav>
@@ -55,7 +57,7 @@
     <nav class="mobile-nav" id="mobile-nav" aria-label="Mobile">
       <div class="wrap">
         <a href="#menu">Menu</a>
-        <a href="#week">This week</a>
+        <a href="#hours">Location &amp; hours</a>
         <a href="#catering">Catering</a>
         <a href="#reviews">Reviews</a>
         <a class="btn btn-primary" href="tel:+19545573972"><svg class="icon"><use href="#i-phone"/></svg>(954) 557-3972</a>
@@ -64,241 +66,229 @@
   </header>
 
   <main id="top">
-    <section class="hero">
-      <div class="hero-grid">
-        <div class="hero-copy">
-          <p class="kicker enter" style="--d:0ms">Wing truck <span aria-hidden="true">/</span> Fort Lauderdale</p>
-          <h1 class="split">
-            <span class="line"><span style="--d:80ms">Wings worth</span></span>
-            <span class="line"><span style="--d:180ms"><em>coming back</em></span></span>
-            <span class="line"><span style="--d:280ms">for.</span></span>
-          </h1>
-          <p class="lede enter" style="--d:450ms">Saucy wings from a truck parked on SW 2nd Ave. Grab a basket tonight, or bring the whole truck to your next party.</p>
-          <div class="hero-actions enter" style="--d:560ms">
-            <a class="btn btn-primary btn-lg" href="#catering">Book the truck</a>
-            <a class="btn btn-line" href="#menu">See the menu</a>
-          </div>
-        </div>
-        <div class="hero-photo">
-          <div class="parallax-frame enter-photo">
-            <img class="parallax" src="images/wings-ranch-1600.jpg" srcset="images/wings-ranch-800.jpg 800w, images/wings-ranch-1600.jpg 1600w" sizes="(min-width: 960px) 50vw, 100vw" width="1600" height="1933" alt="Saucy chicken wings with ranch dip and celery" fetchpriority="high">
-          </div>
-          <img class="hero-badge enter-badge" src="images/logo-badge.svg" width="140" height="140" alt="">
-        </div>
+    <section class="cover" aria-label="The Yum Food Truck">
+      <div class="cover-strip">
+        <img class="enter-photo" style="--d:0ms" src="images/wings-ranch-1600.jpg" srcset="images/wings-ranch-800.jpg 800w, images/wings-ranch-1600.jpg 1600w" sizes="(min-width: 900px) 34vw, 90vw" width="1600" height="1933" alt="Saucy chicken wings with ranch dip and celery" fetchpriority="high">
+        <img class="enter-photo" style="--d:90ms" src="images/wings-board-800.jpg" width="800" height="544" alt="Glazed wings on a wooden board">
+        <img class="enter-photo" style="--d:180ms" src="images/wings-basket-800.jpg" width="800" height="1067" alt="A paper-lined basket of wings next to hot sauce">
+        <img class="enter-photo" style="--d:270ms" src="images/wings-tray-800.jpg" width="800" height="650" alt="A party tray of wings with lime">
       </div>
-
-      <div class="infobar enter" style="--d:700ms">
-        <div class="wrap infobar-inner">
-          <a class="info" href="#reviews">
-            <span class="stars" aria-hidden="true"><span style="--pct:90%"></span></span>
-            <span><strong>4.5</strong> from 12 Google reviews</span>
-          </a>
-          <a class="info" href="#week"><svg class="icon"><use href="#i-clock"/></svg><span>Today <span class="ph">Hours</span></span></a>
-          <a class="info" href="https://www.google.com/maps/dir/?api=1&amp;destination=503+SW+2nd+Ave+Fort+Lauderdale+FL" target="_blank" rel="noopener"><svg class="icon"><use href="#i-pin"/></svg><span>503 SW 2nd Ave</span></a>
-          <a class="info" href="tel:+19545573972"><svg class="icon"><use href="#i-phone"/></svg><span>(954) 557-3972</span></a>
+      <div class="cover-info">
+        <div class="wrap cover-inner">
+          <img class="cover-badge enter-badge" src="images/logo-badge.svg" width="112" height="112" alt="">
+          <div>
+            <h1 class="enter" style="--d:150ms">The Yum Food Truck</h1>
+            <p class="cover-rating enter" style="--d:250ms">
+              <span class="stars" aria-label="4.5 out of 5 stars"><span style="--pct:90%"></span></span>
+              <strong>4.5</strong> <a href="#reviews">(12 Google reviews)</a>
+            </p>
+            <p class="cover-meta enter" style="--d:330ms">Wings <span class="dot" aria-hidden="true"></span> Food truck <span class="dot" aria-hidden="true"></span> Catering</p>
+            <p class="cover-status enter" style="--d:400ms"><span class="status-pill"><span class="ph">Open now</span></span> <span class="ph">Today's hours</span> <a href="#hours">See hours</a></p>
+          </div>
+          <a class="btn btn-light btn-small cover-photos enter" style="--d:450ms" href="#popular"><svg class="icon"><use href="#i-photo"/></svg>See photos</a>
         </div>
       </div>
     </section>
 
-    <div class="awning" aria-hidden="true"></div>
-
-    <div class="marquee" aria-hidden="true">
-      <div class="marquee-track">
-        <span>Wings worth coming back for</span><svg class="icon"><use href="#i-spark"/></svg>
-        <span><em>Come back for seconds</em></span><svg class="icon"><use href="#i-spark"/></svg>
-        <span>503 SW 2nd Ave, Fort Lauderdale</span><svg class="icon"><use href="#i-spark"/></svg>
-        <span><em>Bring the truck to your party</em></span><svg class="icon"><use href="#i-spark"/></svg>
-        <span>Wings worth coming back for</span><svg class="icon"><use href="#i-spark"/></svg>
-        <span><em>Come back for seconds</em></span><svg class="icon"><use href="#i-spark"/></svg>
-        <span>503 SW 2nd Ave, Fort Lauderdale</span><svg class="icon"><use href="#i-spark"/></svg>
-        <span><em>Bring the truck to your party</em></span><svg class="icon"><use href="#i-spark"/></svg>
-      </div>
-    </div>
-
-    <section class="section menu" id="menu">
-      <div class="wrap menu-grid">
-        <div class="menu-intro">
-          <h2 class="reveal">Straight off <em>the board.</em></h2>
-          <p class="lede reveal" style="--d:100ms">The wings are the reason people line up. Pick a size, pick a sauce, and see why our reviewers keep coming back.</p>
-          <div class="media tall reveal" style="--d:150ms">
-            <img src="images/wings-basket-1600.jpg" srcset="images/wings-basket-800.jpg 800w, images/wings-basket-1600.jpg 1600w" sizes="(min-width: 960px) 34vw, 92vw" width="1600" height="2133" alt="A paper-lined basket of glazed wings next to hot sauce" loading="lazy">
-            <span class="tag">The wings</span>
-          </div>
+    <div class="wrap page">
+      <div class="main-col">
+        <div class="actions reveal">
+          <a class="btn btn-primary" href="#catering"><svg class="icon"><use href="#i-calendar"/></svg>Book the truck</a>
+          <a class="btn btn-outline" href="tel:+19545573972"><svg class="icon"><use href="#i-phone"/></svg>Call</a>
+          <a class="btn btn-outline" href="https://www.google.com/maps/dir/?api=1&amp;destination=503+SW+2nd+Ave+Fort+Lauderdale+FL" target="_blank" rel="noopener"><svg class="icon"><use href="#i-pin"/></svg>Directions</a>
+          <button class="btn btn-outline" type="button" id="share-btn"><svg class="icon"><use href="#i-share"/></svg>Share</button>
         </div>
+        <p class="share-status" id="share-status" role="status" aria-live="polite"></p>
 
-        <div class="board reveal" style="--d:120ms">
-          <div class="board-head">
-            <img src="images/logo-mark.svg" width="48" height="48" alt="">
-            <div>
-              <h3>The menu board</h3>
-              <p>Prices and sauces change with the season</p>
-            </div>
+        <section class="block" id="menu">
+          <h2 class="reveal">Menu</h2>
+          <h3 class="sub reveal" id="popular">Popular dishes</h3>
+          <div class="dish-row stagger" tabindex="0" aria-label="Popular dishes, scroll sideways for more">
+            <figure class="dish">
+              <div class="media"><img src="images/wings-board-800.jpg" width="800" height="544" alt="Glazed wings on a wooden board" loading="lazy"></div>
+              <figcaption><strong>Wings</strong><span>The reason people come back</span></figcaption>
+            </figure>
+            <figure class="dish">
+              <div class="media"><img src="images/wings-basket-800.jpg" width="800" height="1067" alt="A basket of wings" loading="lazy"></div>
+              <figcaption><strong><span class="ph">Wings basket</span></strong><span><span class="ph">Sauce choice</span></span></figcaption>
+            </figure>
+            <figure class="dish">
+              <div class="media"><img src="images/wings-tray-800.jpg" width="800" height="650" alt="A party tray of wings" loading="lazy"></div>
+              <figcaption><strong><span class="ph">Party tray</span></strong><span>For events and office lunches</span></figcaption>
+            </figure>
+            <figure class="dish">
+              <div class="media"><img src="images/fries-800.jpg" width="800" height="1200" alt="Fries in a paper-lined basket" loading="lazy"></div>
+              <figcaption><strong><span class="ph">Fries</span></strong><span><span class="ph">Side</span></span></figcaption>
+            </figure>
           </div>
-          <div class="board-cols">
-            <div>
-              <h4>Wings</h4>
-              <ul class="board-list">
+
+          <div class="menu-cols">
+            <div class="menu-group reveal">
+              <h3 class="sub">Wings</h3>
+              <ul class="menu-list">
                 <li><span class="name"><span class="ph">6 wings</span></span><span class="leader"></span><span class="price"><span class="ph">$ __</span></span></li>
                 <li><span class="name"><span class="ph">12 wings</span></span><span class="leader"></span><span class="price"><span class="ph">$ __</span></span></li>
-                <li><span class="name"><span class="ph">24 wings</span></span><span class="leader"></span><span class="price"><span class="ph">$ __</span></span></li>
                 <li><span class="name"><span class="ph">Party tray</span></span><span class="leader"></span><span class="price"><span class="ph">$ __</span></span></li>
               </ul>
+              <ul class="flavors" aria-label="Sauces">
+                <li><span class="ph">Sauce 1</span></li>
+                <li><span class="ph">Sauce 2</span></li>
+                <li><span class="ph">Sauce 3</span></li>
+                <li><span class="ph">Sauce 4</span></li>
+              </ul>
             </div>
-            <div>
-              <h4>Sides and drinks</h4>
-              <ul class="board-list">
-                <li><span class="name"><span class="ph">Fries</span></span><span class="leader"></span><span class="price"><span class="ph">$ __</span></span></li>
+            <div class="menu-group reveal" style="--d:100ms">
+              <h3 class="sub">Sides and drinks</h3>
+              <ul class="menu-list">
+                <li><span class="name"><span class="ph">Side 1</span></span><span class="leader"></span><span class="price"><span class="ph">$ __</span></span></li>
                 <li><span class="name"><span class="ph">Side 2</span></span><span class="leader"></span><span class="price"><span class="ph">$ __</span></span></li>
                 <li><span class="name"><span class="ph">Drinks</span></span><span class="leader"></span><span class="price"><span class="ph">$ __</span></span></li>
               </ul>
             </div>
           </div>
-          <h4 class="heat-title">Pick your heat</h4>
-          <ol class="heat">
-            <li><span class="ph">Sauce 1</span><span class="chilis" aria-label="Heat 1 of 4"><svg class="icon on"><use href="#i-chili"/></svg><svg class="icon"><use href="#i-chili"/></svg><svg class="icon"><use href="#i-chili"/></svg><svg class="icon"><use href="#i-chili"/></svg></span></li>
-            <li><span class="ph">Sauce 2</span><span class="chilis" aria-label="Heat 2 of 4"><svg class="icon on"><use href="#i-chili"/></svg><svg class="icon on"><use href="#i-chili"/></svg><svg class="icon"><use href="#i-chili"/></svg><svg class="icon"><use href="#i-chili"/></svg></span></li>
-            <li><span class="ph">Sauce 3</span><span class="chilis" aria-label="Heat 3 of 4"><svg class="icon on"><use href="#i-chili"/></svg><svg class="icon on"><use href="#i-chili"/></svg><svg class="icon on"><use href="#i-chili"/></svg><svg class="icon"><use href="#i-chili"/></svg></span></li>
-            <li><span class="ph">Sauce 4</span><span class="chilis" aria-label="Heat 4 of 4"><svg class="icon on"><use href="#i-chili"/></svg><svg class="icon on"><use href="#i-chili"/></svg><svg class="icon on"><use href="#i-chili"/></svg><svg class="icon on"><use href="#i-chili"/></svg></span></li>
+          <p class="note reveal">Menu and prices can change. Call <a href="tel:+19545573972">(954) 557-3972</a> for today's specials.</p>
+        </section>
+
+        <section class="block" id="hours">
+          <h2 class="reveal">Location &amp; hours</h2>
+          <div class="hours-grid">
+            <div class="reveal">
+              <div class="map">
+                <iframe title="Map of 503 SW 2nd Ave, Fort Lauderdale" src="https://maps.google.com/maps?q=503%20SW%202nd%20Ave%2C%20Fort%20Lauderdale%2C%20FL&amp;z=15&amp;output=embed" loading="lazy" referrerpolicy="no-referrer-when-downgrade"></iframe>
+              </div>
+              <p class="addr"><strong>503 SW 2nd Ave</strong><br>Fort Lauderdale, FL<br><span class="muted">Parked at a local bar on SW 2nd Ave</span></p>
+              <a class="text-link" href="https://www.google.com/maps/dir/?api=1&amp;destination=503+SW+2nd+Ave+Fort+Lauderdale+FL" target="_blank" rel="noopener">Get directions <svg class="icon"><use href="#i-arrow"/></svg></a>
+            </div>
+            <table class="hours reveal" style="--d:100ms">
+              <caption class="sr-only">Opening hours</caption>
+              <tbody>
+                <tr data-day="1"><th scope="row">Mon</th><td><span class="ph">Hours</span></td></tr>
+                <tr data-day="2"><th scope="row">Tue</th><td><span class="ph">Hours</span></td></tr>
+                <tr data-day="3"><th scope="row">Wed</th><td><span class="ph">Hours</span></td></tr>
+                <tr data-day="4"><th scope="row">Thu</th><td><span class="ph">Hours</span></td></tr>
+                <tr data-day="5"><th scope="row">Fri</th><td><span class="ph">Hours</span></td></tr>
+                <tr data-day="6"><th scope="row">Sat</th><td><span class="ph">Hours or private event</span></td></tr>
+                <tr data-day="0"><th scope="row">Sun</th><td><span class="ph">Hours or closed</span></td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p class="note reveal">Hours change for private bookings. Check here or call before you head over.</p>
+        </section>
+
+        <section class="block" id="catering">
+          <h2 class="reveal">Book the truck</h2>
+          <p class="lede reveal">Birthdays, office lunches, block parties, game nights. We park, we cook, your guests eat hot wings straight from the truck.</p>
+          <div class="media catering-photo reveal"><img src="images/wings-tray-1600.jpg" srcset="images/wings-tray-800.jpg 800w, images/wings-tray-1600.jpg 1600w" sizes="(min-width: 1000px) 700px, 92vw" width="1600" height="1300" alt="A full party tray of wings with lime and dipping sauce" loading="lazy"></div>
+          <ol class="steps stagger">
+            <li><strong>Tell us about your event</strong>Date, place and roughly how many people.</li>
+            <li><strong>We call you back</strong>We confirm the menu, timing and a price.</li>
+            <li><strong>We show up and cook</strong>Your guests eat. You don't wash a single dish.</li>
           </ol>
-          <p class="board-foot">Call <a href="tel:+19545573972">(954) 557-3972</a> for today's specials.</p>
-        </div>
-      </div>
-    </section>
 
-    <section class="gallery" aria-label="Photos">
-      <div class="wrap gallery-grid">
-        <figure class="media g-a reveal"><img src="images/wings-board-1600.jpg" srcset="images/wings-board-800.jpg 800w, images/wings-board-1600.jpg 1600w" sizes="(min-width: 960px) 60vw, 92vw" width="1600" height="1089" alt="Glazed wings on a wooden board with a creamy dip" loading="lazy"><figcaption>Straight from the truck window</figcaption></figure>
-        <figure class="media g-b reveal" style="--d:100ms"><img src="images/fries-800.jpg" width="800" height="1200" alt="Fries in a newspaper-lined basket" loading="lazy"><figcaption>Fries on the side</figcaption></figure>
-        <div class="g-c reveal" style="--d:180ms">
-          <p class="big-quote"><em>"The best wings they've had."</em></p>
-          <p class="muted">What our Google reviewers keep saying.</p>
-        </div>
-      </div>
-    </section>
+          <form class="form reveal" id="catering-form" novalidate>
+            <h3>Request a booking</h3>
+            <div class="fields">
+              <div>
+                <label for="f-name">Your name</label>
+                <input id="f-name" name="name" autocomplete="name" required>
+              </div>
+              <div>
+                <label for="f-phone">Phone</label>
+                <input id="f-phone" name="phone" type="tel" autocomplete="tel" required>
+              </div>
+              <div class="full">
+                <label for="f-email">Email <span class="opt">(optional)</span></label>
+                <input id="f-email" name="email" type="email" autocomplete="email">
+              </div>
+              <div>
+                <label for="f-type">Type of event</label>
+                <select id="f-type" name="type">
+                  <option>Private party</option>
+                  <option>Office lunch</option>
+                  <option>Community or block event</option>
+                  <option>Something else</option>
+                </select>
+              </div>
+              <div>
+                <label for="f-date">Event date</label>
+                <input id="f-date" name="date" type="date" required>
+              </div>
+              <div>
+                <label for="f-guests">Number of guests</label>
+                <input id="f-guests" name="guests" type="number" min="1" inputmode="numeric" required>
+              </div>
+              <div>
+                <label for="f-where">Event location</label>
+                <input id="f-where" name="where" placeholder="Town or address" required>
+              </div>
+              <div class="full">
+                <label for="f-notes">Anything else? <span class="opt">(optional)</span></label>
+                <textarea id="f-notes" name="notes" placeholder="Time of day, sauces you want, dietary needs"></textarea>
+              </div>
+            </div>
+            <div class="form-foot">
+              <button class="btn btn-primary btn-arrow" type="submit">Send request <svg class="icon"><use href="#i-arrow"/></svg></button>
+              <p>We use your details only to reply to this request. See our <a href="privacy.html">Privacy Policy</a>.</p>
+            </div>
+            <p class="form-status" id="form-status" role="status" aria-live="polite"></p>
+          </form>
+        </section>
 
-    <section class="section week" id="week">
-      <div class="wrap">
-        <div class="section-head">
-          <h2 class="reveal">Where's the truck <em>this week?</em></h2>
-          <p class="reveal" style="--d:100ms">Our home base is a local bar at 503 SW 2nd Ave. Hours change for private bookings, so check here before you head over.</p>
-        </div>
-        <ol class="days stagger" aria-label="This week's schedule">
-          <li data-day="1"><span class="d">Mon</span><span class="w">Home base</span><span class="h"><span class="ph">Hours</span></span></li>
-          <li data-day="2"><span class="d">Tue</span><span class="w">Home base</span><span class="h"><span class="ph">Hours</span></span></li>
-          <li data-day="3"><span class="d">Wed</span><span class="w">Home base</span><span class="h"><span class="ph">Hours</span></span></li>
-          <li data-day="4"><span class="d">Thu</span><span class="w">Home base</span><span class="h"><span class="ph">Hours</span></span></li>
-          <li data-day="5"><span class="d">Fri</span><span class="w">Home base</span><span class="h"><span class="ph">Hours</span></span></li>
-          <li data-day="6"><span class="d">Sat</span><span class="w"><span class="ph">Private event</span></span><span class="h"><span class="ph">Hours</span></span></li>
-          <li data-day="0"><span class="d">Sun</span><span class="w"><span class="ph">Closed</span></span><span class="h"><span class="ph">Hours</span></span></li>
-        </ol>
-        <div class="find reveal">
-          <div class="map">
-            <iframe title="Map of 503 SW 2nd Ave, Fort Lauderdale" src="https://maps.google.com/maps?q=503%20SW%202nd%20Ave%2C%20Fort%20Lauderdale%2C%20FL&amp;z=15&amp;output=embed" loading="lazy" referrerpolicy="no-referrer-when-downgrade"></iframe>
-          </div>
-          <div class="find-copy">
-            <h3>503 SW 2nd Ave</h3>
-            <p>Fort Lauderdale, FL. Look for the truck parked at the bar.</p>
-            <div class="find-actions">
-              <a class="btn btn-primary btn-arrow" href="https://www.google.com/maps/dir/?api=1&amp;destination=503+SW+2nd+Ave+Fort+Lauderdale+FL" target="_blank" rel="noopener">Get directions <svg class="icon"><use href="#i-arrow"/></svg></a>
-              <a class="btn btn-outline" href="tel:+19545573972"><svg class="icon"><use href="#i-phone"/></svg>Call ahead</a>
-            </div>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <section class="catering" id="catering">
-      <div class="catering-photo">
-        <div class="parallax-frame"><img class="parallax" src="images/wings-tray-1600.jpg" srcset="images/wings-tray-800.jpg 800w, images/wings-tray-1600.jpg 1600w" sizes="(min-width: 960px) 45vw, 100vw" width="1600" height="1300" alt="A full party tray of wings with lime and dipping sauce" loading="lazy"></div>
-      </div>
-      <div class="catering-body">
-        <h2 class="reveal">Bring the truck <em>to your party.</em></h2>
-        <p class="lede reveal" style="--d:100ms">Birthdays, office lunches, block parties, game nights. We park, we cook, your guests eat hot wings straight from the window.</p>
-        <ol class="steps stagger">
-          <li><span class="n">01</span><div><strong>Tell us about your event</strong>Date, place and roughly how many people.</div></li>
-          <li><span class="n">02</span><div><strong>We call you back</strong>We confirm the menu, timing and a price.</div></li>
-          <li><span class="n">03</span><div><strong>We show up and cook</strong>Your guests eat. You don't wash a single dish.</div></li>
-        </ol>
-
-        <form class="form reveal" id="catering-form" novalidate>
-          <h3>Request a booking</h3>
-          <div class="fields">
+        <section class="block" id="about">
+          <h2 class="reveal">About the business</h2>
+          <div class="about reveal">
+            <img src="images/logo-badge.svg" width="72" height="72" alt="">
             <div>
-              <label for="f-name">Your name</label>
-              <input id="f-name" name="name" autocomplete="name" required>
-            </div>
-            <div>
-              <label for="f-phone">Phone</label>
-              <input id="f-phone" name="phone" type="tel" autocomplete="tel" required>
-            </div>
-            <div class="full">
-              <label for="f-email">Email <span class="opt">(optional)</span></label>
-              <input id="f-email" name="email" type="email" autocomplete="email">
-            </div>
-            <div>
-              <label for="f-type">Type of event</label>
-              <select id="f-type" name="type">
-                <option>Private party</option>
-                <option>Office lunch</option>
-                <option>Community or block event</option>
-                <option>Something else</option>
-              </select>
-            </div>
-            <div>
-              <label for="f-date">Event date</label>
-              <input id="f-date" name="date" type="date" required>
-            </div>
-            <div>
-              <label for="f-guests">Number of guests</label>
-              <input id="f-guests" name="guests" type="number" min="1" inputmode="numeric" required>
-            </div>
-            <div>
-              <label for="f-where">Event location</label>
-              <input id="f-where" name="where" placeholder="Town or address" required>
-            </div>
-            <div class="full">
-              <label for="f-notes">Anything else? <span class="opt">(optional)</span></label>
-              <textarea id="f-notes" name="notes" placeholder="Time of day, sauces you want, dietary needs"></textarea>
+              <p>The Yum Food Truck serves wings from its home base on SW 2nd Ave in Fort Lauderdale. Customers say the wings are the best they've had, and plenty of them come back for seconds.</p>
+              <p class="muted"><span class="ph">Add the owner's story: who runs the truck and how it started.</span></p>
             </div>
           </div>
-          <div class="form-foot">
-            <button class="btn btn-primary btn-arrow" type="submit">Send request <svg class="icon"><use href="#i-arrow"/></svg></button>
-            <p>We use your details only to reply to this request. See our <a href="privacy.html">Privacy Policy</a>.</p>
-          </div>
-          <p class="form-status" id="form-status" role="status" aria-live="polite"></p>
-        </form>
-      </div>
-    </section>
+          <ul class="amenities stagger">
+            <li><svg class="icon"><use href="#i-check"/></svg>Private events and catering</li>
+            <li><svg class="icon"><use href="#i-check"/></svg>Office lunches</li>
+            <li><svg class="icon"><use href="#i-check"/></svg><span class="ph">Accepts credit cards</span></li>
+            <li><svg class="icon"><use href="#i-check"/></svg><span class="ph">Outdoor seating at the bar</span></li>
+          </ul>
+        </section>
 
-    <section class="section reviews" id="reviews">
-      <div class="wrap reviews-grid">
-        <div class="score reveal">
-          <strong>4.5</strong>
-          <span class="stars stars-lg" aria-label="4.5 out of 5 stars"><span style="--pct:90%"></span></span>
-          <span class="muted">12 reviews on Google</span>
-          <a class="text-link" href="https://www.google.com/maps/search/?api=1&amp;query=The+Yum+Food+Truck+503+SW+2nd+Ave+Fort+Lauderdale+FL" target="_blank" rel="noopener">Read them all <svg class="icon"><use href="#i-arrow"/></svg></a>
-        </div>
-        <div class="reveal" style="--d:120ms">
-          <blockquote class="pull">Our Google reviewers call them <em>the best wings they've had.</em> Then they come back for seconds.</blockquote>
-          <div class="review">
-            <span class="stars" aria-label="5 out of 5 stars"><span style="--pct:100%"></span></span>
+        <section class="block" id="reviews">
+          <h2 class="reveal">Reviews</h2>
+          <div class="review-summary reveal">
+            <div class="score">
+              <strong>4.5</strong>
+              <span class="stars stars-lg" aria-label="4.5 out of 5 stars"><span style="--pct:90%"></span></span>
+              <span class="muted">12 reviews on Google</span>
+            </div>
+            <blockquote>Our Google reviewers call them the best wings they've had. Then they come back for seconds.</blockquote>
+          </div>
+          <article class="review reveal">
+            <div class="review-head">
+              <span class="avatar" aria-hidden="true"></span>
+              <div><strong><span class="ph">Reviewer name</span></strong><span class="muted"><span class="ph">Date</span></span></div>
+              <span class="stars" aria-label="5 out of 5 stars"><span style="--pct:100%"></span></span>
+            </div>
             <p><span class="ph">Paste a favourite Google review here, with the reviewer's permission.</span></p>
-            <p class="who"><span class="ph">Reviewer name</span> <span class="muted">on Google</span></p>
-          </div>
-        </div>
+          </article>
+          <a class="btn btn-outline btn-arrow reveal" href="https://www.google.com/maps/search/?api=1&amp;query=The+Yum+Food+Truck+503+SW+2nd+Ave+Fort+Lauderdale+FL" target="_blank" rel="noopener">Read all reviews on Google <svg class="icon"><use href="#i-arrow"/></svg></a>
+        </section>
       </div>
-    </section>
 
-    <section class="cta">
-      <div class="awning awning-flip" aria-hidden="true"></div>
-      <div class="wrap cta-inner">
-        <h2 class="reveal">Hungry <em>yet?</em></h2>
-        <div class="cta-actions reveal" style="--d:120ms">
-          <a class="btn btn-cream btn-lg" href="tel:+19545573972"><svg class="icon"><use href="#i-phone"/></svg>Call (954) 557-3972</a>
-          <a class="btn btn-line-light btn-lg" href="https://www.google.com/maps/dir/?api=1&amp;destination=503+SW+2nd+Ave+Fort+Lauderdale+FL" target="_blank" rel="noopener"><svg class="icon"><use href="#i-pin"/></svg>Get directions</a>
+      <aside class="side-col">
+        <div class="side-sticky">
+          <div class="side-box reveal">
+            <h2>Feeding a crowd?</h2>
+            <p>Book the truck for your party, office lunch or event.</p>
+            <a class="btn btn-primary btn-block" href="#catering">Request a booking</a>
+            <p class="side-small">Or call <a href="tel:+19545573972">(954) 557-3972</a></p>
+          </div>
+          <ul class="side-box contact-list reveal" style="--d:100ms">
+            <li><a href="tel:+19545573972"><span>(954) 557-3972</span><svg class="icon"><use href="#i-phone"/></svg></a></li>
+            <li><a href="https://www.google.com/maps/dir/?api=1&amp;destination=503+SW+2nd+Ave+Fort+Lauderdale+FL" target="_blank" rel="noopener"><span><strong>Get directions</strong><br><span class="muted">503 SW 2nd Ave, Fort Lauderdale</span></span><svg class="icon"><use href="#i-pin"/></svg></a></li>
+            <li><a href="#hours"><span><strong>Hours</strong><br><span class="muted">Today: <span class="ph">Hours</span></span></span><svg class="icon"><use href="#i-clock"/></svg></a></li>
+          </ul>
         </div>
-      </div>
-    </section>
+      </aside>
+    </div>
   </main>
 
   <footer class="site-footer">
@@ -312,7 +302,7 @@
           <h4>Visit</h4>
           <ul>
             <li>503 SW 2nd Ave<br>Fort Lauderdale, FL</li>
-            <li><a href="#week">This week's hours</a></li>
+            <li><a href="#hours">Hours</a></li>
           </ul>
         </div>
         <div>
