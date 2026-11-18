@@ -3,7 +3,7 @@
   year.forEach(function (el) { el.textContent = new Date().getFullYear(); });
 
   var today = new Date().getDay();
-  var row = document.querySelector('#week li[data-day="' + today + '"]');
+  var row = document.querySelector('.hours tr[data-day="' + today + '"]');
   if (row) row.classList.add("today");
 
   /* Scroll reveals */
@@ -68,6 +68,24 @@
     });
     document.addEventListener("keydown", function (e) {
       if (e.key === "Escape") setOpen(false);
+    });
+  }
+
+  /* Share button: native share sheet on phones, copy link elsewhere */
+  var shareBtn = document.getElementById("share-btn");
+  var shareStatus = document.getElementById("share-status");
+  if (shareBtn) {
+    shareBtn.addEventListener("click", function () {
+      var data = { title: document.title, url: window.location.href };
+      if (navigator.share) {
+        navigator.share(data).catch(function () {});
+      } else if (navigator.clipboard) {
+        navigator.clipboard.writeText(data.url).then(function () {
+          shareStatus.textContent = "Link copied. Paste it anywhere to share.";
+        }, function () {
+          shareStatus.textContent = "Copy this page's address from your browser to share it.";
+        });
+      }
     });
   }
 
