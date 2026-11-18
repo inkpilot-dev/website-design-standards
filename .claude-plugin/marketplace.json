@@ -1,0 +1,16 @@
+{
+  "name": "website-design-standards",
+  "owner": {
+    "name": "website-design-standards"
+  },
+  "metadata": {
+    "description": "Website design standards that keep Claude-built sites from looking vibe-coded."
+  },
+  "plugins": [
+    {
+      "name": "website-design-standards",
+      "source": "./",
+      "description": "Anti-vibe-coded design standards for every website Claude builds."
+    }
+  ]
+}

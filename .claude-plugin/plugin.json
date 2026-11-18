@@ -1,0 +1,6 @@
+{
+  "name": "website-design-standards",
+  "version": "1.0.0",
+  "description": "Anti-vibe-coded design standards applied whenever Claude designs or builds a website: no purple glows, nested cards, generic fonts, builder badges or missing Terms and Privacy pages.",
+  "keywords": ["web-design", "frontend", "design-standards", "checklist"]
+}
