@@ -285,6 +285,12 @@ def make_plan(project: dict, report: dict, preset: str = "standard", overrides: 
         fitted, est = fit_config(cfg, rec, memory_budget_gb(report, rec))
 
     quant = rec["quant"]
+    if project["base_model"].get("gguf"):
+        # GGUF bases are dequantized at load: fp32 on CPU, bf16 on a GPU (bitsandbytes cannot
+        # re-quantize them, and they are already compact on disk).
+        quant = "bf16" if rec["vendor"] in ("nvidia", "amd", "intel") and backend in ("torch", "unsloth") else "fp32"
+        backend = "torch" if backend == "unsloth" else backend
+        rec["backend"] = backend
     if backend == "torch" and quant == "nf4":
         try:
             import bitsandbytes  # noqa: F401,WPS433
@@ -299,6 +305,7 @@ def make_plan(project: dict, report: dict, preset: str = "standard", overrides: 
         "backend": backend,
         "device": None,
         "base_model": {
+            **{k: v for k, v in project["base_model"].items() if k in ("gguf", "format", "label", "bundled", "pack")},
             "id": project["base_model"]["id"],
             "path": model_path,
             "chat_kwargs": project["base_model"].get("chat_kwargs", {}),

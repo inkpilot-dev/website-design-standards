@@ -29,6 +29,12 @@ pub struct EngineConfig {
     pub pythonpath: Option<PathBuf>,
     pub home: PathBuf,
     pub stall_secs: u64,
+    /// Interpreter flags (bundled runtime: `-I -B`, fully isolated from any user Python setup).
+    pub python_flags: Vec<String>,
+    /// Extra environment for every engine process (offline switches, bundle paths).
+    pub env: Vec<(String, String)>,
+    /// Variables removed from the inherited environment.
+    pub env_remove: Vec<String>,
 }
 
 pub struct JobSpec {
@@ -67,7 +73,11 @@ impl Supervisor {
 
     fn command(&self, job_id: &str, spec: &JobSpec) -> Command {
         let mut cmd = Command::new(&self.cfg.python);
-        cmd.arg("-u").arg("-m").arg("engine").args(&spec.args);
+        cmd.args(&self.cfg.python_flags).arg("-u").arg("-m").arg("engine").args(&spec.args);
+        for k in &self.cfg.env_remove {
+            cmd.env_remove(k);
+        }
+        cmd.envs(self.cfg.env.iter().cloned());
         cmd.env("INKPORT_JOB_ID", job_id)
             .env("INKPORT_WATCH_STDIN", "1")
             .env("INKPORT_HOME", &self.cfg.home)

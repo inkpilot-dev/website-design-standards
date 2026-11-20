@@ -1,0 +1,4 @@
+-r common.txt
+mlx>=0.26
+mlx-lm>=0.26
+transformers>=4.56

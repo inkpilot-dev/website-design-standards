@@ -373,7 +373,7 @@ def mlx_to_peft(mlx_dir: Path, out_dir: Path, plan: dict) -> None:
 
 
 def try_export_gguf(plan: dict, adapter_dir: Path, out_dir: Path) -> Optional[Path]:
-    """GGUF LoRA via llama.cpp's convert_lora_to_gguf.py when INKPORT_LLAMA_CPP points at a checkout."""
+    """GGUF LoRA via the bundled llama.cpp converter (INKPORT_LLAMA_CPP = <bundle>/llama/convert)."""
     llama = os.environ.get("INKPORT_LLAMA_CPP")
     if not llama:
         return None
@@ -383,7 +383,8 @@ def try_export_gguf(plan: dict, adapter_dir: Path, out_dir: Path) -> Optional[Pa
         return None
     out_dir.mkdir(parents=True, exist_ok=True)
     out = out_dir / "adapter-f16.gguf"
-    proc = subprocess.run([sys.executable, str(script), "--base", plan["base_model"]["path"], "--outfile", str(out), "--outtype", "f16", str(adapter_dir)], capture_output=True, text=True)
+    env = {**os.environ, "PYTHONPATH": str(Path(llama)) + os.pathsep + os.environ.get("PYTHONPATH", ""), "NO_LOCAL_GGUF": "1"}
+    proc = subprocess.run([sys.executable, str(script), "--base", plan["base_model"]["path"], "--outfile", str(out), "--outtype", "f16", str(adapter_dir)], capture_output=True, text=True, env=env)
     if proc.returncode != 0 or not out.is_file():
         events.log("GGUF export failed: " + proc.stderr[-400:], "warn")
         return None

@@ -24,6 +24,15 @@ use tokio::sync::{oneshot, RwLock};
 pub const DEFAULT_PORT: u16 = 11435;
 const MAX_BODY: usize = 4 * 1024 * 1024;
 
+#[derive(Clone, Debug, PartialEq)]
+pub enum UpstreamKind {
+    /// The Python inference worker (PyTorch / MLX); authenticated with X-Inkport-Worker-Token.
+    Python,
+    /// The bundled llama.cpp server (Metal / CUDA / Vulkan / CPU); authenticated with a bearer key.
+    /// `has_lora`: a trained adapter is loaded, so `<model>@base` turns it off per request.
+    Llama { has_lora: bool },
+}
+
 #[derive(Clone, Debug)]
 pub struct Upstream {
     pub base_url: String,
@@ -31,6 +40,9 @@ pub struct Upstream {
     pub models: Vec<String>,
     pub project_id: String,
     pub version: String,
+    pub kind: UpstreamKind,
+    /// Inserted when a request has no system message (the prompt the model was trained with).
+    pub default_system: Option<String>,
 }
 
 #[derive(Default)]
@@ -249,13 +261,24 @@ async fn chat(State(s): State<Shared>, req: Request) -> Response {
         return with_cors(err(StatusCode::NOT_FOUND, "model_not_found", &format!("Unknown model '{model}'. Available: {}", up.models.join(", "))), origin);
     }
     payload["model"] = json!(model);
-    let resp = s
-        .client
-        .post(format!("{}/v1/chat/completions", up.base_url))
-        .header("X-Inkport-Worker-Token", &up.worker_token)
-        .json(&payload)
-        .send()
-        .await;
+    let mut request = s.client.post(format!("{}/v1/chat/completions", up.base_url));
+    if let UpstreamKind::Llama { has_lora } = up.kind {
+        if let (Some(sys), Some(msgs)) = (&up.default_system, payload.get_mut("messages").and_then(Value::as_array_mut)) {
+            if !msgs.iter().any(|m| m["role"] == "system") {
+                msgs.insert(0, json!({"role": "system", "content": sys}));
+            }
+        }
+        if has_lora && model.ends_with("@base") {
+            payload["lora"] = json!([{"id": 0, "scale": 0.0}]);
+        }
+        if payload.get("max_tokens").is_none() && payload.get("max_completion_tokens").is_none() {
+            payload["max_tokens"] = json!(512);
+        }
+        request = request.bearer_auth(&up.worker_token);
+    } else {
+        request = request.header("X-Inkport-Worker-Token", &up.worker_token);
+    }
+    let resp = request.json(&payload).send().await;
     let resp = match resp {
         Ok(r) => r,
         Err(e) => return with_cors(err(StatusCode::BAD_GATEWAY, "worker_unreachable", &format!("The model worker is not responding: {e}")), origin),
@@ -282,14 +305,16 @@ mod tests {
 
     async fn fake_worker() -> String {
         async fn chat(h: HeaderMap, Json(body): Json<Value>) -> Response {
-            if h.get("X-Inkport-Worker-Token").and_then(|v| v.to_str().ok()) != Some("wt") {
+            let python_ok = h.get("X-Inkport-Worker-Token").and_then(|v| v.to_str().ok()) == Some("wt");
+            let llama_ok = h.get("authorization").and_then(|v| v.to_str().ok()) == Some("Bearer wt");
+            if !python_ok && !llama_ok {
                 return StatusCode::UNAUTHORIZED.into_response();
             }
             if body["stream"].as_bool() == Some(true) {
                 let sse = "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\ndata: [DONE]\n\n";
                 return ([(header::CONTENT_TYPE, "text/event-stream")], sse).into_response();
             }
-            Json(json!({"object":"chat.completion","model":body["model"],"choices":[{"index":0,"message":{"role":"assistant","content":"pong"},"finish_reason":"stop"}]})).into_response()
+            Json(json!({"object":"chat.completion","model":body["model"],"echo":body,"choices":[{"index":0,"message":{"role":"assistant","content":"pong"},"finish_reason":"stop"}]})).into_response()
         }
         let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = l.local_addr().unwrap().port();
@@ -307,7 +332,7 @@ mod tests {
         // No model yet -> 503 (after auth).
         let r = c.post(format!("{base}/v1/chat/completions")).header("Authorization", tok).json(&json!({"messages":[]})).send().await.unwrap();
         assert_eq!(r.status(), 503);
-        gw.set_upstream(Some(Upstream { base_url: fake_worker().await, worker_token: "wt".into(), models: vec!["inkport/x".into(), "inkport/x@base".into()], project_id: "p".into(), version: "v1".into() })).await;
+        gw.set_upstream(Some(Upstream { base_url: fake_worker().await, worker_token: "wt".into(), models: vec!["inkport/x".into(), "inkport/x@base".into()], project_id: "p".into(), version: "v1".into(), kind: UpstreamKind::Python, default_system: None })).await;
         assert_eq!(c.get(format!("{base}/v1/models")).send().await.unwrap().status(), 401);
         assert_eq!(c.get(format!("{base}/v1/models")).header("Authorization", "Bearer nope").send().await.unwrap().status(), 401);
         let r = c.get(format!("{base}/v1/models")).header("Authorization", tok).send().await.unwrap();
@@ -326,6 +351,18 @@ mod tests {
         assert!(r.headers()["content-type"].to_str().unwrap().starts_with("text/event-stream"));
         assert!(r.text().await.unwrap().contains("[DONE]"));
         assert_eq!(c.post(format!("{base}/v1/chat/completions")).header("Authorization", tok).json(&json!({"model":"gpt-4","messages":[]})).send().await.unwrap().status(), 404);
+        // llama.cpp upstream: bearer auth, trained system prompt, adapter switched off for @base.
+        let mut up = gw.upstream().await.unwrap();
+        up.kind = UpstreamKind::Llama { has_lora: true };
+        up.default_system = Some("SYS".into());
+        gw.set_upstream(Some(up)).await;
+        let r: Value = c.post(format!("{base}/v1/chat/completions")).header("Authorization", tok).json(&json!({"model":"inkport/x@base","messages":[{"role":"user","content":"hi"}]})).send().await.unwrap().json().await.unwrap();
+        assert_eq!(r["echo"]["messages"][0]["content"], "SYS");
+        assert_eq!(r["echo"]["lora"][0]["scale"], 0.0);
+        assert_eq!(r["echo"]["max_tokens"], 512);
+        let r: Value = c.post(format!("{base}/v1/chat/completions")).header("Authorization", tok).json(&json!({"model":"inkport/x","messages":[{"role":"system","content":"mine"},{"role":"user","content":"hi"}]})).send().await.unwrap().json().await.unwrap();
+        assert_eq!(r["echo"]["messages"][0]["content"], "mine");
+        assert!(r["echo"].get("lora").is_none());
         gw.stop().await;
     }
 }

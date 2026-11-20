@@ -6,9 +6,11 @@
 
 pub mod api_server;
 pub mod app;
+pub mod bootstrap;
 pub mod contract;
 pub mod events;
 pub mod hardware;
+pub mod packs;
 pub mod project;
 pub mod runtime;
 pub mod sidecar;

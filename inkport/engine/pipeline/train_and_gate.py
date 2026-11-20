@@ -562,7 +562,7 @@ class Trainer:
 
         out: dict[str, Any] = {"adapter": str(adir)}
         params_b = (self.plan.get("memory_estimate") or {}).get("params_b") or 0
-        if self.plan["backend"] in ("torch", "unsloth") and (self.plan.get("export_merged") or 0 < params_b <= 1.5 or self.plan.get("tier") == "smoke"):
+        if self.plan["backend"] in ("torch", "unsloth") and not self.plan["base_model"].get("gguf") and (self.plan.get("export_merged") or 0 < params_b <= 1.5 or self.plan.get("tier") == "smoke"):
             try:
                 from engine.backends.torch_backend import write_merged  # noqa: WPS433
 

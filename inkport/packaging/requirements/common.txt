@@ -1,0 +1,10 @@
+# Engine dependencies shared by every platform (torch / MLX come from the platform files).
+safetensors>=0.4.5
+tokenizers>=0.21
+huggingface_hub>=0.30
+jsonschema>=4.21
+pypdf>=5.0
+cryptography>=43
+numpy>=1.26
+jinja2>=3.1
+sentencepiece>=0.2

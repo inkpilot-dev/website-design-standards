@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "comment": "Every byte that ends up in an installer comes from an input pinned here. Hashes are verified before use.",
+  "python": {
+    "version": "3.12.12",
+    "release": "20251014",
+    "base_url": "https://github.com/astral-sh/python-build-standalone/releases/download/20251014",
+    "archives": {
+      "linux-x86_64": { "file": "cpython-3.12.12+20251014-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz", "sha256": "c74addcd1b033a6e4d60ead3ab47fcc995569027e01d3061c4a934f363c4a0cf", "size": 32587947 },
+      "macos-aarch64": { "file": "cpython-3.12.12+20251014-aarch64-apple-darwin-install_only_stripped.tar.gz", "sha256": "84cb7acbf75264982c8bdd818bfa1ff0f1eb76007b48a5f3e01d28633b46afdf", "size": 16472869 },
+      "windows-x86_64": { "file": "cpython-3.12.12+20251014-x86_64-pc-windows-msvc-install_only_stripped.tar.gz", "sha256": "3c8b9b10a933909c98b9916297e2093b24a9c2abaa23df1c2622c2bfe052cb94", "size": 21433845 }
+    }
+  },
+  "llama_cpp": {
+    "comment": "llama.cpp source as vendored in the llama-cpp-python sdist (MIT). Only the C++ sources and the GGUF conversion scripts are used.",
+    "package": "llama-cpp-python",
+    "version": "0.3.37",
+    "url": "https://files.pythonhosted.org/packages/7f/9a/3ebc0b3ef42b8d9cc7d15dc9b147b3e8ce11bfdb61eb381c3eb7d9762373/llama_cpp_python-0.3.37.tar.gz",
+    "sha256": "bf4108fc76e933ea4969b61b1e281a2d232dd3e43361d1fdca5e2e029d62f729",
+    "size": 80885950,
+    "subdir": "llama_cpp_python-0.3.37/vendor/llama.cpp"
+  },
+  "torch_index": {
+    "cpu": {
+      "linux-x86_64": "https://download.pytorch.org/whl/cpu",
+      "windows-x86_64": "https://download.pytorch.org/whl/cpu"
+    },
+    "cuda": {
+      "linux-x86_64": "https://pypi.org/simple",
+      "windows-x86_64": "https://download.pytorch.org/whl/cu128"
+    }
+  },
+  "starter_model": {
+    "id": "qwen3-1.7b",
+    "label": "Qwen3 1.7B (included)",
+    "license": "Apache-2.0",
+    "hf_repo": "Qwen/Qwen3-1.7B",
+    "revision": "main",
+    "params_b": 1.7,
+    "gguf_quant": "Q4_K_M",
+    "mlx_q_bits": 4,
+    "mlx_q_group_size": 64,
+    "chat_kwargs": { "enable_thinking": false },
+    "hf_files": ["config.json", "generation_config.json", "tokenizer.json", "tokenizer_config.json", "vocab.json", "merges.txt", "model.safetensors.index.json", "*.safetensors", "LICENSE"]
+  }
+}

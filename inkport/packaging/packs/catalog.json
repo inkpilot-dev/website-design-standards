@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "comment": "Optional add-ons. Nothing here is needed for core offline training, verification or the local API. Hugging Face sources are pinned to an exact commit when installed, and every file is checked against the SHA-256 (large files) or git blob SHA-1 (small files) the Hub publishes for that commit.",
+  "packs": [
+    {
+      "id": "qwen3-8b-gguf",
+      "title": "Larger brain: Qwen3 8B",
+      "description": "Smarter answers and better results on harder tasks. Needs about 10 GB of graphics memory for fast training, or 32 GB of system memory on the processor.",
+      "kind": "model",
+      "platforms": ["linux-x86_64", "windows-x86_64"],
+      "approx_size_mb": 5050,
+      "license": "Apache-2.0",
+      "sources": [
+        { "type": "hf", "repo": "Qwen/Qwen3-8B-GGUF", "revision": "main", "include": ["Qwen3-8B-Q4_K_M.gguf"] },
+        { "type": "hf", "repo": "Qwen/Qwen3-8B", "revision": "main", "include": ["config.json", "generation_config.json", "tokenizer.json", "tokenizer_config.json", "vocab.json", "merges.txt", "LICENSE"] }
+      ],
+      "model": { "id": "qwen3-8b", "label": "Qwen3 8B (add-on)", "format": "gguf", "gguf": "Qwen3-8B-Q4_K_M.gguf", "backend": "torch", "quant": "fp32", "params_b": 8.2, "chat_kwargs": { "enable_thinking": false } }
+    },
+    {
+      "id": "qwen3-8b-mlx",
+      "title": "Larger brain: Qwen3 8B",
+      "description": "Smarter answers and better results on harder tasks. Best on Macs with 24 GB of memory or more.",
+      "kind": "model",
+      "platforms": ["macos-aarch64"],
+      "approx_size_mb": 4620,
+      "license": "Apache-2.0",
+      "sources": [
+        { "type": "hf", "repo": "mlx-community/Qwen3-8B-4bit", "revision": "main", "include": ["*.json", "*.safetensors", "*.txt", "*.jinja"] }
+      ],
+      "model": { "id": "qwen3-8b", "label": "Qwen3 8B (add-on)", "format": "mlx", "backend": "mlx", "quant": "mlx4", "params_b": 8.2, "chat_kwargs": { "enable_thinking": false } }
+    },
+    {
+      "id": "qwen3-4b-instruct-mlx",
+      "title": "Balanced brain: Qwen3 4B Instruct",
+      "description": "A middle ground between the included model and the 8B add-on. Good on Macs with 16 GB of memory.",
+      "kind": "model",
+      "platforms": ["macos-aarch64"],
+      "approx_size_mb": 2260,
+      "license": "Apache-2.0",
+      "sources": [
+        { "type": "hf", "repo": "mlx-community/Qwen3-4B-Instruct-2507-4bit", "revision": "main", "include": ["*.json", "*.safetensors", "*.txt", "*.jinja"] }
+      ],
+      "model": { "id": "qwen3-4b-instruct-2507", "label": "Qwen3 4B Instruct (add-on)", "format": "mlx", "backend": "mlx", "quant": "mlx4", "params_b": 4.0, "chat_kwargs": {} }
+    }
+  ]
+}

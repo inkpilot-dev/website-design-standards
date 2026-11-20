@@ -24,6 +24,17 @@ def _import_unsloth() -> Any:
     return FastLanguageModel
 
 
+def load_tokenizer(plan: dict) -> Any:
+    """Tokenizer files shipped next to the model win; otherwise read it from the GGUF."""
+    from transformers import AutoTokenizer  # noqa: WPS433
+
+    path = plan["base_model"]["path"]
+    gguf = plan["base_model"].get("gguf")
+    if gguf and not (Path(path) / "tokenizer.json").is_file():
+        return AutoTokenizer.from_pretrained(path, gguf_file=gguf)
+    return AutoTokenizer.from_pretrained(path)
+
+
 class TorchBackend(Backend):
     name = "torch"
 
@@ -83,7 +94,7 @@ class TorchBackend(Backend):
         else:
             from transformers import AutoModelForCausalLM, AutoTokenizer  # noqa: WPS433
 
-            self.tok = AutoTokenizer.from_pretrained(path)
+            self.tok = load_tokenizer(self.plan)
             kwargs: dict[str, Any] = {"dtype": self.dtype, "low_cpu_mem_usage": True}
             if quant == "nf4" and self.device == "cuda":
                 from transformers import BitsAndBytesConfig  # noqa: WPS433
@@ -95,7 +106,15 @@ class TorchBackend(Backend):
                     bnb_4bit_compute_dtype=self.dtype,
                 )
                 kwargs["device_map"] = {"": 0}
-            self.model = AutoModelForCausalLM.from_pretrained(path, **kwargs)
+            gguf = self.plan["base_model"].get("gguf")
+            if gguf:
+                # Bundled 4-bit GGUF starter: dequantized in memory to a trainable dtype; the
+                # same file is what llama.cpp serves, so the adapter targets the shipped weights.
+                kwargs.pop("quantization_config", None)
+                kwargs.pop("device_map", None)
+                self.model = AutoModelForCausalLM.from_pretrained(path, gguf_file=gguf, **kwargs)
+            else:
+                self.model = AutoModelForCausalLM.from_pretrained(path, **kwargs)
             if "device_map" not in kwargs:
                 self.model.to(self.device)
             if adapter_dir is not None:
@@ -394,10 +413,11 @@ def write_merged(plan: dict, adapter_dir: Path, out_dir: Path) -> Path:
     from peft import PeftModel  # noqa: WPS433
     from transformers import AutoModelForCausalLM, AutoTokenizer  # noqa: WPS433
 
-    base = AutoModelForCausalLM.from_pretrained(plan["base_model"]["path"], dtype=torch.float32 if plan.get("quant") == "fp32" else torch.bfloat16, low_cpu_mem_usage=True)
+    extra = {"gguf_file": plan["base_model"]["gguf"]} if plan["base_model"].get("gguf") else {}
+    base = AutoModelForCausalLM.from_pretrained(plan["base_model"]["path"], dtype=torch.float32 if plan.get("quant") == "fp32" else torch.bfloat16, low_cpu_mem_usage=True, **extra)
     merged = PeftModel.from_pretrained(base, str(adapter_dir)).merge_and_unload()
     out_dir.mkdir(parents=True, exist_ok=True)
     merged.save_pretrained(str(out_dir), safe_serialization=True)
-    AutoTokenizer.from_pretrained(plan["base_model"]["path"]).save_pretrained(str(out_dir))
+    load_tokenizer(plan).save_pretrained(str(out_dir))
     (out_dir / "inkport_merged.json").write_text(json.dumps({"base": plan["base_model"]["id"], "adapter": str(adapter_dir)}), encoding="utf-8")
     return out_dir
