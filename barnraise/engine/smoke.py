@@ -41,8 +41,8 @@ def expense_rows(n: int = 320, seed: int = 3) -> list[dict]:
     while len(rows) < n:
         cat = rng.choice(sorted(CATEGORIES))
         vendor = rng.choice(CATEGORIES[cat])
-        amount = round(rng.uniform(3, 480), 2)
-        text = rng.choice(PATTERNS).format(a=f"{amount:.2f}", v=vendor, p=rng.choice(PURPOSES))
+        amount = rng.randint(3, 480)  # whole dollars keep the 1.4M-parameter smoke model's copy task learnable
+        text = rng.choice(PATTERNS).format(a=str(amount), v=vendor, p=rng.choice(PURPOSES))
         if text in seen:
             continue
         seen.add(text)
@@ -86,39 +86,42 @@ def write_smoke_data(out: Path) -> dict:
 
 
 def _generic_examples(rng: random.Random, n: int) -> list[list[dict]]:
-    systems = [
-        None,
-        "You are a helpful assistant.",
-        "You are a careful assistant. Reply with ONLY a JSON object with exactly these fields: name, status.",
-        "You are a careful bookkeeping assistant for a small business. Read the record and reply with ONLY a JSON object with exactly these fields: color, total. color must be one of: blue, green, red.",
-    ]
+    """Generic skills only. The 'extract' family uses the real business-template prompt with
+    unrelated words: copy the dollar amount and pick the allowed choice that literally appears
+    in the text. The real task (vendor -> category, where the category never appears in the
+    text) is never shown, so the base model scores ~0% on it."""
+    from engine.templates import business_system  # noqa: WPS433
+
     out = []
     for _ in range(n):
         r = rng.random()
-        k = rng.choice(WORDS)
-        if r < 0.3:
-            v = rng.choice(WORDS) if rng.random() < 0.5 else round(rng.uniform(1, 500), 2)
+        msgs: list[dict] = []
+        if r < 0.55:
+            field = rng.choice(["color", "status", "kind", "label", "group"])
+            choices = rng.sample(WORDS, 4)
+            pick = rng.choice(choices)
+            amount = rng.randint(3, 480)
+            text = rng.choice(["Paid ${a} at {w} for {p}", "{w} receipt ${a} {p}", "Card charge: {w} ${a}", "{w} - ${a} ({p})", "Reimburse ${a} spent at {w}"]).format(a=amount, w=pick.capitalize() if rng.random() < 0.5 else pick, p=rng.choice(PURPOSES))
+            rules = rng.sample([f"{field} must be one of {', '.join(choices)}", "amount must be positive", "amount must be at most 500", f"{field} is required"], rng.randint(0, 2))
+            policy = rng.choice(["", "", "# Policy\n\nKeep receipts for every purchase. Personal items are not reimbursed.", "# Expense policy\n\nUse the company card for supplies. Submit receipts weekly."])
+            msgs.append({"role": "system", "content": business_system([field, "amount"], {field: choices}, rules, policy)})
+            q, a = text, json.dumps({field: pick, "amount": amount})
+        elif r < 0.7:
+            k = rng.choice(WORDS)
+            v = rng.choice(WORDS) if rng.random() < 0.5 else rng.randint(1, 500)
             q, a = f"Return JSON with {k} set to {v}", json.dumps({k: v})
-        elif r < 0.6:
-            v = round(rng.uniform(1, 500), 2)
-            k2 = rng.choice(WORDS)
-            q = f"Note {rng.choice(WORDS)} ${v:.2f} {rng.choice(WORDS)} {rng.choice(WORDS)}"
-            a = json.dumps({k2: rng.choice(WORDS), "amount": v})
-        elif r < 0.8:
+        elif r < 0.9:
             it = rng.choice(general.suite(60) + general.replay_prompts(64))
             q, a = it["messages"][0]["content"], it.get("reference") or "OK"
         else:
+            k = rng.choice(WORDS)
             q, a = f"Reply with only the word: {k}", k
-        msgs = []
-        sys_prompt = rng.choice(systems)
-        if sys_prompt:
-            msgs.append({"role": "system", "content": sys_prompt})
         msgs += [{"role": "user", "content": q}, {"role": "assistant", "content": a}]
         out.append(msgs)
     return out
 
 
-def build_smoke_model(out: Path, steps: int = 900, seed: int = 0) -> dict:
+def build_smoke_model(out: Path, steps: int = 800, seed: int = 0) -> dict:
     import torch  # noqa: WPS433
     from tokenizers import Tokenizer, decoders, models, pre_tokenizers, trainers  # noqa: WPS433
     from transformers import LlamaConfig, LlamaForCausalLM, PreTrainedTokenizerFast  # noqa: WPS433
@@ -147,7 +150,7 @@ def build_smoke_model(out: Path, steps: int = 900, seed: int = 0) -> dict:
         prefix = tmpl.render(messages=c[:-1], add_generation_prompt=True)
         full = tmpl.render(messages=c, add_generation_prompt=False)
         p = tok(prefix, add_special_tokens=False)["input_ids"]
-        f = tok(full, add_special_tokens=False)["input_ids"][:384]
+        f = tok(full, add_special_tokens=False)["input_ids"][:256]
         return f, [-100] * len(p) + f[len(p) :]
 
     data = [enc(c) for c in convs]
