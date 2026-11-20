@@ -210,8 +210,11 @@ fn windows_registry_gpus() -> Vec<GpuInfo> {
 
 #[cfg(target_os = "macos")]
 fn apple_info() -> (bool, Option<String>) {
-    let arm = run("sysctl", &["-n", "hw.optional.arm64"]).map(|s| s.trim() == "1").unwrap_or(false);
-    let chip = run("sysctl", &["-n", "machdep.cpu.brand_string"]).map(|s| s.trim().to_string());
+    // Absolute path: apps started from Finder or with a minimal PATH may not have /usr/sbin on it.
+    // An arm64 build only ever runs on Apple Silicon (Rosetta cannot run arm64 code on Intel).
+    let sysctl = if Path::new("/usr/sbin/sysctl").exists() { "/usr/sbin/sysctl" } else { "sysctl" };
+    let arm = cfg!(target_arch = "aarch64") || run(sysctl, &["-n", "hw.optional.arm64"]).map(|s| s.trim() == "1").unwrap_or(false);
+    let chip = run(sysctl, &["-n", "machdep.cpu.brand_string"]).map(|s| s.trim().to_string());
     (arm, chip)
 }
 

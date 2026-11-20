@@ -142,7 +142,7 @@ impl Bundle {
     /// project.json `base_model` for the bundled starter model.
     pub fn starter_base_model(&self) -> Value {
         let m = &self.manifest.starter_model;
-        let mut v = json!({"id": m.id, "label": m.label, "path": self.starter_dir().display().to_string(), "format": m.format, "chat_kwargs": if m.chat_kwargs.is_null() { json!({}) } else { m.chat_kwargs.clone() }, "bundled": true});
+        let mut v = json!({"id": m.id, "label": m.label, "path": self.starter_dir().display().to_string(), "format": m.format, "backend": m.backend, "chat_kwargs": if m.chat_kwargs.is_null() { json!({}) } else { m.chat_kwargs.clone() }, "bundled": true});
         if let Some(g) = &m.gguf {
             v["gguf"] = json!(g);
         }

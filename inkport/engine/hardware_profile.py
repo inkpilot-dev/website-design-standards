@@ -269,6 +269,9 @@ PRESETS = {
 def make_plan(project: dict, report: dict, preset: str = "standard", overrides: Optional[dict] = None) -> dict:
     rec = dict(report.get("recommendation") or select_tier(report))
     backend = project.get("backend") or rec["backend"]
+    fmt = project.get("base_model", {}).get("format")
+    if fmt == "mlx" and report.get("apple_silicon"):
+        backend = "mlx"  # MLX weights can only be trained by MLX
     if backend == "unsloth":
         try:
             import unsloth  # noqa: F401,WPS433
