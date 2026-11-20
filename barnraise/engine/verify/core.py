@@ -124,7 +124,7 @@ def run_verifier(spec: dict, item: dict, text: str, parsed: Optional[dict], ctx:
                 return _verdict(spec, None, None, skipped=True)
             res = sandbox.run_tests(sandbox.extract_code(text), tests, timeout_s=float(params.get("timeout_s", 6.0)))
             frac = res["passed"] / max(res["total"], 1)
-            return _verdict(spec, res["passed"] == res["total"] and res["error"] is None, frac, error=res["error"], passed=res["passed"], total=res["total"])
+            return _verdict(spec, res["passed"] == res["total"] and res["error"] is None, frac, error=res["error"], tests_passed=res["passed"], tests_total=res["total"])
         if kind == "citation":
             source = meta.get("source_text")
             if not source or parsed is None:

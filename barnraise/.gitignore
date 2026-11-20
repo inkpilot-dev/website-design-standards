@@ -1,0 +1,9 @@
+target/
+node_modules/
+dist/
+__pycache__/
+*.pyc
+.e2e/
+src-tauri/gen/
+src-tauri/resources/engine/*.whl
+src-tauri/resources/bin/uv*
