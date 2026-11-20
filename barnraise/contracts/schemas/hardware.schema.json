@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://barnraise.dev/contracts/hardware.schema.json",
+  "title": "HardwareReport",
+  "description": "Returned by the Rust detect_hardware command and passed to `python -m engine plan --hardware <file>`.",
+  "type": "object",
+  "required": ["os", "arch", "cpu_brand", "cpu_cores", "ram_gb", "disk_free_gb", "gpus", "apple_silicon", "recommendation"],
+  "properties": {
+    "os": { "enum": ["macos", "windows", "linux", "other"] },
+    "arch": { "type": "string" },
+    "cpu_brand": { "type": "string" },
+    "cpu_cores": { "type": "integer" },
+    "ram_gb": { "type": "number" },
+    "disk_free_gb": { "type": "number" },
+    "apple_silicon": { "type": "boolean" },
+    "gpus": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["vendor", "name", "vram_gb", "unified"],
+        "properties": {
+          "vendor": { "enum": ["nvidia", "amd", "intel", "apple", "other"] },
+          "name": { "type": "string" },
+          "vram_gb": { "type": "number" },
+          "vram_free_gb": { "type": ["number", "null"] },
+          "driver": { "type": ["string", "null"] },
+          "compute_capability": { "type": ["string", "null"] },
+          "unified": { "type": "boolean" }
+        }
+      }
+    },
+    "recommendation": { "$ref": "#/$defs/recommendation" }
+  },
+  "$defs": {
+    "recommendation": {
+      "type": "object",
+      "required": ["tier", "vendor", "memory_gb", "model_id", "model_label", "backend", "quant", "lora_r", "micro_batch", "grad_accum", "max_seq", "stage2", "rft_k", "plain"],
+      "properties": {
+        "tier": { "type": "string" },
+        "vendor": { "type": "string" },
+        "memory_gb": { "type": "number" },
+        "model_id": { "type": "string" },
+        "model_label": { "type": "string" },
+        "backend": { "enum": ["unsloth", "torch", "mlx"] },
+        "quant": { "enum": ["nf4", "bf16", "fp32", "mlx4"] },
+        "lora_r": { "type": "integer" },
+        "micro_batch": { "type": "integer" },
+        "grad_accum": { "type": "integer" },
+        "max_seq": { "type": "integer" },
+        "stage2": { "enum": ["none", "rft", "grpo"] },
+        "rft_k": { "type": "integer" },
+        "plain": { "type": "string" }
+      }
+    }
+  }
+}

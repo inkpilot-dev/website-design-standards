@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://barnraise.dev/contracts/plan.schema.json",
+  "title": "TrainingPlan",
+  "description": "runs/<run_id>/plan.json written by `engine plan` and consumed by `engine train`.",
+  "type": "object",
+  "required": ["run_id", "backend", "base_model", "quant", "lora", "sft", "stage2", "gate", "budget_minutes", "seed"],
+  "properties": {
+    "run_id": { "type": "string" },
+    "backend": { "enum": ["unsloth", "torch", "mlx"] },
+    "device": { "type": ["string", "null"] },
+    "base_model": {
+      "type": "object",
+      "required": ["id", "path"],
+      "properties": { "id": { "type": "string" }, "path": { "type": "string" }, "chat_kwargs": { "type": "object" } }
+    },
+    "quant": { "enum": ["nf4", "bf16", "fp32", "fp16", "mlx4"] },
+    "lora": {
+      "type": "object",
+      "required": ["r", "alpha", "dropout", "dora", "targets"],
+      "properties": {
+        "r": { "type": "integer", "minimum": 1, "maximum": 256 },
+        "alpha": { "type": "number" },
+        "dropout": { "type": "number" },
+        "dora": { "type": "boolean" },
+        "targets": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "sft": {
+      "type": "object",
+      "required": ["lr", "epochs", "micro_batch", "grad_accum", "max_seq", "warmup_frac", "min_lr_ratio", "max_grad_norm", "replay_frac", "eval_every", "early_stop_patience", "checkpoint_every", "dnll_limit", "gradient_checkpointing", "max_steps"],
+      "properties": {
+        "lr": { "type": "number" },
+        "epochs": { "type": "number" },
+        "micro_batch": { "type": "integer" },
+        "grad_accum": { "type": "integer" },
+        "max_seq": { "type": "integer" },
+        "warmup_frac": { "type": "number" },
+        "min_lr_ratio": { "type": "number" },
+        "max_grad_norm": { "type": "number" },
+        "replay_frac": { "type": "number" },
+        "eval_every": { "type": "integer" },
+        "early_stop_patience": { "type": "integer" },
+        "checkpoint_every": { "type": "integer" },
+        "dnll_limit": { "type": "number" },
+        "gradient_checkpointing": { "type": "boolean" },
+        "max_steps": { "type": ["integer", "null"] }
+      }
+    },
+    "stage2": {
+      "type": "object",
+      "required": ["mode", "k", "rounds", "temperature", "lr", "min_gain_pts", "placebo"],
+      "properties": {
+        "mode": { "enum": ["none", "rft", "grpo"] },
+        "k": { "type": "integer" },
+        "rounds": { "type": "integer" },
+        "temperature": { "type": "number" },
+        "lr": { "type": "number" },
+        "min_gain_pts": { "type": "number" },
+        "placebo": { "type": "boolean" }
+      }
+    },
+    "gate": {
+      "type": "object",
+      "required": ["min_delta_pts", "max_general_drop_pts", "min_test_items", "verified_min_items", "max_new_tokens", "general_suite_n"],
+      "properties": {
+        "min_delta_pts": { "type": "number" },
+        "max_general_drop_pts": { "type": "number" },
+        "min_test_items": { "type": "integer" },
+        "verified_min_items": { "type": "integer" },
+        "max_new_tokens": { "type": "integer" },
+        "general_suite_n": { "type": "integer" }
+      }
+    },
+    "budget_minutes": { "type": "number" },
+    "dev_eval_n": { "type": "integer" },
+    "seed": { "type": "integer" }
+  }
+}

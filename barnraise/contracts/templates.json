@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "templates": [
+    {
+      "id": "business_rules",
+      "title": "Small Business & Finance Rules",
+      "tagline": "Sort expenses, read invoices, and fill in fields the way your business does.",
+      "proof": "exact",
+      "proof_label": "Checked exactly against your own past records",
+      "accepts": [".csv", ".jsonl", ".json", ".md", ".txt", ".pdf"],
+      "needs": "A spreadsheet of past examples (for example: description, category, amount). Optional: a policy document.",
+      "example_rules": [
+        "category must be one of fuel, meals, software, office_supplies",
+        "amount must be positive",
+        "total must equal the sum of the line items"
+      ]
+    },
+    {
+      "id": "code_sql",
+      "title": "Code & SQL Specialist",
+      "tagline": "Answer questions about your spreadsheets with SQL, or write functions that pass your tests.",
+      "proof": "exact",
+      "proof_label": "Every answer is run and its result compared",
+      "accepts": [".csv", ".py", ".jsonl", ".json"],
+      "needs": "One or more spreadsheets (CSV), or Python files with examples in their docstrings.",
+      "example_rules": ["must not mention DROP", "no more than 120 words"]
+    },
+    {
+      "id": "docs_legal",
+      "title": "Personal Docs & Legal Prep",
+      "tagline": "Answer questions from your leases, contracts, and paperwork, quoting the exact passage.",
+      "proof": "citation",
+      "proof_label": "Every answer must quote your document word for word",
+      "accepts": [".pdf", ".md", ".txt", ".docx"],
+      "needs": "The documents you want it to know (PDF, Word, Markdown or text).",
+      "example_rules": ["must include a quote", "no more than 80 words"]
+    },
+    {
+      "id": "custom",
+      "title": "Custom Skill",
+      "tagline": "Teach any skill from examples of questions and the answers you expect.",
+      "proof": "rules",
+      "proof_label": "Checked against your expected answers and your rules",
+      "accepts": [".csv", ".jsonl", ".json"],
+      "needs": "A file of examples with a question column and an answer column.",
+      "example_rules": ["no more than 50 words", "must mention \"thank you\""]
+    }
+  ]
+}

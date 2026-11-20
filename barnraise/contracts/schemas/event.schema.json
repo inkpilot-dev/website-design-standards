@@ -1,0 +1,160 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://barnraise.dev/contracts/event.schema.json",
+  "title": "EngineEvent",
+  "description": "One NDJSON line written by the Python engine to stdout. Rust parses every line; the UI receives them on training://*, benchmark://* and runtime://* channels.",
+  "type": "object",
+  "required": ["v", "type", "job_id", "ts"],
+  "properties": {
+    "v": { "const": 1 },
+    "type": { "enum": ["hello", "heartbeat", "log", "stage", "progress", "eval", "benchmark", "gate", "artifact", "ready", "error", "done"] },
+    "job_id": { "type": "string" },
+    "ts": { "type": "number" }
+  },
+  "oneOf": [
+    { "$ref": "#/$defs/hello" },
+    { "$ref": "#/$defs/heartbeat" },
+    { "$ref": "#/$defs/log" },
+    { "$ref": "#/$defs/stage" },
+    { "$ref": "#/$defs/progress" },
+    { "$ref": "#/$defs/eval" },
+    { "$ref": "#/$defs/benchmark" },
+    { "$ref": "#/$defs/gate" },
+    { "$ref": "#/$defs/artifact" },
+    { "$ref": "#/$defs/ready" },
+    { "$ref": "#/$defs/error" },
+    { "$ref": "#/$defs/done" }
+  ],
+  "$defs": {
+    "num_or_null": { "type": ["number", "null"] },
+    "side": {
+      "type": "object",
+      "required": ["output", "pass", "score"],
+      "properties": {
+        "output": { "type": "string" },
+        "pass": { "type": ["boolean", "null"] },
+        "score": { "type": ["number", "null"] }
+      }
+    },
+    "hello": {
+      "properties": {
+        "type": { "const": "hello" },
+        "engine_version": { "type": "string" },
+        "python": { "type": "string" },
+        "platform": { "type": "string" },
+        "backends": {
+          "type": "object",
+          "additionalProperties": { "type": "boolean" }
+        }
+      },
+      "required": ["engine_version", "python", "platform", "backends"]
+    },
+    "heartbeat": { "properties": { "type": { "const": "heartbeat" } } },
+    "log": {
+      "properties": {
+        "type": { "const": "log" },
+        "level": { "enum": ["debug", "info", "warn", "error"] },
+        "message": { "type": "string" }
+      },
+      "required": ["level", "message"]
+    },
+    "stage": {
+      "properties": {
+        "type": { "const": "stage" },
+        "stage": { "type": "string" },
+        "status": { "enum": ["started", "completed", "skipped", "failed"] },
+        "detail": { "type": "string" }
+      },
+      "required": ["stage", "status"]
+    },
+    "progress": {
+      "properties": {
+        "type": { "const": "progress" },
+        "stage": { "type": "string" },
+        "step": { "type": "integer", "minimum": 0 },
+        "total": { "type": "integer", "minimum": 0 },
+        "pct": { "type": "number", "minimum": 0, "maximum": 100 },
+        "overall_pct": { "type": "number", "minimum": 0, "maximum": 100 },
+        "eta_s": { "$ref": "#/$defs/num_or_null" },
+        "metrics": { "type": "object", "additionalProperties": { "$ref": "#/$defs/num_or_null" } }
+      },
+      "required": ["stage", "step", "total", "pct", "overall_pct", "eta_s", "metrics"]
+    },
+    "eval": {
+      "properties": {
+        "type": { "const": "eval" },
+        "split": { "enum": ["test", "dev", "general"] },
+        "model": { "enum": ["base", "candidate", "incumbent", "placebo"] },
+        "n": { "type": "integer" },
+        "passed": { "type": "integer" },
+        "pass_rate": { "type": "number" },
+        "ci95": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 }
+      },
+      "required": ["split", "model", "n", "passed", "pass_rate", "ci95"]
+    },
+    "benchmark": {
+      "properties": {
+        "type": { "const": "benchmark" },
+        "source": { "enum": ["training_dev", "arena"] },
+        "case_id": { "type": "string" },
+        "prompt": { "type": "string" },
+        "reference": { "type": ["string", "null"] },
+        "baseline": { "$ref": "#/$defs/side" },
+        "trained": { "$ref": "#/$defs/side" },
+        "step": { "type": ["integer", "null"] },
+        "judge": { "type": ["object", "null"] }
+      },
+      "required": ["source", "case_id", "prompt", "reference", "baseline", "trained"]
+    },
+    "gate": {
+      "properties": {
+        "type": { "const": "gate" },
+        "decision": { "enum": ["PROMOTE", "REJECT", "INSUFFICIENT_DATA"] },
+        "label": { "enum": ["VERIFIED", "PRELIMINARY", null] },
+        "delta_pts": { "type": "number" },
+        "baseline_pass_rate": { "type": "number" },
+        "candidate_pass_rate": { "type": "number" },
+        "checks": { "type": "object", "additionalProperties": { "type": "boolean" } },
+        "version": { "type": ["string", "null"] },
+        "report_path": { "type": "string" },
+        "explanation": { "type": "string" }
+      },
+      "required": ["decision", "label", "delta_pts", "baseline_pass_rate", "candidate_pass_rate", "checks", "version", "report_path", "explanation"]
+    },
+    "artifact": {
+      "properties": {
+        "type": { "const": "artifact" },
+        "kind": { "enum": ["adapter", "merged", "gguf", "brpatch", "report", "dataset", "model"] },
+        "path": { "type": "string" },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      },
+      "required": ["kind", "path", "sha256"]
+    },
+    "ready": {
+      "properties": {
+        "type": { "const": "ready" },
+        "host": { "const": "127.0.0.1" },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "model": { "type": "string" }
+      },
+      "required": ["host", "port", "model"]
+    },
+    "error": {
+      "properties": {
+        "type": { "const": "error" },
+        "code": { "type": "string" },
+        "message": { "type": "string" },
+        "retryable": { "type": "boolean" }
+      },
+      "required": ["code", "message", "retryable"]
+    },
+    "done": {
+      "properties": {
+        "type": { "const": "done" },
+        "ok": { "type": "boolean" },
+        "result": { "type": "object" }
+      },
+      "required": ["ok", "result"]
+    }
+  }
+}

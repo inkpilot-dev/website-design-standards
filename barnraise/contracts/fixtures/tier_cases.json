@@ -1,0 +1,16 @@
+{
+  "cases": [
+    { "name": "rtx4060-8gb", "gpus": [{ "vendor": "nvidia", "vram_gb": 8.0, "unified": false }], "ram_gb": 32, "apple_silicon": false, "expect": "N8" },
+    { "name": "rtx4070-12gb", "gpus": [{ "vendor": "nvidia", "vram_gb": 12.0, "unified": false }], "ram_gb": 32, "apple_silicon": false, "expect": "N12" },
+    { "name": "rtx4090-24gb", "gpus": [{ "vendor": "nvidia", "vram_gb": 24.0, "unified": false }], "ram_gb": 64, "apple_silicon": false, "expect": "N24" },
+    { "name": "rtx5090-32gb", "gpus": [{ "vendor": "nvidia", "vram_gb": 32.0, "unified": false }], "ram_gb": 64, "apple_silicon": false, "expect": "N32" },
+    { "name": "two-gpus-picks-largest", "gpus": [{ "vendor": "intel", "vram_gb": 0.5, "unified": false }, { "vendor": "nvidia", "vram_gb": 16.0, "unified": false }], "ram_gb": 32, "apple_silicon": false, "expect": "N16" },
+    { "name": "mac-16", "gpus": [{ "vendor": "apple", "vram_gb": 16.0, "unified": true }], "ram_gb": 16, "apple_silicon": true, "expect": "M16" },
+    { "name": "mac-36", "gpus": [{ "vendor": "apple", "vram_gb": 36.0, "unified": true }], "ram_gb": 36, "apple_silicon": true, "expect": "M32" },
+    { "name": "mac-64", "gpus": [{ "vendor": "apple", "vram_gb": 64.0, "unified": true }], "ram_gb": 64, "apple_silicon": true, "expect": "M64" },
+    { "name": "mac-8-falls-back", "gpus": [{ "vendor": "apple", "vram_gb": 8.0, "unified": true }], "ram_gb": 8, "apple_silicon": true, "expect": "X" },
+    { "name": "amd-7900xtx", "gpus": [{ "vendor": "amd", "vram_gb": 24.0, "unified": false }], "ram_gb": 64, "apple_silicon": false, "expect": "A24" },
+    { "name": "nvidia-4gb-too-small", "gpus": [{ "vendor": "nvidia", "vram_gb": 4.0, "unified": false }], "ram_gb": 16, "apple_silicon": false, "expect": "X" },
+    { "name": "cpu-only", "gpus": [], "ram_gb": 16, "apple_silicon": false, "expect": "X" }
+  ]
+}

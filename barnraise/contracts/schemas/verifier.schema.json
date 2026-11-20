@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://barnraise.dev/contracts/verifier.schema.json",
+  "title": "VerifierSet",
+  "description": "data/verifiers.json. Every verifier returns a Verdict {verifier_id, pass, score, detail}. An item passes when every gate passes and the weighted reward score is at least pass_threshold.",
+  "type": "object",
+  "required": ["version", "pass_threshold", "verifiers"],
+  "properties": {
+    "version": { "const": 1 },
+    "pass_threshold": { "type": "number", "minimum": 0, "maximum": 1 },
+    "verifiers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "kind", "role", "weight", "params"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z0-9_:.-]+$" },
+          "kind": { "enum": ["json_valid", "json_schema", "field_match", "exact_match", "token_f1", "contains", "regex", "rule", "sql_exec", "python_tests", "citation", "pairwise_judge"] },
+          "role": { "enum": ["gate", "reward", "audit", "eval_only"] },
+          "weight": { "type": "number", "minimum": 0 },
+          "description": { "type": "string" },
+          "params": { "type": "object" }
+        }
+      }
+    }
+  }
+}

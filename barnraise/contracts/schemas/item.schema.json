@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://barnraise.dev/contracts/item.schema.json",
+  "title": "DatasetItem",
+  "description": "One line of data/train.jsonl, data/dev.jsonl or data/test.jsonl. Produced by engine/pipeline/ingest_and_verify.py.",
+  "type": "object",
+  "required": ["item_id", "task", "group", "split", "messages", "reference", "reference_json", "verifiers", "meta"],
+  "additionalProperties": false,
+  "properties": {
+    "item_id": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$", "description": "sha256 of the normalized prompt text (the dedup and leakage key)" },
+    "task": { "enum": ["business_rules", "code_sql", "docs_legal", "custom"] },
+    "group": { "type": "string", "description": "near-duplicate cluster key; all members land in the same split" },
+    "split": { "enum": ["train", "dev", "test"] },
+    "messages": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["role", "content"],
+        "additionalProperties": false,
+        "properties": {
+          "role": { "enum": ["system", "user"] },
+          "content": { "type": "string" }
+        }
+      }
+    },
+    "reference": { "type": ["string", "null"], "description": "the expected assistant reply used as the SFT target" },
+    "reference_json": { "type": ["object", "null"] },
+    "verifiers": { "type": "array", "items": { "type": "string" } },
+    "meta": {
+      "type": "object",
+      "properties": {
+        "source": { "type": "string" },
+        "origin": { "enum": ["user_examples", "programmatic", "doc_extract", "doctest", "teacher"] },
+        "gold_sql": { "type": "string" },
+        "tests": { "type": "array", "items": { "type": "object", "required": ["call", "expect"], "properties": { "call": { "type": "string" }, "expect": { "type": "string" } } } },
+        "entry": { "type": "string" },
+        "source_text": { "type": "string" },
+        "answer": { "type": "string" }
+      }
+    }
+  }
+}

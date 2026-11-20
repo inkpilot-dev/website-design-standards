@@ -1,0 +1,12 @@
+{"v":1,"type":"hello","job_id":"j1","ts":1763650000.0,"engine_version":"0.1.0","python":"3.12.8","platform":"linux-x86_64","backends":{"torch":true,"cuda":false,"mps":false,"mlx":false,"unsloth":false,"trl":true,"llama_cpp":false}}
+{"v":1,"type":"heartbeat","job_id":"j1","ts":1763650001.0}
+{"v":1,"type":"log","job_id":"j1","ts":1763650002.0,"level":"info","message":"Loaded 240 examples from expenses.csv"}
+{"v":1,"type":"stage","job_id":"j1","ts":1763650003.0,"stage":"sft","status":"started","detail":"Learning from 168 examples"}
+{"v":1,"type":"progress","job_id":"j1","ts":1763650004.0,"stage":"sft","step":20,"total":200,"pct":10.0,"overall_pct":21.0,"eta_s":95.5,"metrics":{"loss":0.81,"lr":0.002,"tok_s":3120.4,"dev_pass":0.25,"replay_dnll":null}}
+{"v":1,"type":"eval","job_id":"j1","ts":1763650005.0,"split":"test","model":"base","n":72,"passed":0,"pass_rate":0.0,"ci95":[0.0,0.0507]}
+{"v":1,"type":"benchmark","job_id":"j1","ts":1763650006.0,"source":"training_dev","case_id":"sha256:9f","prompt":"Paid $45.20 at Shell","reference":"{\"category\": \"fuel\", \"amount\": 45.2}","baseline":{"output":"{\"category\": \"river\"}","pass":false,"score":0.0},"trained":{"output":"{\"category\": \"fuel\", \"amount\": 45.2}","pass":true,"score":1.0},"step":40,"judge":null}
+{"v":1,"type":"gate","job_id":"j1","ts":1763650007.0,"decision":"PROMOTE","label":"PRELIMINARY","delta_pts":61.1,"baseline_pass_rate":0.0,"candidate_pass_rate":0.611,"checks":{"task":true,"general":true,"format":true,"leakage":true},"version":"v1","report_path":"/tmp/p/versions/v1/report.json","explanation":"Your trained model passed 61% of the hidden test questions versus 0% before."}
+{"v":1,"type":"artifact","job_id":"j1","ts":1763650008.0,"kind":"adapter","path":"/tmp/p/versions/v1/adapter","sha256":"0000000000000000000000000000000000000000000000000000000000000000"}
+{"v":1,"type":"ready","job_id":"j2","ts":1763650009.0,"host":"127.0.0.1","port":50123,"model":"barnraise/expense-sorter"}
+{"v":1,"type":"error","job_id":"j1","ts":1763650010.0,"code":"OOM","message":"Ran out of graphics memory","retryable":true}
+{"v":1,"type":"done","job_id":"j1","ts":1763650011.0,"ok":true,"result":{"decision":"PROMOTE","version":"v1"}}

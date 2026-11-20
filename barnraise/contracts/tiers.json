@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "models": {
+    "qwen3-0.6b": {
+      "label": "Qwen3 0.6B (tiny, any computer)",
+      "hf": "Qwen/Qwen3-0.6B",
+      "mlx": "mlx-community/Qwen3-0.6B-4bit",
+      "license": "Apache-2.0",
+      "params_b": 0.6,
+      "chat_kwargs": { "enable_thinking": false }
+    },
+    "qwen3-4b-instruct-2507": {
+      "label": "Qwen3 4B Instruct",
+      "hf": "Qwen/Qwen3-4B-Instruct-2507",
+      "mlx": "mlx-community/Qwen3-4B-Instruct-2507-4bit",
+      "license": "Apache-2.0",
+      "params_b": 4.0,
+      "chat_kwargs": {}
+    },
+    "qwen3-8b": {
+      "label": "Qwen3 8B",
+      "hf": "Qwen/Qwen3-8B",
+      "mlx": "mlx-community/Qwen3-8B-4bit",
+      "license": "Apache-2.0",
+      "params_b": 8.2,
+      "chat_kwargs": { "enable_thinking": false }
+    },
+    "qwen3-14b": {
+      "label": "Qwen3 14B",
+      "hf": "Qwen/Qwen3-14B",
+      "mlx": "mlx-community/Qwen3-14B-4bit",
+      "license": "Apache-2.0",
+      "params_b": 14.8,
+      "chat_kwargs": { "enable_thinking": false }
+    },
+    "qwen3-30b-a3b-instruct-2507": {
+      "label": "Qwen3 30B-A3B Instruct (mixture of experts)",
+      "hf": "Qwen/Qwen3-30B-A3B-Instruct-2507",
+      "mlx": "mlx-community/Qwen3-30B-A3B-Instruct-2507-4bit",
+      "license": "Apache-2.0",
+      "params_b": 30.5,
+      "chat_kwargs": {}
+    }
+  },
+  "tiers": [
+    { "id": "N8",  "vendor": "nvidia", "min_gb": 6,  "max_gb": 10,  "model": "qwen3-4b-instruct-2507",      "backend": "unsloth", "quant": "nf4",  "lora_r": 16, "micro_batch": 1, "grad_accum": 16, "max_seq": 2048, "stage2": "rft",  "rft_k": 4,  "plain": "Good: a solid gaming-class graphics card" },
+    { "id": "N12", "vendor": "nvidia", "min_gb": 10, "max_gb": 14,  "model": "qwen3-8b",                    "backend": "unsloth", "quant": "nf4",  "lora_r": 16, "micro_batch": 1, "grad_accum": 16, "max_seq": 2048, "stage2": "rft",  "rft_k": 4,  "plain": "Good: enough graphics memory for an 8-billion-parameter model" },
+    { "id": "N16", "vendor": "nvidia", "min_gb": 14, "max_gb": 20,  "model": "qwen3-8b",                    "backend": "unsloth", "quant": "nf4",  "lora_r": 32, "micro_batch": 1, "grad_accum": 16, "max_seq": 4096, "stage2": "rft",  "rft_k": 8,  "plain": "Great: room for longer documents" },
+    { "id": "N24", "vendor": "nvidia", "min_gb": 20, "max_gb": 28,  "model": "qwen3-14b",                   "backend": "unsloth", "quant": "nf4",  "lora_r": 32, "micro_batch": 1, "grad_accum": 16, "max_seq": 4096, "stage2": "grpo", "rft_k": 8,  "plain": "Excellent: a high-end card that can train larger models" },
+    { "id": "N32", "vendor": "nvidia", "min_gb": 28, "max_gb": 40,  "model": "qwen3-30b-a3b-instruct-2507", "backend": "unsloth", "quant": "nf4",  "lora_r": 32, "micro_batch": 1, "grad_accum": 16, "max_seq": 4096, "stage2": "grpo", "rft_k": 8,  "plain": "Excellent: can train a fast mixture-of-experts model" },
+    { "id": "N48", "vendor": "nvidia", "min_gb": 40, "max_gb": 1000,"model": "qwen3-30b-a3b-instruct-2507", "backend": "unsloth", "quant": "nf4",  "lora_r": 64, "micro_batch": 2, "grad_accum": 8,  "max_seq": 8192, "stage2": "grpo", "rft_k": 16, "plain": "Workstation-class: the biggest local models" },
+    { "id": "A16", "vendor": "amd",    "min_gb": 14, "max_gb": 22,  "model": "qwen3-4b-instruct-2507",      "backend": "torch",   "quant": "bf16", "lora_r": 16, "micro_batch": 1, "grad_accum": 16, "max_seq": 2048, "stage2": "rft",  "rft_k": 4,  "plain": "Good: AMD graphics card (beta support)" },
+    { "id": "A24", "vendor": "amd",    "min_gb": 22, "max_gb": 1000,"model": "qwen3-8b",                    "backend": "torch",   "quant": "bf16", "lora_r": 16, "micro_batch": 1, "grad_accum": 16, "max_seq": 2048, "stage2": "rft",  "rft_k": 4,  "plain": "Great: large AMD graphics card (beta support)" },
+    { "id": "I16", "vendor": "intel",  "min_gb": 14, "max_gb": 1000,"model": "qwen3-4b-instruct-2507",      "backend": "torch",   "quant": "bf16", "lora_r": 16, "micro_batch": 1, "grad_accum": 16, "max_seq": 2048, "stage2": "rft",  "rft_k": 4,  "plain": "Good: Intel Arc graphics (beta support)" },
+    { "id": "M16", "vendor": "apple",  "min_gb": 14, "max_gb": 24,  "model": "qwen3-4b-instruct-2507",      "backend": "mlx",     "quant": "mlx4", "lora_r": 16, "micro_batch": 2, "grad_accum": 8,  "max_seq": 2048, "stage2": "rft",  "rft_k": 4,  "plain": "Good: Apple Silicon Mac with 16 GB" },
+    { "id": "M32", "vendor": "apple",  "min_gb": 24, "max_gb": 48,  "model": "qwen3-8b",                    "backend": "mlx",     "quant": "mlx4", "lora_r": 32, "micro_batch": 2, "grad_accum": 8,  "max_seq": 4096, "stage2": "rft",  "rft_k": 8,  "plain": "Great: Apple Silicon Mac with plenty of memory" },
+    { "id": "M64", "vendor": "apple",  "min_gb": 48, "max_gb": 112, "model": "qwen3-14b",                   "backend": "mlx",     "quant": "mlx4", "lora_r": 32, "micro_batch": 4, "grad_accum": 4,  "max_seq": 4096, "stage2": "rft",  "rft_k": 8,  "plain": "Excellent: high-memory Apple Silicon Mac" },
+    { "id": "M128","vendor": "apple",  "min_gb": 112,"max_gb": 10000,"model": "qwen3-30b-a3b-instruct-2507","backend": "mlx",     "quant": "mlx4", "lora_r": 64, "micro_batch": 8, "grad_accum": 2,  "max_seq": 8192, "stage2": "rft",  "rft_k": 16, "plain": "Workstation-class Mac: the biggest local models" },
+    { "id": "X",   "vendor": "any",    "min_gb": 0,  "max_gb": 10000,"model": "qwen3-0.6b",                 "backend": "torch",   "quant": "fp32", "lora_r": 16, "micro_batch": 1, "grad_accum": 8,  "max_seq": 1024, "stage2": "rft",  "rft_k": 2,  "plain": "Basic: no supported graphics card, so training runs slowly on the processor" }
+  ]
+}
