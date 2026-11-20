@@ -190,6 +190,7 @@ impl App {
     }
 
     /// Starts a background download; progress arrives on `packs://progress`.
+    /// Must be called from within a tokio runtime (async Tauri command or the CLI).
     pub fn install_pack(&self, id: &str) -> AppResult<()> {
         if !self.packs.catalog().iter().any(|p| p.id == id) {
             return Err(AppError { code: "BAD_INPUT".into(), message: format!("unknown pack {id}"), retryable: false });

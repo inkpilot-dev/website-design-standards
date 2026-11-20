@@ -41,8 +41,9 @@ fn list_packs(s: State<'_, AppState>) -> Vec<PackState> {
 }
 
 /// Optional, user-initiated download of an add-on pack; progress on `packs://progress`.
+/// Async so it runs on Tauri's tokio runtime, where the background download task is spawned.
 #[tauri::command]
-fn install_pack(s: State<'_, AppState>, pack_id: String) -> AppResult<()> {
+async fn install_pack(s: State<'_, AppState>, pack_id: String) -> AppResult<()> {
     s.0.install_pack(&pack_id)
 }
 

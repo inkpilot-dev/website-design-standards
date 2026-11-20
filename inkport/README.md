@@ -36,12 +36,18 @@ inkport/
 │   ├── adapters.py                signed .inkpatch export/import, MLX→PEFT, GGUF export
 │   └── smoke.py                   offline tiny model + synthetic data for the e2e test
 ├── src-tauri/                     Rust: Tauri v2 shell + headless CLI
-│   └── src/{main,lib,desktop,app,contract,events,hardware,sidecar,api_server,runtime,project}.rs, bin/inkport-cli.rs
+│   ├── src/{main,lib,desktop,app,contract,events,hardware,sidecar,api_server,runtime,project}.rs, bin/inkport-cli.rs
+│   ├── src/bootstrap.rs           bundled payload: locate, verify (manifest pinned at build), isolated offline env, warm-up, accelerators
+│   ├── src/packs.rs               optional add-on packs: resume-safe, checksum-verified, atomic installs
+│   ├── bundle/<platform>.json     per-OS installer configs that map the payload into the app (release builds only)
+│   └── entitlements.plist         macOS hardened-runtime exceptions for the embedded Python
 ├── src/                           React 19 + TypeScript + Tailwind 4
 │   ├── App.tsx  lib/{contract,ipc,mock}.ts  components/ui.tsx
 │   └── screens/{SystemReady,TemplateLauncher,DataRulesStudio,TrainingArena,DeployPanel}.tsx
 ├── tests/python/                  pytest: stats, rules, sandbox, SQL, ingest/leakage/contract, templates, slow e2e
-├── scripts/                       verify_e2e.sh / .ps1, prepare_bundle.sh, make_icon.py
+├── packaging/                     lock.json (pinned runtime/llama.cpp/model inputs), requirements/, prune.json, packs/catalog.json
+├── scripts/                       build_all_in_one.sh/.ps1, clean_machine_check.sh/.ps1, verify_e2e.sh/.ps1, make_icon.py
+│   └── lib/                       assemble_payload.py, build_llamacpp.py, starter_model.py, finalize_payload.py, common.py
 ├── package.json · pyproject.toml · Cargo.toml (workspace) · src-tauri/tauri.conf.json
 ```
 
@@ -123,13 +129,103 @@ Without `INKPORT_PYTHON`, the app's **Set up everything** button builds its own 
 
 `pnpm dev` alone opens the UI in a browser with a simulated engine. That is useful for UI work only.
 
-### Package installers
+### One-and-done installers (everything included, works offline)
+
+The installer is the only download. Inside it is everything needed to train, verify and serve
+models with no network: a relocatable CPython (python-build-standalone) with the engine and its
+libraries pre-installed, llama.cpp with this OS's GPU backends, a 4-bit starter model, sample data,
+and an integrity manifest. Users never install Python, CUDA, compilers, Git or build tools, and
+there is no setup wizard: the first launch verifies the files and lands on the ready screen.
+
+| | Linux x86_64 | Windows x64 | macOS Apple Silicon |
+|---|---|---|---|
+| Installers | AppImage, `.deb`, portable `.tar.zst` (no root, no FUSE) | NSIS `.exe` (per-user, no admin), `.msi` | `.dmg`, `.app` |
+| Training | PyTorch CPU (`cpu` flavor) or CUDA (`cuda` flavor) | PyTorch CPU or CUDA | MLX on the Apple GPU (no PyTorch shipped) |
+| Inference | llama.cpp: Vulkan (NVIDIA/AMD/Intel) [+ CUDA], CPU fallback | llama.cpp: Vulkan [+ CUDA], CPU fallback | MLX; llama.cpp with Metal for GGUF |
+| Starter model | Qwen3 1.7B, GGUF Q4_K_M (~1.1 GB): served by llama.cpp, dequantized in memory for training | same | Qwen3 1.7B, MLX 4-bit (~1 GB) |
+| Never shipped | Windows/macOS binaries, CUDA in the `cpu` flavor | Linux/macOS binaries | CUDA, Vulkan, PyTorch |
+
+Build on each target OS (the Python runtime can also be assembled cross-platform with uv):
 
 ```bash
-pnpm tauri build
+scripts/build_all_in_one.sh
 ```
 
-This produces `.deb`/`.rpm`/AppImage on Linux, `.dmg`/`.app` on macOS and `.msi`/NSIS on Windows. `scripts/prepare_bundle.sh` stages the engine wheel and the `uv` binary as resources. Installers must be built on each target OS; code signing and notarization need your own certificates.
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\build_all_in_one.ps1
+```
+
+Options: `--flavor cuda` / `-Flavor cuda` for NVIDIA training, `--smoke-model` / `-SmokeModel` to
+bundle the tiny offline test model (CI), `--debug`, `--skip-payload`.
+
+Pipeline:
+
+1. `scripts/lib/assemble_payload.py`: pinned CPython (SHA-256 checked), dependencies installed
+   into it, dead weight pruned (`packaging/prune.json`), every module precompiled.
+2. `scripts/lib/build_llamacpp.py`: llama.cpp from pinned sources, with the per-OS backends above
+   and `$ORIGIN`/`@loader_path` library paths. Built without any HTTPS client.
+3. `scripts/lib/starter_model.py`: official safetensors from Hugging Face, each file verified,
+   quantized by us (GGUF Q4_K_M or MLX 4-bit).
+4. `scripts/lib/finalize_payload.py`: samples, pack catalog, licenses, and `manifest.json` with
+   every file's size and SHA-256. The manifest's own SHA-256 is compiled into the app binary
+   (`src-tauri/build.rs`).
+5. Tauri packaging with `src-tauri/bundle/<platform>.json`, which maps the payload into the app as
+   `payload/`. On Linux the AppImage gets the payload added untouched after linuxdeploy, because
+   linuxdeploy would rewrite the libraries and break their checksums. On macOS every nested
+   Mach-O is signed with the hardened runtime (`src-tauri/entitlements.plist`) before Tauri signs
+   and notarizes the app. On Windows the MSVC runtime ships app-locally and the Rust app links its
+   C runtime statically.
+
+Every input is pinned in `packaging/lock.json`.
+
+At launch, `src-tauri/src/bootstrap.rs`:
+
+- Finds the payload and checks the manifest against the compiled-in hash.
+- Hashes every file on first launch (multi-threaded; 5.2 GB took 1.8 s here) and checks sizes plus
+  critical files afterwards.
+- Runs the bundled interpreter isolated (`-I -B`, user `PYTHON*` variables removed) with
+  Hugging Face/transformers forced offline.
+- Warms up the engine and detects accelerators: MLX/CUDA/CPU for training, and
+  Metal/CUDA/Vulkan/CPU via `llama-server --list-devices` for answers.
+
+A missing GPU is never an error.
+
+**Optional add-ons** (`packaging/packs/catalog.json`, `src-tauri/src/packs.rs`) are larger base
+models such as Qwen3 8B.
+- **One click, resume-safe:** downloads continue with HTTP Range after a pause, crash or dropped
+  connection.
+- **Verified:** each file is checked against the SHA-256 or git blob SHA-1 the Hub publishes for
+  the exact commit.
+- **Atomic:** a pack appears only after every file has been verified.
+- **Never required:** nothing in core training, verification or the local API uses them.
+
+### Clean-machine check
+
+On Linux or macOS:
+
+```bash
+scripts/clean_machine_check.sh build/installers/linux-x86_64-cpu/Inkport_0.1.0_amd64.AppImage
+```
+
+On Windows:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\clean_machine_check.ps1 -Installer .\Inkport_0.1.0_x64-setup.exe
+```
+
+The check installs or unpacks the installer without root and cuts off the network:
+- Linux: a private network namespace with only loopback.
+- macOS: `sandbox-exec`.
+- Windows: Firewall rules when run as admin.
+
+On Linux it also masks the host's python/pip/node/cargo/uv/cmake/gcc/git. It then checks:
+
+1. Pre-flight (every file verified).
+2. A project built from the bundled samples.
+3. Training plus the hidden-test gate.
+4. The local API: 401 without a key, model list, chat, `@base`, streaming.
+5. A full re-verification.
+6. That nothing was written inside the installation.
 
 ### Verify everything end to end
 
@@ -161,13 +257,12 @@ It runs on CPU in about 2 minutes, plus about 1 minute the first time to build t
 
 | Area | State |
 |---|---|
-| Linux, CPU: engine, Rust supervisor/CLI, gateway, desktop app, `.deb` | Built and verified here (e2e script green; desktop app driven through real IPC under Xvfb) |
-| Python tests | 39 fast + 1 slow end-to-end, passing |
-| Rust tests | 8, passing (contract fixtures, tiers, nvidia-smi parsing, gateway security + streaming proxy, projects) |
-| NVIDIA CUDA (bitsandbytes QLoRA, Unsloth, TRL GRPO) | Implemented, **not run in this environment** (no GPU). Validate with `verify_e2e` on a CUDA box. |
-| Apple Silicon MLX (training, adapters, MLX→PEFT) | Implemented against the mlx-lm API, **not run here** (no Mac). |
-| Windows | Code paths and `verify_e2e.ps1` written, **not run here**. |
-| llama.cpp GGUF export / inference | Optional; set `INKPORT_LLAMA_CPP` to a llama.cpp checkout for export, install `.[llamacpp]` for inference. |
-| Not built yet | Cloud burst / swarm, OCR for scanned PDFs, teacher-model question drafting for documents, Windows sandbox job objects. |
+| Linux all-in-one installers (AppImage, `.deb`, portable tarball) | Built here (`cuda` flavor, starter = offline test model). All three pass `clean_machine_check.sh` offline with host toolchains masked (~80-95 s each). The installed desktop app was launched offline and reaches "ready" in about 4 s after verifying 25,689 files (5.2 GB). |
+| Integrity / pre-flight / tamper detection | Verified: a 1-byte change in the model is reported as `checksum mismatch: models/starter/...`. |
+| GGUF starter flow | Verified with a bundled GGUF: train from the dequantized GGUF, gate, export the GGUF LoRA with the bundled converter, then serve base + LoRA with the bundled llama-server, with `@base` switching the adapter off per request. |
+| Rust tests | 15 passing (bootstrap integrity and pinning, packs resume and checksums against a fake Hub, gateway incl. llama upstream, contracts, tiers, projects) |
+| Python tests | 41 fast + 1 slow, passing |
+| **Not run here** | The real Qwen3 1.7B download and quantization (Hugging Face is blocked in this environment). The `cpu` flavor (the PyTorch CPU index is blocked; installers were ~3 GB here mainly because the `cuda` flavor carries ~3 GB of NVIDIA libraries, so expect roughly 1.5-2.5 GB for `cpu` with the real starter). The Windows and macOS builds, signing and notarization (no such machines here). GPU backends (no GPU here). |
+| Not built yet | Cloud burst / swarm, OCR for scanned PDFs, teacher-model question drafting for documents. |
 
-The smoke model is ~1.4M parameters. It proves the plumbing, not quality: it reaches roughly 5–15% on the hidden expense test versus 0% for its base. Real gains come from real backbones (Qwen3 4B–30B) on real data.
+The bundled test model is ~1.4M parameters. It proves the plumbing, not quality. Real gains come from real backbones (the Qwen3 starter, or the optional 8B pack) on real data.

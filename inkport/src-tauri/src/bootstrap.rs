@@ -266,10 +266,15 @@ pub fn sha256_file(path: &Path) -> std::io::Result<String> {
 
 /// Verify the payload. `full` hashes every file; otherwise sizes for all + hashes for critical files.
 pub fn verify(bundle: &Bundle, full: bool, progress: &(dyn Fn(u64, u64) + Sync)) -> VerifyReport {
+    verify_with_pin(bundle, full, EXPECTED_MANIFEST_SHA256, progress)
+}
+
+/// `pin`: the manifest SHA-256 this binary was built for ("" = development build, not pinned).
+pub fn verify_with_pin(bundle: &Bundle, full: bool, pin: &str, progress: &(dyn Fn(u64, u64) + Sync)) -> VerifyReport {
     let t0 = Instant::now();
     let mut problems = vec![];
-    let pinned = !EXPECTED_MANIFEST_SHA256.is_empty();
-    if pinned && bundle.manifest_sha256 != EXPECTED_MANIFEST_SHA256 {
+    let pinned = !pin.is_empty();
+    if pinned && bundle.manifest_sha256 != pin {
         problems.push("manifest.json does not match this app build (the installation was modified or mixed with another version)".to_string());
     }
     let files: Vec<(&String, &(u64, String))> = bundle.manifest.files.iter().collect();
@@ -467,14 +472,24 @@ mod tests {
     fn verify_detects_tampering_and_missing_files() {
         let t = tempfile::tempdir().unwrap();
         let b = fake_bundle(t.path());
-        assert!(verify(&b, true, &|_, _| {}).ok);
+        assert!(verify_with_pin(&b, true, "", &|_, _| {}).ok);
         std::fs::write(t.path().join("models/starter/w.gguf"), vec![8u8; 3_000_000]).unwrap(); // same size, different bytes
-        let quick = verify(&b, false, &|_, _| {});
+        let quick = verify_with_pin(&b, false, "", &|_, _| {});
         assert!(quick.ok, "quick mode only hashes critical files");
-        let full = verify(&b, true, &|_, _| {});
+        let full = verify_with_pin(&b, true, "", &|_, _| {});
         assert!(!full.ok && full.problems.iter().any(|p| p.contains("checksum mismatch: models/starter/w.gguf")));
         std::fs::remove_file(t.path().join("python/bin/python3")).unwrap();
-        assert!(verify(&b, false, &|_, _| {}).problems.iter().any(|p| p.contains("missing: python/bin/python3")));
+        assert!(verify_with_pin(&b, false, "", &|_, _| {}).problems.iter().any(|p| p.contains("missing: python/bin/python3")));
+    }
+
+    #[test]
+    fn manifest_pin_mismatch_is_reported() {
+        let t = tempfile::tempdir().unwrap();
+        let b = fake_bundle(t.path());
+        let good = verify_with_pin(&b, false, &b.manifest_sha256, &|_, _| {});
+        assert!(good.ok && good.manifest_pinned);
+        let bad = verify_with_pin(&b, false, &"0".repeat(64), &|_, _| {});
+        assert!(!bad.ok && bad.problems[0].contains("does not match this app build"));
     }
 
     #[test]
@@ -483,7 +498,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let b = fake_bundle(t.path());
         assert!(needs_full_verify(home.path(), &b));
-        let r = verify(&b, true, &|_, _| {});
+        let r = verify_with_pin(&b, true, "", &|_, _| {});
         write_stamp(home.path(), &b, &r);
         assert!(!needs_full_verify(home.path(), &b));
     }

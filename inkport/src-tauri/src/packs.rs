@@ -267,7 +267,17 @@ impl Packs {
         match &res {
             Ok(p) => self.emit(id, "installed", "", 1, 1, &p.display().to_string()),
             Err(e) if cancel.load(Ordering::Relaxed) => self.emit(id, "cancelled", "", 0, 0, &format!("Paused. Downloaded parts are kept; press Resume to continue. ({e})")),
-            Err(e) => self.emit(id, "failed", "", 0, 0, &format!("{e:#}")),
+            Err(e) => {
+                let detail = format!("{e:#}");
+                let friendly = if detail.contains("cannot reach") || detail.contains("error sending request") || detail.contains("dns") || detail.contains("Connection refused") {
+                    "No internet connection right now. This add-on is optional: everything else keeps working offline. Press Download again when you are online; finished parts are kept.".to_string()
+                } else if detail.contains("mismatch") {
+                    format!("A downloaded file did not match its published checksum and was discarded for your safety. Please try again. ({detail})")
+                } else {
+                    format!("The download did not finish: {detail}")
+                };
+                self.emit(id, "failed", "", 0, 0, &friendly)
+            }
         }
         res
     }
