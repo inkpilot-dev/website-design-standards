@@ -79,6 +79,8 @@ def main() -> None:
     if a.platform.startswith("windows"):
         # NSIS installs per-user to %LOCALAPPDATA%\Programs\Inkport (~45 chars); keep every path
         # comfortably below the classic 260-character Windows limit.
+        longest = max(entries, key=len)
+        print(f"[inkport-build] longest payload path: {len(longest)} chars ({longest})", flush=True)
         too_long = [k for k in entries if len(k) > 190]
         if too_long:
             raise SystemExit(f"{len(too_long)} payload paths are too long for Windows, e.g. {too_long[0]}")

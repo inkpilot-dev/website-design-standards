@@ -60,7 +60,7 @@ touch "$WORK/.before"
 cat > "$WORK/inner.sh" <<'INNER'
 set -euo pipefail
 pass() { printf '    \033[32mPASS\033[0m %s\n' "$*"; }
-fail() { printf '    \033[31mFAIL\033[0m %s\n' "$*"; echo "    --- last lines of the Inkport log ---"; tail -40 "$WORK/cli.log" 2>/dev/null | sed 's/^/    /'; exit 1; }
+fail() { printf '    \033[31mFAIL\033[0m %s\n' "$*"; echo "    --- errors in the Inkport log ---"; grep -iE "error|traceback|exception" "$WORK/cli.log" 2>/dev/null | tail -15 | sed 's/^/    /'; echo "    --- last lines of the Inkport log ---"; grep -v "not an adapter parameter" "$WORK/cli.log" 2>/dev/null | tail -30 | sed 's/^/    /'; exit 1; }
 json() { sed -n 's/^RESULT //p' | tail -1; }
 field() { tr -d '\n' | grep -o "\"$1\":[^,}]*" | head -1 | cut -d: -f2- | tr -d '"'; }
 t0=$(date +%s)

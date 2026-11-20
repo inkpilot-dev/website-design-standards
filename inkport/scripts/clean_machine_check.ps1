@@ -68,7 +68,7 @@ foreach ($tool in @("python", "py", "node", "cargo", "uv", "git", "cl")) {
 
 # Plain function (no param block): PowerShell would otherwise try to bind "--full" etc. as its own
 # parameters. Everything after the name is passed verbatim to inkport-cli.exe.
-function Cli {
+function InkCli {
   $CliArgs = $args
   $out = & $Cli.FullName @CliArgs 2>> (Join-Path $Work "cli.log")
   $line = $out | Where-Object { $_ -like "RESULT *" } | Select-Object -Last 1
@@ -78,37 +78,37 @@ function Cli {
 
 # ---------------------------------------------------------------- checks
 $t0 = Get-Date
-$r = Cli doctor --full
+$r = InkCli doctor --full
 if (-not $r -or -not $r.ok -or -not $r.offline_core) { Fail "pre-flight failed: $(Get-Content (Join-Path $Work 'cli.log') -Tail 3)" }
 Pass "pre-flight: $($r.verify.files_checked) bundled files verified in $([math]::Round($r.verify.seconds, 1)) s; training on $($r.training_accelerator); answers on $($r.inference_devices -join ', ')"
 
-$models = Cli models
+$models = InkCli models
 $model = $models[0].id
 if (-not $model) { Fail "no bundled base model" }
 Pass "bundled starter model: $model"
-$samples = (Cli samples).samples
+$samples = (InkCli samples).samples
 if (-not (Test-Path (Join-Path $samples "expenses.csv"))) { Fail "bundled sample data missing" }
 
-$p = Cli create-project --name "Clean Check" --template business_rules
+$p = InkCli create-project --name "Clean Check" --template business_rules
 if ($p.slug -ne "clean-check") { Fail "create project" }
-$ing = Cli ingest --project clean-check --inputs (Join-Path $samples "expenses.csv") (Join-Path $samples "policy.md") --rules '["amount must be positive"]'
+$ing = InkCli ingest --project clean-check --inputs (Join-Path $samples "expenses.csv") (Join-Path $samples "policy.md") --rules '["amount must be positive"]'
 if (-not $ing.leakage_free) { Fail "ingest" }
 Pass "practice exam built from bundled samples (train $($ing.counts.train) / hidden test $($ing.counts.test), zero leakage)"
 
 if ($model -eq "smoke-tiny") {
-  $t = Cli train --project clean-check --preset smoke
+  $t = InkCli train --project clean-check --preset smoke
   if ($t.decision -ne "PROMOTE") { Fail "training/gate did not promote: $($t | ConvertTo-Json -Compress)" }
 } else {
-  $t = Cli train --project clean-check --preset fast --overrides '{"sft":{"max_steps":40,"eval_every":20,"checkpoint_every":20},"stage2":{"mode":"none"},"gate":{"general_suite_n":20}}'
+  $t = InkCli train --project clean-check --preset fast --overrides '{"sft":{"max_steps":40,"eval_every":20,"checkpoint_every":20},"stage2":{"mode":"none"},"gate":{"general_suite_n":20}}'
   if ($t.decision -notin @("PROMOTE", "REJECT", "INSUFFICIENT_DATA")) { Fail "training/gate did not finish" }
 }
 Pass "trained + gated on the hidden test: $($t.decision) $($t.version)"
 
-$a = Cli api-smoke --project clean-check --port $Port
+$a = InkCli api-smoke --project clean-check --port $Port
 if (-not $a -or -not $a.streaming -or $a.unauthorized_status -ne 401) { Fail "local API: $(Get-Content (Join-Path $Work 'cli.log') -Tail 3)" }
 Pass "local API on 127.0.0.1:${Port}: 401 without key, models listed, chat + @base + streaming via $($a.engine)"
 
-$r2 = Cli doctor --full
+$r2 = InkCli doctor --full
 if (-not $r2.ok) { Fail "installation changed during use" }
 Pass "installation unchanged after use (full re-verification)"
 $changed = Get-ChildItem $InstallDir -Recurse -File | Where-Object { $_.LastWriteTime -gt $before } | Select-Object -First 5

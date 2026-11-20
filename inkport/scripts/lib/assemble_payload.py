@@ -73,6 +73,29 @@ def prune(py_root: Path, plat: str) -> int:
     return removed
 
 
+def flatten_licenses(py_root: Path) -> int:
+    """Fold nested `*.dist-info/licenses/<sub>/<dirs>/...` trees into one text file per package.
+
+    Some wheels (torch) vendor hundreds of third-party license files at very deep paths, which
+    break Windows installers (MAX_PATH) without adding anything a single concatenated file lacks.
+    The text of every license is kept, each under a header naming its original path.
+    """
+    folded = 0
+    for lic in py_root.rglob("*.dist-info/licenses"):
+        subdirs = [d for d in sorted(lic.iterdir()) if d.is_dir()]
+        if not subdirs:
+            continue
+        parts = []
+        for d in subdirs:
+            for f in sorted(x for x in d.rglob("*") if x.is_file()):
+                text = f.read_bytes().decode("utf-8", errors="replace")
+                parts.append(f"===== {f.relative_to(lic).as_posix()} =====\n{text.rstrip()}\n")
+                folded += 1
+            rmtree(d)
+        (lic / "THIRD_PARTY_LICENSES.txt").write_text("\n".join(parts), encoding="utf-8")
+    return folded
+
+
 def tree_size(p: Path) -> int:
     return sum(f.stat().st_size for f in p.rglob("*") if f.is_file() and not f.is_symlink())
 
@@ -116,6 +139,7 @@ def main() -> None:
     before = tree_size(py_root)
     removed = prune(py_root, plat)
     log(f"pruned {removed / 1e6:.0f} MB of unused files ({before / 1e6:.0f} -> {tree_size(py_root) / 1e6:.0f} MB)")
+    log(f"folded {flatten_licenses(py_root)} nested third-party license files into THIRD_PARTY_LICENSES.txt")
 
     compile_py = payload_python(payload, plat) if not cross else Path(subprocess.check_output([uv(), "python", "find", "3.12"], text=True).strip())
     run([compile_py, "-m", "compileall", "-q", "-j", "0", "--invalidation-mode", "unchecked-hash", str(py_root)])

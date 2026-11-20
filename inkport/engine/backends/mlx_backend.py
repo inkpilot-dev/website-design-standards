@@ -137,6 +137,10 @@ class MlxBackend(Backend):
             if cfg["keys"] is None:
                 cfg.pop("keys")
             linear_to_lora_layers(self.model, len(layers), cfg, use_dora=self.plan["lora"]["dora"])
+            # Train ONLY the adapter: some models (e.g. Qwen3's q_norm/k_norm) leave norm weights
+            # trainable after conversion, which would then leak into the saved adapter.
+            self.model.freeze()
+            self.model.unfreeze(keys=["lora_a", "lora_b", "m"], strict=False)
             self._adapter = True
             self._num_layers = len(layers)
             self._keys = cfg.get("keys")
@@ -224,7 +228,7 @@ class MlxBackend(Backend):
     def _adapter_weights(self) -> dict:
         from mlx.utils import tree_flatten  # noqa: WPS433
 
-        return dict(tree_flatten(self.model.trainable_parameters()))
+        return {k: v for k, v in tree_flatten(self.model.trainable_parameters()) if k.rsplit(".", 1)[-1] in ("lora_a", "lora_b", "m")}
 
     def _write_mlx(self, d: Path) -> None:
         d.mkdir(parents=True, exist_ok=True)
