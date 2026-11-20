@@ -7,3 +7,4 @@ __pycache__/
 src-tauri/gen/
 src-tauri/resources/engine/*.whl
 src-tauri/resources/bin/uv*
+.pytest_cache/

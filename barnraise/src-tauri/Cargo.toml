@@ -5,6 +5,7 @@ description = "Barnraise: train verifiable specialist models on your own compute
 edition = "2021"
 rust-version = "1.80"
 license = "Apache-2.0"
+default-run = "barnraise"
 
 [lib]
 name = "barnraise_lib"
