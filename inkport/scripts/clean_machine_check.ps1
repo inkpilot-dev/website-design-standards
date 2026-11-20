@@ -21,7 +21,7 @@ $InstallDir = Join-Path $Work "app"
 New-Item -ItemType Directory -Force -Path $Work, (Join-Path $Work "home") | Out-Null
 function Say($m) { Write-Host "==> $m" -ForegroundColor Cyan }
 function Pass($m) { Write-Host "    PASS $m" -ForegroundColor Green }
-function Fail($m) { Write-Host "    FAIL $m" -ForegroundColor Red; Cleanup; exit 1 }
+function Fail($m) { Write-Host "    FAIL $m" -ForegroundColor Red; $log = Join-Path $Work "cli.log"; if (Test-Path $log) { Write-Host "    --- last lines of the Inkport log ---"; Get-Content $log -Tail 40 | ForEach-Object { Write-Host "    $_" } }; Cleanup; exit 1 }
 $fwRules = @()
 function Cleanup { foreach ($r in $script:fwRules) { Remove-NetFirewallRule -Name $r -ErrorAction SilentlyContinue } }
 
@@ -66,7 +66,10 @@ foreach ($tool in @("python", "py", "node", "cargo", "uv", "git", "cl")) {
   if (Get-Command $tool -ErrorAction SilentlyContinue) { Write-Host "    note: $tool is on this machine; Inkport does not use it" }
 }
 
-function Cli { param([Parameter(ValueFromRemainingArguments = $true)] $CliArgs)
+# Plain function (no param block): PowerShell would otherwise try to bind "--full" etc. as its own
+# parameters. Everything after the name is passed verbatim to inkport-cli.exe.
+function Cli {
+  $CliArgs = $args
   $out = & $Cli.FullName @CliArgs 2>> (Join-Path $Work "cli.log")
   $line = $out | Where-Object { $_ -like "RESULT *" } | Select-Object -Last 1
   if (-not $line) { return $null }
