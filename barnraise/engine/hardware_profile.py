@@ -343,7 +343,7 @@ def make_plan(project: dict, report: dict, preset: str = "standard", overrides: 
         "dev_eval_n": 32,
         "seed": 1234,
         "memory_estimate": est,
-        "tier": rec["tier"],
+        "tier": "smoke" if preset == "smoke" else rec["tier"],
     }
     if preset == "smoke":
         plan["lora"].update({"r": 32, "alpha": 64})
