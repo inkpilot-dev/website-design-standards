@@ -75,7 +75,7 @@ if [ "$SKIP_PAYLOAD" = 0 ]; then
     need nvcc "CUDA toolkit on the build machine (users only need the NVIDIA driver)"
     LLAMA_ARGS+=(--cuda)
   fi
-  PY scripts/lib/build_llamacpp.py --platform "$PLATFORM" --out "$PAYLOAD/llama" "${LLAMA_ARGS[@]}"
+  PY scripts/lib/build_llamacpp.py --platform "$PLATFORM" --out "$PAYLOAD/llama" ${LLAMA_ARGS[@]+"${LLAMA_ARGS[@]}"}
 
   step "4/7 Starter model"
   if [ "$SMOKE" = 1 ]; then
@@ -115,14 +115,14 @@ mkdir -p "$OUT"
 # The bundle configs ship the payload; plain `cargo build` / `tauri dev` never copy it.
 if [ "$PLATFORM" = linux-x86_64 ]; then
   # .deb: payload copied verbatim to /usr/lib/Inkport/payload.
-  NO_STRIP=1 pnpm tauri build --config src-tauri/bundle/linux-x86_64.json --target "$TRIPLE" --bundles deb "${DBG[@]}"
+  NO_STRIP=1 pnpm tauri build --config src-tauri/bundle/linux-x86_64.json --target "$TRIPLE" --bundles deb ${DBG[@]+"${DBG[@]}"}
   cp "$BUNDLE_DIR"/deb/*.deb "$OUT/"
   rm -rf "$ROOT/target/$TRIPLE/$PROFILE/payload"   # the resource copy made for the .deb
   # AppImage: linuxdeploy rewrites the RPATH of (and strips) every ELF it finds under usr/lib,
   # which would break the payload checksums and trip over driver-provided CUDA libraries. So the
   # AppImage is built without the payload, then the untouched payload is added and the image is
   # repacked with the same appimage plugin Tauri used.
-  APPIMAGE_EXTRACT_AND_RUN=1 NO_STRIP=1 pnpm tauri build --config src-tauri/bundle/linux-x86_64-appimage.json --target "$TRIPLE" --bundles appimage "${DBG[@]}"
+  APPIMAGE_EXTRACT_AND_RUN=1 NO_STRIP=1 pnpm tauri build --config src-tauri/bundle/linux-x86_64-appimage.json --target "$TRIPLE" --bundles appimage ${DBG[@]+"${DBG[@]}"}
   APPDIR="$BUNDLE_DIR/appimage/Inkport.AppDir"
   rm -f "$BUNDLE_DIR"/appimage/*.AppImage
   mkdir -p "$APPDIR/usr/lib/Inkport"
@@ -151,7 +151,7 @@ LAUNCH
   tar -C "$STAGE" -cf - Inkport | zstd -T0 -10 -q -o "$OUT/Inkport_${VERSION}_linux-x86_64-portable.tar.zst"
   rm -rf "$STAGE"
 else
-  pnpm tauri build --config "src-tauri/bundle/$PLATFORM.json" --target "$TRIPLE" "${DBG[@]}"
+  pnpm tauri build --config "src-tauri/bundle/$PLATFORM.json" --target "$TRIPLE" ${DBG[@]+"${DBG[@]}"}
   cp "$BUNDLE_DIR"/dmg/*.dmg "$OUT/"
   (cd "$BUNDLE_DIR/macos" && ditto -c -k --keepParent Inkport.app "$OUT/Inkport_${VERSION}_macos-aarch64.app.zip")
 fi

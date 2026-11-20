@@ -36,6 +36,10 @@ def cmake_args(plat: str, cuda: bool, vulkan: bool = True) -> list[str]:
         "-DLLAMA_BUILD_SERVER=ON",
         "-DLLAMA_OPENSSL=OFF",  # no HTTPS client inside the server: it can never download anything
         "-DGGML_NATIVE=OFF",
+        # No embedded web UI: Inkport runs llama-server with --no-webui, and the prebuilt-UI
+        # download from a Hugging Face bucket is non-hermetic (it broke CI with partial assets).
+        "-DLLAMA_BUILD_UI=OFF",
+        "-DLLAMA_USE_PREBUILT_UI=OFF",
     ]
     if plat == "macos-aarch64":
         args += [
