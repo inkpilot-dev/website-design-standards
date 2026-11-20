@@ -87,7 +87,7 @@ $model = $models[0].id
 if (-not $model) { Fail "no bundled base model" }
 Pass "bundled starter model: $model"
 $samples = (InkCli samples).samples
-if (-not (Test-Path (Join-Path $samples "expenses.csv"))) { Fail "bundled sample data missing" }
+if (-not $samples -or -not (Test-Path -LiteralPath (Join-Path $samples "expenses.csv"))) { Fail "bundled sample data missing (CLI reported: $samples)" }
 
 $p = InkCli create-project --name "Clean Check" --template business_rules
 if ($p.slug -ne "clean-check") { Fail "create project" }

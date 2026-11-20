@@ -204,7 +204,7 @@ pub fn candidate_dirs(resource_dir: Option<&Path>) -> Vec<PathBuf> {
         c.push(r.join("payload"));
     }
     if let Ok(exe) = std::env::current_exe() {
-        let exe = std::fs::canonicalize(&exe).unwrap_or(exe);
+        let exe = canonical(&exe);
         if let Some(dir) = exe.parent() {
             c.push(dir.join("payload")); // Windows (NSIS/MSI): next to Inkport.exe
             c.push(dir.join("resources").join("payload"));
@@ -220,7 +220,30 @@ pub fn candidate_dirs(resource_dir: Option<&Path>) -> Vec<PathBuf> {
 }
 
 pub fn locate(resource_dir: Option<&Path>) -> Option<PathBuf> {
-    candidate_dirs(resource_dir).into_iter().find(|d| d.join("manifest.json").is_file()).map(|d| std::fs::canonicalize(&d).unwrap_or(d))
+    candidate_dirs(resource_dir).into_iter().find(|d| d.join("manifest.json").is_file()).map(|d| canonical(&d))
+}
+
+/// Canonical path without Windows' `\\?\` verbatim prefix (which PowerShell, Python's subprocess
+/// users and many tools mishandle). The prefix is kept only when the path really needs it (>= 260).
+pub fn canonical(p: &Path) -> PathBuf {
+    let c = std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    strip_verbatim(c)
+}
+
+fn strip_verbatim(c: PathBuf) -> PathBuf {
+    let s = c.to_string_lossy();
+    if let Some(rest) = s.strip_prefix(r"\\?\") {
+        let b = rest.as_bytes();
+        if b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && b[2] == b'\\' && rest.len() < 260 {
+            return PathBuf::from(rest);
+        }
+        if let Some(unc) = rest.strip_prefix(r"UNC\") {
+            if unc.len() < 258 {
+                return PathBuf::from(format!(r"\\{unc}"));
+            }
+        }
+    }
+    c
 }
 
 pub fn load(root: &Path) -> Result<Bundle> {
@@ -445,6 +468,14 @@ pub async fn preflight(bundle: &Bundle, home: &Path, force_full: bool, progress:
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn strips_windows_verbatim_prefix() {
+        use std::path::PathBuf;
+        assert_eq!(super::strip_verbatim(PathBuf::from(r"\\?\C:\Users\a\payload")), PathBuf::from(r"C:\Users\a\payload"));
+        assert_eq!(super::strip_verbatim(PathBuf::from(r"\\?\UNC\srv\share\x")), PathBuf::from(r"\\srv\share\x"));
+        assert_eq!(super::strip_verbatim(PathBuf::from("/opt/inkport/payload")), PathBuf::from("/opt/inkport/payload"));
+    }
+
     use super::*;
 
     fn fake_bundle(dir: &Path) -> Bundle {

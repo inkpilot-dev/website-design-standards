@@ -220,7 +220,7 @@ fn apple_info() -> (bool, Option<String>) {
 
 fn disk_free_gb(path: &Path) -> f64 {
     let disks = sysinfo::Disks::new_with_refreshed_list();
-    let target = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let target = crate::bootstrap::canonical(path);
     disks
         .list()
         .iter()
