@@ -19,7 +19,7 @@ defaults:
 jobs:
   macos:
     name: macOS (Apple Silicon)
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 240
     env:
       APPLE_SIGNING_IDENTITY: "-"   # ad-hoc signature; set a Developer ID secret for notarized builds
@@ -88,7 +88,15 @@ jobs:
       - name: System packages (build machine only)
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf glslc libvulkan-dev zstd file
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf libvulkan-dev zstd file xz-utils
+      - name: Vulkan SDK (glslc + headers, build machine only)
+        working-directory: .
+        run: |
+          curl -fsSL -o vulkan-sdk.tar.xz https://sdk.lunarg.com/sdk/download/latest/linux/vulkan-sdk.tar.xz
+          mkdir -p "$HOME/vulkan" && tar -xf vulkan-sdk.tar.xz -C "$HOME/vulkan" --strip-components=1
+          echo "VULKAN_SDK=$HOME/vulkan/x86_64" >> "$GITHUB_ENV"
+          echo "$HOME/vulkan/x86_64/bin" >> "$GITHUB_PATH"
+          "$HOME/vulkan/x86_64/bin/glslc" --version
       - uses: astral-sh/setup-uv@v6
       - uses: dtolnay/rust-toolchain@stable
       - uses: pnpm/action-setup@v4

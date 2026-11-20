@@ -61,7 +61,7 @@ def prune(py_root: Path, plat: str) -> int:
         if not p.exists() and not p.is_symlink():
             continue
         rel = p.relative_to(py_root).as_posix()
-        if any(fnmatch.fnmatch(rel, pat) for pat in patterns):
+        if any(fnmatch.fnmatchcase(rel, pat) for pat in patterns):  # case-sensitive: Windows must not match Lib/threading.py against lib/thread*
             if p.is_symlink():
                 size = 0
             elif p.is_dir():
