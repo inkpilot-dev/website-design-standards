@@ -1,4 +1,4 @@
-# Clean-machine verification for the Inkport Windows installer.
+# Clean-machine verification for the Inkport Windows installer (NSIS .exe, .msi, or portable .zip).
 #
 # Proves that, using ONLY what is inside the installer, a user can verify the installation, build a
 # practice exam from the bundled samples, train, run the hidden-test gate, and use the local
@@ -33,7 +33,11 @@ if ($Installer -like "*.exe") {
   # Administrative install = unpack without registering anything system-wide.
   $p = Start-Process msiexec.exe -ArgumentList @("/a", "`"$Installer`"", "/qn", "TARGETDIR=`"$InstallDir`"") -Wait -PassThru
   if ($p.ExitCode -ne 0) { Fail "msiexec exited with $($p.ExitCode)" }
-} else { Fail "pass an NSIS .exe or an .msi" }
+} elseif ($Installer -like "*.zip") {
+  New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
+  & "$env:SystemRoot\System32\tar.exe" -x -f $Installer -C $InstallDir
+  if ($LASTEXITCODE -ne 0) { Fail "could not extract the portable zip" }
+} else { Fail "pass an NSIS .exe, an .msi or the portable .zip" }
 $Cli = Get-ChildItem $InstallDir -Recurse -Filter "inkport-cli.exe" | Select-Object -First 1
 $Manifest = Get-ChildItem $InstallDir -Recurse -Filter "manifest.json" | Where-Object { $_.DirectoryName -like "*payload" } | Select-Object -First 1
 if (-not $Cli) { Fail "inkport-cli.exe not found in the installation" }

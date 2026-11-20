@@ -9,7 +9,7 @@ on:
     paths: ["inkport/**", ".github/workflows/inkport-installers.yml"]
 
 concurrency:
-  group: inkport-installers-${{ github.ref }}
+  group: inkport-installers-${{ github.ref }}-${{ github.sha }}
   cancel-in-progress: true
 
 defaults:
@@ -65,13 +65,19 @@ jobs:
       - name: Clean-machine check (offline)
         shell: pwsh
         run: |
-          $exe = Get-ChildItem build/installers/windows-x86_64-cpu/*.exe | Select-Object -First 1
-          ./scripts/clean_machine_check.ps1 -Installer $exe.FullName
+          $files = @(Get-ChildItem build/installers/windows-x86_64-cpu/* -Include *.exe, *.zip)
+          if ($files.Count -eq 0) { throw "no Windows installer was produced" }
+          foreach ($f in $files) {
+            Write-Host "`n### checking $($f.Name)"
+            ./scripts/clean_machine_check.ps1 -Installer $f.FullName
+            if ($LASTEXITCODE -ne 0) { exit 1 }
+          }
       - uses: actions/upload-artifact@v4
         with:
           name: Inkport-Windows-x64
           path: |
             inkport/build/installers/windows-x86_64-cpu/*.exe
+            inkport/build/installers/windows-x86_64-cpu/*.zip
             inkport/build/installers/windows-x86_64-cpu/SHA256SUMS
           compression-level: 0
           retention-days: 30

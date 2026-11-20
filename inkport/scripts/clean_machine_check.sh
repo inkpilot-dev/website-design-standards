@@ -60,7 +60,7 @@ touch "$WORK/.before"
 cat > "$WORK/inner.sh" <<'INNER'
 set -euo pipefail
 pass() { printf '    \033[32mPASS\033[0m %s\n' "$*"; }
-fail() { printf '    \033[31mFAIL\033[0m %s\n' "$*"; exit 1; }
+fail() { printf '    \033[31mFAIL\033[0m %s\n' "$*"; echo "    --- last lines of the Inkport log ---"; tail -40 "$WORK/cli.log" 2>/dev/null | sed 's/^/    /'; exit 1; }
 json() { sed -n 's/^RESULT //p' | tail -1; }
 field() { tr -d '\n' | grep -o "\"$1\":[^,}]*" | head -1 | cut -d: -f2- | tr -d '"'; }
 t0=$(date +%s)
@@ -84,16 +84,16 @@ S=$("$CLI" samples 2>>"$WORK/cli.log" | json | field samples)
 [ -f "$S/expenses.csv" ] || fail "bundled sample data missing"
 
 "$CLI" create-project --name "Clean Check" --template business_rules 2>>"$WORK/cli.log" | json | grep -q '"slug":"clean-check"' || fail "create project"
-I=$("$CLI" ingest --project clean-check --inputs "$S/expenses.csv" "$S/policy.md" --rules '["amount must be positive"]' 2>>"$WORK/cli.log" | json)
+I=$("$CLI" ingest --project clean-check --inputs "$S/expenses.csv" "$S/policy.md" --rules '["amount must be positive"]' 2>>"$WORK/cli.log" | json) || fail "ingest crashed"
 echo "$I" | grep -q '"leakage_free":true' || fail "ingest: $I"
 pass "practice exam built from bundled samples (hidden test locked, zero leakage)"
 
 if [ "$MODEL" = "smoke-tiny" ]; then
-  T=$("$CLI" train --project clean-check --preset smoke 2>>"$WORK/cli.log" | json)
+  T=$("$CLI" train --project clean-check --preset smoke 2>>"$WORK/cli.log" | json) || fail "training crashed"
   echo "$T" | grep -q '"decision":"PROMOTE"' || fail "training/gate did not promote: $T"
 else
   # A short real run on the bundled model: proves training + hidden-test gate complete offline.
-  T=$("$CLI" train --project clean-check --preset fast --overrides '{"sft":{"max_steps":40,"eval_every":20,"checkpoint_every":20},"stage2":{"mode":"none"},"gate":{"general_suite_n":20}}' 2>>"$WORK/cli.log" | json)
+  T=$("$CLI" train --project clean-check --preset fast --overrides '{"sft":{"max_steps":40,"eval_every":20,"checkpoint_every":20},"stage2":{"mode":"none"},"gate":{"general_suite_n":20}}' 2>>"$WORK/cli.log" | json) || fail "training crashed"
   echo "$T" | grep -qE '"decision":"(PROMOTE|REJECT|INSUFFICIENT_DATA)"' || fail "training/gate did not finish: $T"
 fi
 pass "trained + gated on the hidden test: $(echo "$T" | field decision) $(echo "$T" | field version)"
@@ -102,7 +102,7 @@ A=$("$CLI" api-smoke --project clean-check --port "$PORT" 2>>"$WORK/cli.log" | j
 echo "$A" | grep -q '"streaming":true' || fail "local API: $A"
 pass "local API on 127.0.0.1:$PORT: 401 without key, models listed, chat + @base + streaming via $(echo "$A" | field engine)"
 
-R2=$("$CLI" doctor --full 2>>"$WORK/cli.log" | json)
+R2=$("$CLI" doctor --full 2>>"$WORK/cli.log" | json) || fail "re-verification crashed"
 echo "$R2" | grep -q '"ok":true' || fail "installation changed during use: $R2"
 pass "installation unchanged after use (full re-verification)"
 echo "    total: $(( $(date +%s) - t0 ))s"

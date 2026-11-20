@@ -107,14 +107,35 @@ $bundleConfig | ConvertTo-Json -Depth 20 | Set-Content -Encoding UTF8 $merged
 $env:RUSTFLAGS = "-C target-feature=+crt-static"   # the Rust app itself needs no VC++ runtime either
 $tauriArgs = @("tauri", "build", "--config", $merged, "--target", $Triple, "--bundles", $Bundles)
 if ($DebugBuild) { $tauriArgs += "--debug" }
-Run pnpm @tauriArgs
+# NSIS and MSI cannot hold more than 2 GB. If the payload is too large for them, the bundling step
+# fails AFTER the app binaries are built; the portable zip below is then the deliverable.
+& pnpm @tauriArgs
+$bundleOk = ($LASTEXITCODE -eq 0)
+if (-not $bundleOk) { Write-Host "    note: installer bundling failed (payload likely over the 2 GB NSIS/MSI limit); shipping the portable zip" -ForegroundColor Yellow }
 
 $buildProfile = if ($DebugBuild) { "debug" } else { "release" }
-$bundleDir = Join-Path $Root "target\$Triple\$buildProfile\bundle"
+$targetDir = Join-Path $Root "target\$Triple\$buildProfile"
+$bundleDir = Join-Path $targetDir "bundle"
 Remove-Item -Recurse -Force $Out -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $Out | Out-Null
-if ($Bundles -like "*nsis*") { Copy-Item (Join-Path $bundleDir "nsis\*.exe") $Out }
-if ($Bundles -like "*msi*") { Copy-Item (Join-Path $bundleDir "msi\*.msi") $Out }
+if ($bundleOk -and $Bundles -like "*nsis*") { Copy-Item (Join-Path $bundleDir "nsis\*.exe") $Out }
+if ($bundleOk -and $Bundles -like "*msi*") { Copy-Item (Join-Path $bundleDir "msi\*.msi") $Out }
+
+Step "Portable zip (extract anywhere, double-click Inkport.exe; no installer, no size limit)"
+$stage = Join-Path $Root "build\portable-$Platform"
+Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue
+$appDir = Join-Path $stage "Inkport"
+New-Item -ItemType Directory -Force -Path $appDir | Out-Null
+foreach ($exe in @("inkport.exe", "inkport-cli.exe")) {
+  if (-not (Test-Path (Join-Path $targetDir $exe))) { throw "$exe was not built" }
+}
+Copy-Item (Join-Path $targetDir "inkport.exe") (Join-Path $appDir "Inkport.exe")
+Copy-Item (Join-Path $targetDir "inkport-cli.exe") $appDir
+Copy-Item -Recurse $Payload (Join-Path $appDir "payload")
+$zip = Join-Path $Out "Inkport_${Version}_x64-portable.zip"
+Push-Location $stage
+try { Run "$env:SystemRoot\System32\tar.exe" -a -c -f $zip Inkport } finally { Pop-Location }
+Remove-Item -Recurse -Force $stage
 Get-ChildItem $Out -File | ForEach-Object { "{0}  {1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower(), $_.Name } | Set-Content -Encoding ASCII (Join-Path $Out "SHA256SUMS")
 
 Step "Done"

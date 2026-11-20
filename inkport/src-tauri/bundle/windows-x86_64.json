@@ -8,7 +8,7 @@
       "timestampUrl": "http://timestamp.digicert.com",
       "tsp": false,
       "allowDowngrades": false,
-      "webviewInstallMode": { "type": "offlineInstaller", "silent": true },
+      "webviewInstallMode": { "type": "embedBootstrapper", "silent": true },
       "nsis": {
         "installMode": "currentUser",
         "compression": "lzma",
