@@ -59,6 +59,9 @@ def main() -> None:
         "Per-package license files are inside python/**/site-packages/*.dist-info/.\n"
     )
 
+    # Bytecode outside the precompiled runtime is never shipped (e.g. left by a local test run).
+    for cache in [d for d in payload.rglob("__pycache__") if d.is_dir() and not d.relative_to(payload).as_posix().startswith("python/")]:
+        rmtree(cache)
     files = sorted(p for p in payload.rglob("*") if p.is_file() and not p.is_symlink() and p.name != "manifest.json")
     t0 = time.monotonic()
     with ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as pool:
@@ -70,6 +73,15 @@ def main() -> None:
         h = hashlib.sha256("".join(f"{k}\0{v[0]}\0{v[1]}\n" for k, v in sorted(items.items())).encode()).hexdigest()
         components[comp] = {"files": len(items), "bytes": sum(v[0] for v in items.values()), "tree_sha256": h}
     exe = ".exe" if a.platform.startswith("windows") else ""
+    # Point at the real interpreter file, not the python3 -> python3.12 symlink (installers copy
+    # symlinks as plain files, and the manifest only lists regular files).
+    py_rel = "python/python.exe" if exe else (payload / "python" / "bin" / "python3").resolve().relative_to(payload.resolve()).as_posix()
+    if a.platform.startswith("windows"):
+        # NSIS installs per-user to %LOCALAPPDATA%\Programs\Inkport (~45 chars); keep every path
+        # comfortably below the classic 260-character Windows limit.
+        too_long = [k for k in entries if len(k) > 190]
+        if too_long:
+            raise SystemExit(f"{len(too_long)} payload paths are too long for Windows, e.g. {too_long[0]}")
     starter = json.loads((payload / "models" / "starter" / "model.json").read_text())
     manifest = {
         "format": "inkport-payload",
@@ -78,14 +90,14 @@ def main() -> None:
         "platform": a.platform,
         "flavor": a.flavor,
         "created_at": int(time.time()),
-        "python": {"exe": "python/python.exe" if exe else "python/bin/python3", "version": LOCK["python"]["version"]},
+        "python": {"exe": py_rel, "version": LOCK["python"]["version"]},
         "llama_server": f"llama/llama-server{exe}" if (payload / "llama" / f"llama-server{exe}").is_file() else None,
         "llama_convert": "llama/convert" if (payload / "llama" / "convert").is_dir() else None,
         "starter_model": {"dir": "models/starter", **starter},
         "samples": "samples",
         "packs_catalog": "packs/catalog.json",
         "components": components,
-        "critical": [k for k in entries if k.endswith(("python3", "python.exe", "llama-server", "llama-server.exe", "model.json")) or k.startswith("python/") and "/site-packages/engine/" in k and k.endswith(".py")],
+        "critical": [k for k in entries if k == py_rel or k.endswith(("llama-server", "llama-server.exe", "model.json")) or (k.startswith("python/") and "/site-packages/engine/" in k and k.endswith(".py"))],
         "files": entries,
     }
     raw = json.dumps(manifest, separators=(",", ":"), sort_keys=True).encode()

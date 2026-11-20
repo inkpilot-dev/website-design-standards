@@ -91,6 +91,76 @@ export interface ApiInfo {
   model: string;
   base_model: string;
   version: string;
+  engine: string;
+}
+
+export interface VerifyReport {
+  ok: boolean;
+  mode: "full" | "quick";
+  files_checked: number;
+  bytes_checked: number;
+  seconds: number;
+  manifest_pinned: boolean;
+  problems: string[];
+}
+
+export interface PreflightReport {
+  ok: boolean;
+  bundled: boolean;
+  offline_core: boolean;
+  platform: string;
+  flavor: string;
+  app_version: string;
+  engine_version: string | null;
+  python: string | null;
+  training_accelerator: string;
+  inference_devices: string[];
+  starter_model: { id: string; label: string; format: string; license: string; size_mb: number; params_b: number } | null;
+  verify: VerifyReport;
+  seconds: number;
+  problems: string[];
+}
+
+export interface PreflightProgress {
+  type: "preflight";
+  phase: "verify" | "warmup";
+  done: number;
+  total: number;
+  pct: number;
+}
+
+export interface BaseModel {
+  id: string;
+  label?: string;
+  path: string;
+  format?: string;
+  gguf?: string;
+  bundled?: boolean;
+  pack?: string;
+}
+
+export interface PackState {
+  id: string;
+  title: string;
+  description: string;
+  kind: "model" | "dataset" | "verifier";
+  approx_size_mb: number;
+  license: string;
+  installed: boolean;
+  installing: boolean;
+  partial_bytes: number;
+  path: string | null;
+}
+
+export interface PackProgress {
+  type: "pack";
+  pack_id: string;
+  status: "resolving" | "downloading" | "verifying" | "installed" | "failed" | "cancelled";
+  file: string;
+  done: number;
+  total: number;
+  pct: number;
+  message: string;
 }
 
 export interface AppError {
@@ -171,4 +241,4 @@ export type EngineEvent = Base &
     | { type: "done"; ok: boolean; result: Record<string, unknown> }
   );
 
-export type Channel = "training://progress" | "training://log" | "benchmark://result" | "runtime://progress" | "api://status";
+export type Channel = "training://progress" | "training://log" | "benchmark://result" | "runtime://progress" | "api://status" | "packs://progress";

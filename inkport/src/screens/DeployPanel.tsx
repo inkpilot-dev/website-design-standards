@@ -112,7 +112,7 @@ export function DeployPanel({ project }: { project: ProjectInfo }) {
       <Card className="space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2">
-            {info ? <Badge tone="good">● Running · version {info.version}</Badge> : <Badge>Stopped</Badge>}
+            {info ? <Badge tone="good">● Running · version {info.version} · {info.engine}</Badge> : <Badge>Stopped</Badge>}
             <span className="text-sm text-muted">Only apps on this computer can reach it.</span>
           </div>
           {info ? <Button variant="secondary" onClick={stop}>Stop</Button> : <Button onClick={start} busy={busy}>Start local API</Button>}

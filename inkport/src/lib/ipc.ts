@@ -2,7 +2,7 @@
 // listens to Tauri events; in a plain browser (`pnpm dev`) it falls back to a realistic
 // simulation (./mock.ts) so the UI can be developed and reviewed without Python or a GPU.
 
-import type { ApiInfo, AppError, Channel, HardwareReport, IngestSummary, Preview, ProjectInfo, RuleReport, RuntimeStatus, Template } from "./contract";
+import type { ApiInfo, AppError, BaseModel, Channel, HardwareReport, IngestSummary, PackState, PreflightReport, Preview, ProjectInfo, RuleReport, RuntimeStatus, Template } from "./contract";
 
 export const inTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
@@ -38,10 +38,17 @@ export async function on<T>(channel: Channel, cb: (payload: T) => void): Promise
 
 export const api = {
   detectHardware: () => call<HardwareReport>("detect_hardware"),
+  preflight: (forceFull = false) => call<PreflightReport>("preflight", { forceFull }),
+  listModels: () => call<BaseModel[]>("list_models"),
+  listPacks: () => call<PackState[]>("list_packs"),
+  installPack: (packId: string) => call<void>("install_pack", { packId }),
+  cancelPack: (packId: string) => call<boolean>("cancel_pack", { packId }),
+  removePack: (packId: string) => call<void>("remove_pack", { packId }),
+  sampleData: () => call<string | null>("sample_data"),
   runtimeStatus: () => call<RuntimeStatus>("runtime_status"),
   bootstrapRuntime: (downloadModel = true) => call<RuntimeStatus>("bootstrap_runtime", { downloadModel }),
   listTemplates: () => call<Template[]>("list_templates"),
-  createProject: (name: string, template: string) => call<ProjectInfo>("create_project", { request: { name, template } }),
+  createProject: (name: string, template: string, baseModelId?: string) => call<ProjectInfo>("create_project", { request: { name, template, base_model_id: baseModelId ?? null, base_model_path: null, backend: null, quant: null } }),
   listProjects: () => call<ProjectInfo[]>("list_projects"),
   getProject: (projectId: string) => call<ProjectInfo>("get_project", { projectId }),
   ingestDataset: (projectId: string, paths: string[], rules: string[]) => call<IngestSummary>("ingest_dataset", { projectId, paths, rules }),

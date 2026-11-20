@@ -146,6 +146,8 @@ pub struct ApiInfo {
     pub model: String,
     pub base_model: String,
     pub version: String,
+    /// What is answering: "llama.cpp (Vulkan0: …)", "MLX (Apple GPU)" or "PyTorch".
+    pub engine: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

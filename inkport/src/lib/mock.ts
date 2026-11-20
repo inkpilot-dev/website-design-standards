@@ -40,6 +40,7 @@ const templates = [
 ];
 
 let project: Record<string, unknown> | null = null;
+let packInstalled = false;
 let trained = false;
 
 const samples = [
@@ -85,6 +86,38 @@ export async function mockInvoke<T>(cmd: string, args: Record<string, unknown> =
   switch (cmd) {
     case "detect_hardware":
       return hardware as T;
+    case "preflight": {
+      for (let i = 1; i <= 10; i++) {
+        emit("runtime://progress", { type: "preflight", phase: "verify", done: i * 190_000_000, total: 1_900_000_000, pct: i * 10 });
+        await sleep(90);
+      }
+      emit("runtime://progress", { type: "preflight", phase: "warmup", done: 1, total: 1, pct: 100 });
+      return { ok: true, bundled: true, offline_core: true, platform: "macos-aarch64", flavor: "mlx", app_version: "0.1.0", engine_version: "0.1.0", python: "/Applications/Inkport.app/Contents/Resources/payload/python/bin/python3", training_accelerator: "Apple GPU (MLX)", inference_devices: ["MTL0: Apple M3 Pro (27648 MiB, 27647 MiB free)"], starter_model: { id: "qwen3-1.7b", label: "Qwen3 1.7B (included)", format: "mlx", license: "Apache-2.0", size_mb: 968, params_b: 1.7 }, verify: { ok: true, mode: "full", files_checked: 11842, bytes_checked: 1_900_000_000, seconds: 1.4, manifest_pinned: true, problems: [] }, seconds: 2.6, problems: [] } as T;
+    }
+    case "list_models":
+      return [{ id: "qwen3-1.7b", label: "Qwen3 1.7B (included)", path: "", format: "mlx", bundled: true }, ...(packInstalled ? [{ id: "qwen3-8b", label: "Qwen3 8B (add-on)", path: "", format: "mlx", pack: "qwen3-8b-mlx" }] : [])] as T;
+    case "list_packs":
+      return [
+        { id: "qwen3-8b-mlx", title: "Larger brain: Qwen3 8B", description: "Smarter answers and better results on harder tasks. Best on Macs with 24 GB of memory or more.", kind: "model", approx_size_mb: 4620, license: "Apache-2.0", installed: packInstalled, installing: false, partial_bytes: 0, path: null },
+        { id: "qwen3-4b-instruct-mlx", title: "Balanced brain: Qwen3 4B Instruct", description: "A middle ground between the included model and the 8B add-on. Good on Macs with 16 GB of memory.", kind: "model", approx_size_mb: 2260, license: "Apache-2.0", installed: false, installing: false, partial_bytes: 0, path: null },
+      ] as T;
+    case "install_pack": {
+      const id = String(args.packId);
+      void (async () => {
+        for (let i = 1; i <= 20; i++) {
+          await sleep(150);
+          emit("packs://progress", { type: "pack", pack_id: id, status: "downloading", file: "model.safetensors", done: i * 231_000_000, total: 4_620_000_000, pct: i * 5, message: "" });
+        }
+        packInstalled = true;
+        emit("packs://progress", { type: "pack", pack_id: id, status: "installed", file: "", done: 1, total: 1, pct: 100, message: "" });
+      })();
+      return undefined as T;
+    }
+    case "cancel_pack":
+    case "remove_pack":
+      return true as T;
+    case "sample_data":
+      return "/Applications/Inkport.app/Contents/Resources/payload/samples" as T;
     case "runtime_status":
       return { ready: false, backends: {}, home: "~/Library/Application Support/Inkport", message: "Not set up yet" } as T;
     case "bootstrap_runtime": {
@@ -133,7 +166,7 @@ export async function mockInvoke<T>(cmd: string, args: Record<string, unknown> =
       return { cases: 1, wins: { trained: 1, baseline: 0, tie: 0 } } as T;
     }
     case "start_local_api":
-      return { url: "http://127.0.0.1:11435/v1/chat/completions", base_url: "http://127.0.0.1:11435/v1", token: "ik_preview0000000000000000000000000000000000000000000000000000000000", model: "inkport/expense-sorter", base_model: "inkport/expense-sorter@base", version: "v1" } as T;
+      return { url: "http://127.0.0.1:11435/v1/chat/completions", base_url: "http://127.0.0.1:11435/v1", token: "ik_preview0000000000000000000000000000000000000000000000000000000000", model: "inkport/expense-sorter", base_model: "inkport/expense-sorter@base", version: "v1", engine: "MLX (Apple GPU)" } as T;
     case "stop_local_api":
       return undefined as T;
     case "export_adapter":

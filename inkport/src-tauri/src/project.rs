@@ -42,8 +42,8 @@ pub fn project_dir(home: &Path, id_or_slug: &str) -> Result<PathBuf> {
     bail!("project '{id_or_slug}' not found")
 }
 
-#[allow(clippy::too_many_arguments)]
-pub fn create(home: &Path, name: &str, template: &str, base_id: &str, base_path: &Path, chat_kwargs: Value, backend: Option<&str>, quant: Option<&str>) -> Result<ProjectInfo> {
+/// `base_model` is the full project.json entry: {id, path, chat_kwargs, [gguf, format, label, bundled, pack]}.
+pub fn create(home: &Path, name: &str, template: &str, base_model: Value, backend: Option<&str>, quant: Option<&str>) -> Result<ProjectInfo> {
     if !crate::contract::templates().iter().any(|t| t.id == template) {
         bail!("unknown template '{template}'");
     }
@@ -60,7 +60,7 @@ pub fn create(home: &Path, name: &str, template: &str, base_id: &str, base_path:
         "name": name,
         "template": template,
         "created_at": now,
-        "base_model": {"id": base_id, "path": base_path.display().to_string(), "chat_kwargs": chat_kwargs},
+        "base_model": base_model,
         "backend": backend,
         "quant": quant,
         "active_version": null,
@@ -126,10 +126,12 @@ mod tests {
     #[test]
     fn create_and_list() {
         let home = tempfile::tempdir().unwrap();
-        let p = create(home.path(), "My Books", "business_rules", "qwen3-0.6b", Path::new("/models/x"), json!({}), Some("torch"), None).unwrap();
+        let base = json!({"id": "qwen3-1.7b", "path": "/models/x", "gguf": "m.gguf", "chat_kwargs": {}});
+        let p = create(home.path(), "My Books", "business_rules", base.clone(), Some("torch"), None).unwrap();
         assert_eq!(p.slug, "my-books");
-        assert!(create(home.path(), "My Books", "business_rules", "x", Path::new("/m"), json!({}), None, None).is_err());
-        assert!(create(home.path(), "Other", "nope", "x", Path::new("/m"), json!({}), None, None).is_err());
+        assert_eq!(p.base_model["gguf"], "m.gguf");
+        assert!(create(home.path(), "My Books", "business_rules", base.clone(), None, None).is_err());
+        assert!(create(home.path(), "Other", "nope", base, None, None).is_err());
         assert_eq!(list(home.path()).unwrap().len(), 1);
         assert_eq!(project_dir(home.path(), &p.id).unwrap(), PathBuf::from(&p.dir));
     }

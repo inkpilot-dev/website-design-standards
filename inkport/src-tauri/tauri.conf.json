@@ -1,12 +1,13 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Inkport",
+  "mainBinaryName": "inkport",
   "version": "0.1.0",
   "identifier": "dev.inkport.desktop",
   "build": {
     "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "pnpm build && bash scripts/prepare_bundle.sh",
+    "beforeBuildCommand": "pnpm build",
     "frontendDist": "../dist"
   },
   "app": {
@@ -18,7 +19,8 @@
         "height": 860,
         "minWidth": 900,
         "minHeight": 640,
-        "dragDropEnabled": true
+        "dragDropEnabled": true,
+        "center": true
       }
     ],
     "security": {
@@ -28,32 +30,14 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "publisher": "Inkport",
+    "copyright": "Copyright © 2026 Inkport",
     "category": "Productivity",
     "shortDescription": "Train your own private AI and prove it got better",
-    "icon": [
-      "icons/32x32.png",
-      "icons/128x128.png",
-      "icons/128x128@2x.png",
-      "icons/icon.icns",
-      "icons/icon.ico"
-    ],
-    "resources": [
-      "resources/engine/*",
-      "resources/bin/*"
-    ],
-    "linux": {
-      "deb": {
-        "depends": []
-      }
-    },
-    "macOS": {
-      "minimumSystemVersion": "13.5"
-    },
-    "windows": {
-      "webviewInstallMode": {
-        "type": "embedBootstrapper"
-      }
-    }
-  },
-  "mainBinaryName": "inkport"
+    "longDescription": "Inkport trains small, private AI models on your own computer, checks them against a hidden exam before they are used, and serves them to your apps through a local OpenAI-compatible API. Everything needed is included in the installer and works offline.",
+    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"],
+    "resources": {},
+    "externalBin": [],
+    "createUpdaterArtifacts": false
+  }
 }

@@ -18,6 +18,11 @@ export function DataRulesStudio({ project, template, onBuilt }: { project: Proje
   const [advanced, setAdvanced] = useState(false);
 
   const addFiles = (paths: string[]) => setFiles((prev) => Array.from(new Set([...prev, ...paths])));
+  const [samples, setSamples] = useState<string | null>(null);
+  const SAMPLE_FILES: Record<Template["id"], string[]> = { business_rules: ["expenses.csv", "policy.md"], code_sql: ["orders.csv", "customers.csv", "helpers.py"], docs_legal: ["lease.md"], custom: [] };
+  useEffect(() => {
+    api.sampleData().then(setSamples).catch(() => setSamples(null));
+  }, []);
 
   useEffect(() => {
     let un: (() => void) | undefined;
@@ -81,9 +86,16 @@ export function DataRulesStudio({ project, template, onBuilt }: { project: Proje
             <div className="text-3xl" aria-hidden>📥</div>
             <div className="mt-2 font-medium">Drop files or folders here</div>
             <div className="text-xs text-muted">{template.accepts.join("  ")}</div>
-            <Button variant="secondary" className="mt-3" onClick={async () => addFiles(await pickFiles(template.accepts))}>
-              Choose files…
-            </Button>
+            <div className="mt-3 flex flex-wrap justify-center gap-2">
+              <Button variant="secondary" onClick={async () => addFiles(await pickFiles(template.accepts))}>
+                Choose files…
+              </Button>
+              {samples && SAMPLE_FILES[template.id].length > 0 && (
+                <Button variant="ghost" onClick={() => addFiles(SAMPLE_FILES[template.id].map((f) => `${samples}/${f}`))}>
+                  Try the sample data
+                </Button>
+              )}
+            </div>
           </div>
           {files.length > 0 && (
             <ul className="space-y-1 text-sm">

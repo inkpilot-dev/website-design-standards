@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Hardened-runtime exceptions needed by the embedded CPython + MLX runtime in Contents/Resources/payload.
+     allow-unsigned-executable-memory: libffi closures used by ctypes/cffi (cryptography, MLX bindings).
+     disable-library-validation: lets the bundled interpreter load the extension modules we re-sign at build time.
+     No network, camera or file-system entitlements are requested; the app is not sandboxed. -->
+<plist version="1.0">
+<dict>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+</dict>
+</plist>

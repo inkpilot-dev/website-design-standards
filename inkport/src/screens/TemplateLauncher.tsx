@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { AppError, ProjectInfo, Template } from "../lib/contract";
+import type { AppError, BaseModel, ProjectInfo, Template } from "../lib/contract";
 import { api, toAppError } from "../lib/ipc";
 import { Badge, Button, Card, ErrorNote } from "../components/ui";
 
@@ -11,12 +11,18 @@ export function TemplateLauncher({ onCreated }: { onCreated: (p: ProjectInfo, t:
   const [projects, setProjects] = useState<ProjectInfo[]>([]);
   const [chosen, setChosen] = useState<Template | null>(null);
   const [name, setName] = useState("");
+  const [models, setModels] = useState<BaseModel[]>([]);
+  const [modelId, setModelId] = useState<string>("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<AppError | null>(null);
 
   useEffect(() => {
     api.listTemplates().then(setTemplates).catch((e) => setError(toAppError(e)));
     api.listProjects().then(setProjects).catch(() => {});
+    api.listModels().then((m) => {
+      setModels(m);
+      if (m[0]) setModelId(m[0].id);
+    }).catch(() => {});
   }, []);
 
   const create = async () => {
@@ -24,7 +30,7 @@ export function TemplateLauncher({ onCreated }: { onCreated: (p: ProjectInfo, t:
     setBusy(true);
     setError(null);
     try {
-      onCreated(await api.createProject(name.trim(), chosen.id), chosen);
+      onCreated(await api.createProject(name.trim(), chosen.id, modelId || undefined), chosen);
     } catch (e) {
       setError(toAppError(e));
     } finally {
@@ -65,6 +71,16 @@ export function TemplateLauncher({ onCreated }: { onCreated: (p: ProjectInfo, t:
             <span className="text-sm font-semibold">Give it a name</span>
             <input value={name} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && create()} className="mt-1 w-full rounded-xl border border-line bg-canvas px-3 py-2.5 outline-none focus:border-accent" />
           </label>
+          {models.length > 1 && (
+            <label>
+              <span className="text-sm font-semibold">AI brain</span>
+              <select value={modelId} onChange={(e) => setModelId(e.target.value)} className="mt-1 block rounded-xl border border-line bg-canvas px-3 py-2.5 outline-none focus:border-accent">
+                {models.map((m) => (
+                  <option key={m.id} value={m.id}>{m.label ?? m.id}</option>
+                ))}
+              </select>
+            </label>
+          )}
           <Button onClick={create} busy={busy} disabled={!name.trim()}>
             Create
           </Button>

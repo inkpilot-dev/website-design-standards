@@ -15,7 +15,7 @@ use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha1::Sha1;
-use sha2::{Digest, Sha256};
+use sha2::Digest;
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -140,7 +140,8 @@ impl Packs {
     pub fn catalog(&self) -> Vec<Pack> {
         let Some(p) = &self.catalog_path else { return vec![] };
         let Ok(raw) = std::fs::read(p) else { return vec![] };
-        serde_json::from_slice::<Value>(&raw).ok().and_then(|v| serde_json::from_value(v["packs"].clone()).ok()).unwrap_or_default()
+        let all: Vec<Pack> = serde_json::from_slice::<Value>(&raw).ok().and_then(|v| serde_json::from_value(v["packs"].clone()).ok()).unwrap_or_default();
+        all.into_iter().filter(|p| p.platforms.iter().any(|x| x == crate::bootstrap::current_platform())).collect()
     }
 
     pub fn list(&self) -> Vec<PackState> {

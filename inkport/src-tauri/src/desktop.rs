@@ -1,7 +1,9 @@
 //! Tauri v2 shell: typed commands + event streaming to the WebView.
 
 use crate::app::{App, AppError, AppResult, CreateProjectRequest, TrainRequest};
+use crate::bootstrap::PreflightReport;
 use crate::contract::{ApiInfo, HardwareReport, ProjectInfo, RuntimeStatus, Template};
+use crate::packs::PackState;
 use crate::events::EventSink;
 use serde_json::Value;
 use std::sync::Arc;
@@ -20,6 +22,43 @@ pub struct AppState(pub Arc<App>);
 #[tauri::command]
 async fn detect_hardware(s: State<'_, AppState>) -> AppResult<HardwareReport> {
     s.0.detect_hardware().await
+}
+
+/// Launch-time readiness (integrity + warm-up + accelerators). Never downloads.
+#[tauri::command]
+async fn preflight(s: State<'_, AppState>, force_full: Option<bool>) -> AppResult<PreflightReport> {
+    Ok(s.0.preflight(force_full.unwrap_or(false)).await)
+}
+
+#[tauri::command]
+fn list_models(s: State<'_, AppState>) -> Vec<Value> {
+    s.0.list_models()
+}
+
+#[tauri::command]
+fn list_packs(s: State<'_, AppState>) -> Vec<PackState> {
+    s.0.list_packs()
+}
+
+/// Optional, user-initiated download of an add-on pack; progress on `packs://progress`.
+#[tauri::command]
+fn install_pack(s: State<'_, AppState>, pack_id: String) -> AppResult<()> {
+    s.0.install_pack(&pack_id)
+}
+
+#[tauri::command]
+fn cancel_pack(s: State<'_, AppState>, pack_id: String) -> bool {
+    s.0.cancel_pack(&pack_id)
+}
+
+#[tauri::command]
+fn remove_pack(s: State<'_, AppState>, pack_id: String) -> AppResult<()> {
+    s.0.remove_pack(&pack_id)
+}
+
+#[tauri::command]
+fn sample_data(s: State<'_, AppState>) -> Option<String> {
+    s.0.sample_data()
 }
 
 #[tauri::command]
@@ -122,6 +161,13 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             detect_hardware,
+            preflight,
+            list_models,
+            list_packs,
+            install_pack,
+            cancel_pack,
+            remove_pack,
+            sample_data,
             runtime_status,
             bootstrap_runtime,
             list_templates,
