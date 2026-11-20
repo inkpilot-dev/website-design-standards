@@ -1,0 +1,111 @@
+# Builds the Inkport one-and-done installers (real Qwen3 1.7B starter included), proves each one
+# works offline with scripts/clean_machine_check.*, and uploads them as downloadable artifacts.
+name: Inkport installers
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [claude/busy-goodall-wyjcg6]
+    paths: ["inkport/**", ".github/workflows/inkport-installers.yml"]
+
+concurrency:
+  group: inkport-installers-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: inkport
+
+jobs:
+  macos:
+    name: macOS (Apple Silicon)
+    runs-on: macos-14
+    timeout-minutes: 240
+    env:
+      APPLE_SIGNING_IDENTITY: "-"   # ad-hoc signature; set a Developer ID secret for notarized builds
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: pnpm/action-setup@v4
+        with: { version: 10 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm, cache-dependency-path: inkport/pnpm-lock.yaml }
+      - name: Build installer
+        run: scripts/build_all_in_one.sh
+      - name: Clean-machine check (offline)
+        run: scripts/clean_machine_check.sh build/installers/macos-aarch64-mlx/*.dmg
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Inkport-macOS-AppleSilicon
+          path: |
+            inkport/build/installers/macos-aarch64-mlx/*.dmg
+            inkport/build/installers/macos-aarch64-mlx/SHA256SUMS
+          compression-level: 0
+          retention-days: 30
+
+  windows:
+    name: Windows (x64)
+    runs-on: windows-2022
+    timeout-minutes: 300
+    steps:
+      - name: Allow long paths
+        run: git config --system core.longpaths true
+        working-directory: .
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: pnpm/action-setup@v4
+        with: { version: 10 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm, cache-dependency-path: inkport/pnpm-lock.yaml }
+      - name: Build installer
+        shell: pwsh
+        run: ./scripts/build_all_in_one.ps1 -NoVulkan -Bundles nsis
+      - name: Clean-machine check (offline)
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem build/installers/windows-x86_64-cpu/*.exe | Select-Object -First 1
+          ./scripts/clean_machine_check.ps1 -Installer $exe.FullName
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Inkport-Windows-x64
+          path: |
+            inkport/build/installers/windows-x86_64-cpu/*.exe
+            inkport/build/installers/windows-x86_64-cpu/SHA256SUMS
+          compression-level: 0
+          retention-days: 30
+
+  linux:
+    name: Linux (x64)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 240
+    steps:
+      - name: Free disk space
+        working-directory: .
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL && df -h /
+      - uses: actions/checkout@v4
+      - name: System packages (build machine only)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf glslc libvulkan-dev zstd file
+      - uses: astral-sh/setup-uv@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: pnpm/action-setup@v4
+        with: { version: 10 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm, cache-dependency-path: inkport/pnpm-lock.yaml }
+      - name: Build installers
+        run: scripts/build_all_in_one.sh
+      - name: Clean-machine check (offline)
+        run: scripts/clean_machine_check.sh build/installers/linux-x86_64-cpu/*.AppImage
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Inkport-Linux-x64
+          path: |
+            inkport/build/installers/linux-x86_64-cpu/*.AppImage
+            inkport/build/installers/linux-x86_64-cpu/*.tar.zst
+            inkport/build/installers/linux-x86_64-cpu/*.deb
+            inkport/build/installers/linux-x86_64-cpu/SHA256SUMS
+          compression-level: 0
+          retention-days: 30

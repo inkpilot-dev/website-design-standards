@@ -26,7 +26,7 @@ from common import CACHE, ROOT, host_platform, llama_source, log, rmtree, run
 SHARED_SUFFIXES = (".so", ".dylib", ".dll")
 
 
-def cmake_args(plat: str, cuda: bool) -> list[str]:
+def cmake_args(plat: str, cuda: bool, vulkan: bool = True) -> list[str]:
     args = [
         "-DCMAKE_BUILD_TYPE=Release",
         "-DBUILD_SHARED_LIBS=ON",
@@ -50,7 +50,7 @@ def cmake_args(plat: str, cuda: bool) -> list[str]:
             "-DCMAKE_MACOSX_RPATH=ON",
         ]
     else:
-        args += ["-DGGML_BACKEND_DL=ON", "-DGGML_CPU_ALL_VARIANTS=ON", "-DGGML_VULKAN=ON"]
+        args += ["-DGGML_BACKEND_DL=ON", "-DGGML_CPU_ALL_VARIANTS=ON", f"-DGGML_VULKAN={'ON' if vulkan else 'OFF'}"]
         if cuda:
             args += ["-DGGML_CUDA=ON", "-DCMAKE_CUDA_ARCHITECTURES=75-virtual;80-virtual;86-real;89-real;90-virtual"]
         if plat == "linux-x86_64":
@@ -89,6 +89,7 @@ def main() -> None:
     ap.add_argument("--out", required=True, help="payload/llama directory")
     ap.add_argument("--tools-out", default=str(ROOT / "build" / "tools"))
     ap.add_argument("--cuda", action="store_true", help="also build the CUDA backend (needs the CUDA toolkit on the build machine)")
+    ap.add_argument("--no-vulkan", action="store_true", help="skip the Vulkan backend (CPU-only inference on Windows/Linux)")
     ap.add_argument("--jobs", default=str(os.cpu_count() or 4))
     a = ap.parse_args()
     if a.platform != host_platform():
@@ -96,7 +97,7 @@ def main() -> None:
 
     src = llama_source()
     build = CACHE / f"llama-build-{a.platform}{'-cuda' if a.cuda else ''}"
-    run(["cmake", "-S", src, "-B", build, *cmake_args(a.platform, a.cuda)])
+    run(["cmake", "-S", src, "-B", build, *cmake_args(a.platform, a.cuda, not a.no_vulkan)])
     run(["cmake", "--build", build, "--config", "Release", "-j", a.jobs, "--target", "llama-server", "llama-quantize"])
     # Single-config generators put everything in bin/; MSVC puts it in bin/Release/.
     bindir = build / "bin" / "Release" if (build / "bin" / "Release").is_dir() else build / "bin"

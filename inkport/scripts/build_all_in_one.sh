@@ -91,7 +91,11 @@ if [ "$PLATFORM" = macos-aarch64 ] && [ -n "${APPLE_SIGNING_IDENTITY:-}" ]; then
   # their own Developer ID signatures for notarization.
   while IFS= read -r -d '' f; do
     if file -b "$f" | grep -q "Mach-O"; then
-      codesign --force --timestamp --options runtime --entitlements src-tauri/entitlements.plist --sign "$APPLE_SIGNING_IDENTITY" "$f"
+      if [ "$APPLE_SIGNING_IDENTITY" = "-" ]; then
+        codesign --force --sign - "$f"   # ad-hoc (unsigned test builds): Apple Silicon requires a signature
+      else
+        codesign --force --timestamp --options runtime --entitlements src-tauri/entitlements.plist --sign "$APPLE_SIGNING_IDENTITY" "$f"
+      fi
     fi
   done < <(find "$PAYLOAD" -type f \( -perm -u+x -o -name "*.so" -o -name "*.dylib" \) -print0)
 else

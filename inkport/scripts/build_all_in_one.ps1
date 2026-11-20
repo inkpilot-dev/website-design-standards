@@ -18,7 +18,9 @@ param(
   [ValidateSet("cpu", "cuda")][string]$Flavor = "cpu",
   [switch]$SmokeModel,
   [switch]$DebugBuild,
-  [switch]$SkipPayload
+  [switch]$SkipPayload,
+  [switch]$NoVulkan,                       # CPU-only llama.cpp (when the Vulkan SDK is not installed)
+  [string]$Bundles = "nsis,msi"
 )
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
@@ -40,7 +42,7 @@ Need uv "https://docs.astral.sh/uv/"
 Need cargo "https://rustup.rs"
 Need pnpm "npm install -g pnpm"
 Need cmake "https://cmake.org"
-if (-not $env:VULKAN_SDK) { throw "Install the Vulkan SDK (https://vulkan.lunarg.com) so llama.cpp can be built with GPU support for every vendor." }
+if (-not $NoVulkan -and -not $env:VULKAN_SDK) { throw "Install the Vulkan SDK (https://vulkan.lunarg.com) so llama.cpp can be built with GPU support for every vendor, or pass -NoVulkan." }
 
 # Enter the Visual Studio developer environment (cl.exe, VCToolsRedistDir) if not already in it.
 if (-not $env:VCToolsRedistDir) {
@@ -63,6 +65,7 @@ if (-not $SkipPayload) {
 
   Step "3/7 llama.cpp for $Platform"
   $llamaArgs = @("--platform", $Platform, "--out", (Join-Path $Payload "llama"))
+  if ($NoVulkan) { $llamaArgs += "--no-vulkan" }
   if ($Flavor -eq "cuda") { Need nvcc "CUDA toolkit (build machine only; users need just the NVIDIA driver)"; $llamaArgs += "--cuda" }
   Py scripts/lib/build_llamacpp.py @llamaArgs
 
@@ -102,16 +105,16 @@ if ($signConfig.Count -gt 0) { $bundleConfig.bundle.windows | Add-Member -NotePr
 $merged = Join-Path $Root "build\tauri.$Platform.build.json"
 $bundleConfig | ConvertTo-Json -Depth 20 | Set-Content -Encoding UTF8 $merged
 $env:RUSTFLAGS = "-C target-feature=+crt-static"   # the Rust app itself needs no VC++ runtime either
-$tauriArgs = @("tauri", "build", "--config", $merged, "--target", $Triple)
+$tauriArgs = @("tauri", "build", "--config", $merged, "--target", $Triple, "--bundles", $Bundles)
 if ($DebugBuild) { $tauriArgs += "--debug" }
 Run pnpm @tauriArgs
 
-$profile = if ($DebugBuild) { "debug" } else { "release" }
-$bundleDir = Join-Path $Root "target\$Triple\$profile\bundle"
+$buildProfile = if ($DebugBuild) { "debug" } else { "release" }
+$bundleDir = Join-Path $Root "target\$Triple\$buildProfile\bundle"
 Remove-Item -Recurse -Force $Out -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $Out | Out-Null
-Copy-Item (Join-Path $bundleDir "nsis\*.exe") $Out
-Copy-Item (Join-Path $bundleDir "msi\*.msi") $Out
+if ($Bundles -like "*nsis*") { Copy-Item (Join-Path $bundleDir "nsis\*.exe") $Out }
+if ($Bundles -like "*msi*") { Copy-Item (Join-Path $bundleDir "msi\*.msi") $Out }
 Get-ChildItem $Out -File | ForEach-Object { "{0}  {1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower(), $_.Name } | Set-Content -Encoding ASCII (Join-Path $Out "SHA256SUMS")
 
 Step "Done"
