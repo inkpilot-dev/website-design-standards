@@ -2,7 +2,7 @@
 //!
 //! Security model (localhost is not a trust boundary on its own):
 //! * binds 127.0.0.1 only;
-//! * `Authorization: Bearer <token>` required on /v1/* (token file in the Barnraise home dir,
+//! * `Authorization: Bearer <token>` required on /v1/* (token file in the Inkport home dir,
 //!   created with 0600 permissions on Unix);
 //! * Host header must be 127.0.0.1/localhost/[::1] (blocks DNS-rebinding attacks);
 //! * browser Origins are rejected unless allow-listed (the desktop app, browser extensions);
@@ -63,7 +63,7 @@ pub fn load_or_create_token(home: &Path) -> std::io::Result<String> {
         }
     }
     std::fs::create_dir_all(home)?;
-    let token = format!("br_{}{}", uuid::Uuid::new_v4().simple(), uuid::Uuid::new_v4().simple());
+    let token = format!("ik_{}{}", uuid::Uuid::new_v4().simple(), uuid::Uuid::new_v4().simple());
     std::fs::write(&path, &token)?;
     #[cfg(unix)]
     {
@@ -165,7 +165,7 @@ fn check_auth(h: &HeaderMap, s: &Shared) -> Result<(), Response> {
     if constant_time_eq(got.as_bytes(), s.token.as_bytes()) {
         Ok(())
     } else {
-        Err(err(StatusCode::UNAUTHORIZED, "invalid_api_key", "Missing or wrong API key. Copy it from the Barnraise app."))
+        Err(err(StatusCode::UNAUTHORIZED, "invalid_api_key", "Missing or wrong API key. Copy it from the Inkport app."))
     }
 }
 
@@ -212,7 +212,7 @@ async fn models(State(s): State<Shared>, h: HeaderMap) -> Response {
     }
     let up = s.state.read().await.upstream.clone();
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-    let data: Vec<Value> = up.map(|u| u.models).unwrap_or_default().into_iter().map(|id| json!({"id": id, "object": "model", "created": now, "owned_by": "barnraise"})).collect();
+    let data: Vec<Value> = up.map(|u| u.models).unwrap_or_default().into_iter().map(|id| json!({"id": id, "object": "model", "created": now, "owned_by": "inkport"})).collect();
     with_cors(Json(json!({"object": "list", "data": data})).into_response(), origin)
 }
 
@@ -232,7 +232,7 @@ async fn chat(State(s): State<Shared>, req: Request) -> Response {
         return with_cors(r, origin);
     }
     let Some(up) = s.state.read().await.upstream.clone() else {
-        return with_cors(err(StatusCode::SERVICE_UNAVAILABLE, "model_not_loaded", "No model is running. Press 'Start local API' in Barnraise."), origin);
+        return with_cors(err(StatusCode::SERVICE_UNAVAILABLE, "model_not_loaded", "No model is running. Press 'Start local API' in Inkport."), origin);
     };
     let bytes = match axum::body::to_bytes(body, MAX_BODY).await {
         Ok(b) => b,
@@ -244,7 +244,7 @@ async fn chat(State(s): State<Shared>, req: Request) -> Response {
     };
     // Map friendly aliases onto the served model ids.
     let requested = payload.get("model").and_then(Value::as_str).unwrap_or("").to_string();
-    let model = if requested.is_empty() || requested == "barnraise" || requested == "default" { up.models[0].clone() } else { requested };
+    let model = if requested.is_empty() || requested == "inkport" || requested == "default" { up.models[0].clone() } else { requested };
     if !up.models.contains(&model) {
         return with_cors(err(StatusCode::NOT_FOUND, "model_not_found", &format!("Unknown model '{model}'. Available: {}", up.models.join(", "))), origin);
     }
@@ -252,7 +252,7 @@ async fn chat(State(s): State<Shared>, req: Request) -> Response {
     let resp = s
         .client
         .post(format!("{}/v1/chat/completions", up.base_url))
-        .header("X-Barnraise-Worker-Token", &up.worker_token)
+        .header("X-Inkport-Worker-Token", &up.worker_token)
         .json(&payload)
         .send()
         .await;
@@ -273,7 +273,7 @@ async fn chat(State(s): State<Shared>, req: Request) -> Response {
 }
 
 async fn not_found() -> Response {
-    err(StatusCode::NOT_FOUND, "not_found", "Barnraise serves /v1/models and /v1/chat/completions")
+    err(StatusCode::NOT_FOUND, "not_found", "Inkport serves /v1/models and /v1/chat/completions")
 }
 
 #[cfg(test)]
@@ -282,7 +282,7 @@ mod tests {
 
     async fn fake_worker() -> String {
         async fn chat(h: HeaderMap, Json(body): Json<Value>) -> Response {
-            if h.get("X-Barnraise-Worker-Token").and_then(|v| v.to_str().ok()) != Some("wt") {
+            if h.get("X-Inkport-Worker-Token").and_then(|v| v.to_str().ok()) != Some("wt") {
                 return StatusCode::UNAUTHORIZED.into_response();
             }
             if body["stream"].as_bool() == Some(true) {
@@ -307,22 +307,22 @@ mod tests {
         // No model yet -> 503 (after auth).
         let r = c.post(format!("{base}/v1/chat/completions")).header("Authorization", tok).json(&json!({"messages":[]})).send().await.unwrap();
         assert_eq!(r.status(), 503);
-        gw.set_upstream(Some(Upstream { base_url: fake_worker().await, worker_token: "wt".into(), models: vec!["barnraise/x".into(), "barnraise/x@base".into()], project_id: "p".into(), version: "v1".into() })).await;
+        gw.set_upstream(Some(Upstream { base_url: fake_worker().await, worker_token: "wt".into(), models: vec!["inkport/x".into(), "inkport/x@base".into()], project_id: "p".into(), version: "v1".into() })).await;
         assert_eq!(c.get(format!("{base}/v1/models")).send().await.unwrap().status(), 401);
         assert_eq!(c.get(format!("{base}/v1/models")).header("Authorization", "Bearer nope").send().await.unwrap().status(), 401);
         let r = c.get(format!("{base}/v1/models")).header("Authorization", tok).send().await.unwrap();
         assert_eq!(r.status(), 200);
-        assert_eq!(r.json::<Value>().await.unwrap()["data"][0]["id"], "barnraise/x");
+        assert_eq!(r.json::<Value>().await.unwrap()["data"][0]["id"], "inkport/x");
         // DNS rebinding and hostile web origins are refused.
         assert_eq!(c.get(format!("{base}/v1/models")).header("Authorization", tok).header("Host", "evil.example").send().await.unwrap().status(), 403);
         assert_eq!(c.get(format!("{base}/v1/models")).header("Authorization", tok).header("Origin", "https://evil.example").send().await.unwrap().status(), 403);
         let r = c.get(format!("{base}/v1/models")).header("Authorization", tok).header("Origin", "chrome-extension://abc").send().await.unwrap();
         assert_eq!(r.headers()["access-control-allow-origin"], "chrome-extension://abc");
         // Proxy (plain + streaming) and unknown-model handling.
-        let r: Value = c.post(format!("{base}/v1/chat/completions")).header("Authorization", tok).json(&json!({"model":"barnraise","messages":[{"role":"user","content":"ping"}]})).send().await.unwrap().json().await.unwrap();
+        let r: Value = c.post(format!("{base}/v1/chat/completions")).header("Authorization", tok).json(&json!({"model":"inkport","messages":[{"role":"user","content":"ping"}]})).send().await.unwrap().json().await.unwrap();
         assert_eq!(r["choices"][0]["message"]["content"], "pong");
-        assert_eq!(r["model"], "barnraise/x");
-        let r = c.post(format!("{base}/v1/chat/completions")).header("Authorization", tok).json(&json!({"model":"barnraise/x","stream":true,"messages":[]})).send().await.unwrap();
+        assert_eq!(r["model"], "inkport/x");
+        let r = c.post(format!("{base}/v1/chat/completions")).header("Authorization", tok).json(&json!({"model":"inkport/x","stream":true,"messages":[]})).send().await.unwrap();
         assert!(r.headers()["content-type"].to_str().unwrap().starts_with("text/event-stream"));
         assert!(r.text().await.unwrap().contains("[DONE]"));
         assert_eq!(c.post(format!("{base}/v1/chat/completions")).header("Authorization", tok).json(&json!({"model":"gpt-4","messages":[]})).send().await.unwrap().status(), 404);

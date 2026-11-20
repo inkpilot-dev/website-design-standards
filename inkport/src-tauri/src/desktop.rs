@@ -140,7 +140,7 @@ pub fn run() {
             import_adapter
         ])
         .run(tauri::generate_context!())
-        .expect("error while running Barnraise");
+        .expect("error while running Inkport");
 }
 
 #[allow(dead_code)]

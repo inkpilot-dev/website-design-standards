@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    barnraise_lib::desktop::run();
+    inkport_lib::desktop::run();
 }

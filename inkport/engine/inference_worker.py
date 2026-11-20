@@ -1,7 +1,7 @@
 """Local inference worker: serves a project's active version over an OpenAI-style HTTP API.
 
 Bound to 127.0.0.1 on an ephemeral port and protected by a shared secret
-(X-Barnraise-Worker-Token). It is never exposed directly: the Rust gateway on
+(X-Inkport-Worker-Token). It is never exposed directly: the Rust gateway on
 127.0.0.1:11435 adds user authentication, Host/Origin checks and stable model names, then
 proxies here (streaming included). Emits {"type":"ready","port":N} once the model is loaded.
 """
@@ -36,7 +36,7 @@ def serving_plan(root: Path, version: Optional[str] = None) -> tuple[dict, Optio
     quant = project.get("quant")
     if version:
         adapter = paths.versions / version / "adapter"
-        meta_p = adapter / "barnraise_adapter.json"
+        meta_p = adapter / "inkport_adapter.json"
         if meta_p.is_file():
             meta = json.loads(meta_p.read_text())
             backend = "torch" if meta.get("backend") in ("torch", "unsloth") else meta.get("backend", backend)
@@ -72,7 +72,7 @@ class Worker:
 
     @property
     def model_ids(self) -> list[str]:
-        return [f"barnraise/{self.slug}", f"barnraise/{self.slug}@base"]
+        return [f"inkport/{self.slug}", f"inkport/{self.slug}@base"]
 
     def load(self, version: Optional[str]) -> None:
         plan, adapter, ver = serving_plan(self.root, version)
@@ -96,7 +96,7 @@ class Worker:
             if role not in ("system", "user", "assistant") or not isinstance(content, str):
                 raise ValueError("each message needs role system|user|assistant and text content")
             clean.append({"role": role, "content": content})
-        if self.system and not any(m["role"] == "system" for m in clean) and not body.get("barnraise_raw"):
+        if self.system and not any(m["role"] == "system" for m in clean) and not body.get("inkport_raw"):
             clean.insert(0, {"role": "system", "content": self.system})
         model = str(body.get("model") or self.model_ids[0])
         use_adapter = not model.endswith("@base")
@@ -116,7 +116,7 @@ class Worker:
 def make_handler(worker: Worker, token: str) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
-        server_version = "barnraise-worker/0.1"
+        server_version = "inkport-worker/0.1"
 
         def log_message(self, fmt: str, *args: Any) -> None:  # route access logs to stderr only
             pass
@@ -130,7 +130,7 @@ def make_handler(worker: Worker, token: str) -> type[BaseHTTPRequestHandler]:
             self.wfile.write(data)
 
         def _authorized(self) -> bool:
-            got = self.headers.get("X-Barnraise-Worker-Token", "")
+            got = self.headers.get("X-Inkport-Worker-Token", "")
             if not token or not hmac.compare_digest(got, token):
                 self._json(401, {"error": {"message": "unauthorized", "type": "auth_error"}})
                 return False
@@ -143,7 +143,7 @@ def make_handler(worker: Worker, token: str) -> type[BaseHTTPRequestHandler]:
                 return None
             if self.path == "/v1/models":
                 now = int(time.time())
-                return self._json(200, {"object": "list", "data": [{"id": m, "object": "model", "created": now, "owned_by": "barnraise"} for m in worker.model_ids]})
+                return self._json(200, {"object": "list", "data": [{"id": m, "object": "model", "created": now, "owned_by": "inkport"} for m in worker.model_ids]})
             return self._json(404, {"error": {"message": "not found"}})
 
         def do_POST(self) -> None:  # noqa: N802
@@ -210,7 +210,7 @@ def make_handler(worker: Worker, token: str) -> type[BaseHTTPRequestHandler]:
                     "model": model,
                     "choices": [{"index": 0, "message": {"role": "assistant", "content": text}, "finish_reason": "stop"}],
                     "usage": {"prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens, "total_tokens": prompt_tokens + completion_tokens},
-                    "barnraise": {"version": worker.version, "adapter": use_adapter},
+                    "inkport": {"version": worker.version, "adapter": use_adapter},
                 },
             )
 
@@ -218,9 +218,9 @@ def make_handler(worker: Worker, token: str) -> type[BaseHTTPRequestHandler]:
 
 
 def serve(root: Path, port: int = 0, version: Optional[str] = None) -> None:
-    token = os.environ.get("BARNRAISE_WORKER_TOKEN", "")
+    token = os.environ.get("INKPORT_WORKER_TOKEN", "")
     if not token:
-        raise ValueError("BARNRAISE_WORKER_TOKEN must be set (the gateway passes it)")
+        raise ValueError("INKPORT_WORKER_TOKEN must be set (the gateway passes it)")
     worker = Worker(root, version)
     httpd = ThreadingHTTPServer(("127.0.0.1", port), make_handler(worker, token))
     httpd.daemon_threads = True

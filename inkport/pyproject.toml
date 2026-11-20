@@ -3,9 +3,9 @@ requires = ["hatchling>=1.25"]
 build-backend = "hatchling.build"
 
 [project]
-name = "barnraise-engine"
+name = "inkport-engine"
 version = "0.1.0"
-description = "Barnraise local training, verification and inference engine (sidecar for the desktop app)"
+description = "Inkport local training, verification and inference engine (sidecar for the desktop app)"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "Apache-2.0" }
@@ -30,13 +30,13 @@ torch = [
 ]
 # NVIDIA: 4-bit QLoRA, Unsloth kernels and TRL GRPO.
 cuda = [
-  "barnraise-engine[torch]",
+  "inkport-engine[torch]",
   "bitsandbytes>=0.45; platform_system != 'Darwin'",
   "trl>=0.21",
   "datasets>=3.0",
 ]
 unsloth = [
-  "barnraise-engine[cuda]",
+  "inkport-engine[cuda]",
   "unsloth>=2025.8.1; platform_system != 'Darwin'",
 ]
 # Apple Silicon: MLX training and inference.
@@ -48,16 +48,16 @@ mlx = [
 # Optional GGUF inference through llama.cpp.
 llamacpp = ["llama-cpp-python>=0.3.8"]
 docx = ["python-docx>=1.1"]
-cpu = ["barnraise-engine[torch]"]
+cpu = ["inkport-engine[torch]"]
 dev = [
-  "barnraise-engine[torch]",
+  "inkport-engine[torch]",
   "pytest>=8",
   "trl>=0.21",
   "datasets>=3.0",
 ]
 
 [project.scripts]
-barnraise-engine = "engine.cli:main"
+inkport-engine = "engine.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["engine"]

@@ -7,7 +7,7 @@ export function Card({ children, className = "" }: { children: ReactNode; classN
 type Variant = "primary" | "secondary" | "ghost" | "danger";
 export function Button({ children, onClick, variant = "primary", disabled, busy, className = "", title }: { children: ReactNode; onClick?: () => void; variant?: Variant; disabled?: boolean; busy?: boolean; className?: string; title?: string }) {
   const styles: Record<Variant, string> = {
-    primary: "bg-accent text-white hover:brightness-110",
+    primary: "bg-accent text-on-accent hover:brightness-110",
     secondary: "border border-line bg-panel hover:bg-canvas",
     ghost: "text-muted hover:text-ink",
     danger: "border border-bad/40 text-bad hover:bg-bad-soft",

@@ -18,14 +18,14 @@ from typing import Any, Iterable, Iterator
 
 @lru_cache(maxsize=1)
 def contracts_dir() -> Path:
-    env = os.environ.get("BARNRAISE_CONTRACTS")
+    env = os.environ.get("INKPORT_CONTRACTS")
     candidates = [Path(env)] if env else []
     here = Path(__file__).resolve().parent
     candidates += [here / "_contracts", here.parent / "contracts"]
     for c in candidates:
         if (c / "tiers.json").is_file():
             return c
-    raise FileNotFoundError("Barnraise contracts not found (looked in: " + ", ".join(map(str, candidates)) + ")")
+    raise FileNotFoundError("Inkport contracts not found (looked in: " + ", ".join(map(str, candidates)) + ")")
 
 
 @lru_cache(maxsize=None)
@@ -165,7 +165,7 @@ class ProjectPaths:
 def load_project(root: Path) -> dict:
     paths = ProjectPaths(root)
     if not paths.project_json.is_file():
-        raise FileNotFoundError(f"not a Barnraise project (missing project.json): {root}")
+        raise FileNotFoundError(f"not a Inkport project (missing project.json): {root}")
     return json.loads(paths.project_json.read_text(encoding="utf-8"))
 
 

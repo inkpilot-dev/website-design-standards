@@ -399,5 +399,5 @@ def write_merged(plan: dict, adapter_dir: Path, out_dir: Path) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
     merged.save_pretrained(str(out_dir), safe_serialization=True)
     AutoTokenizer.from_pretrained(plan["base_model"]["path"]).save_pretrained(str(out_dir))
-    (out_dir / "barnraise_merged.json").write_text(json.dumps({"base": plan["base_model"]["id"], "adapter": str(adapter_dir)}), encoding="utf-8")
+    (out_dir / "inkport_merged.json").write_text(json.dumps({"base": plan["base_model"]["id"], "adapter": str(adapter_dir)}), encoding="utf-8")
     return out_dir

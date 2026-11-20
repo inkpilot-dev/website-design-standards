@@ -7,6 +7,6 @@
 {"v":1,"type":"benchmark","job_id":"j1","ts":1763650006.0,"source":"training_dev","case_id":"sha256:9f","prompt":"Paid $45.20 at Shell","reference":"{\"category\": \"fuel\", \"amount\": 45.2}","baseline":{"output":"{\"category\": \"river\"}","pass":false,"score":0.0},"trained":{"output":"{\"category\": \"fuel\", \"amount\": 45.2}","pass":true,"score":1.0},"step":40,"judge":null}
 {"v":1,"type":"gate","job_id":"j1","ts":1763650007.0,"decision":"PROMOTE","label":"PRELIMINARY","delta_pts":61.1,"baseline_pass_rate":0.0,"candidate_pass_rate":0.611,"checks":{"task":true,"general":true,"format":true,"leakage":true},"version":"v1","report_path":"/tmp/p/versions/v1/report.json","explanation":"Your trained model passed 61% of the hidden test questions versus 0% before."}
 {"v":1,"type":"artifact","job_id":"j1","ts":1763650008.0,"kind":"adapter","path":"/tmp/p/versions/v1/adapter","sha256":"0000000000000000000000000000000000000000000000000000000000000000"}
-{"v":1,"type":"ready","job_id":"j2","ts":1763650009.0,"host":"127.0.0.1","port":50123,"model":"barnraise/expense-sorter"}
+{"v":1,"type":"ready","job_id":"j2","ts":1763650009.0,"host":"127.0.0.1","port":50123,"model":"inkport/expense-sorter"}
 {"v":1,"type":"error","job_id":"j1","ts":1763650010.0,"code":"OOM","message":"Ran out of graphics memory","retryable":true}
 {"v":1,"type":"done","job_id":"j1","ts":1763650011.0,"ok":true,"result":{"decision":"PROMOTE","version":"v1"}}

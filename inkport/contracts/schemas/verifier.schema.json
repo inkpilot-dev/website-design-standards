@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://barnraise.dev/contracts/verifier.schema.json",
+  "$id": "https://inkport.dev/contracts/verifier.schema.json",
   "title": "VerifierSet",
   "description": "data/verifiers.json. Every verifier returns a Verdict {verifier_id, pass, score, detail}. An item passes when every gate passes and the weighted reward score is at least pass_threshold.",
   "type": "object",

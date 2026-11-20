@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://barnraise.dev/contracts/hardware.schema.json",
+  "$id": "https://inkport.dev/contracts/hardware.schema.json",
   "title": "HardwareReport",
   "description": "Returned by the Rust detect_hardware command and passed to `python -m engine plan --hardware <file>`.",
   "type": "object",

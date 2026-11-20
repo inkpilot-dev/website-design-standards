@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://barnraise.dev/contracts/event.schema.json",
+  "$id": "https://inkport.dev/contracts/event.schema.json",
   "title": "EngineEvent",
   "description": "One NDJSON line written by the Python engine to stdout. Rust parses every line; the UI receives them on training://*, benchmark://* and runtime://* channels.",
   "type": "object",
@@ -124,7 +124,7 @@
     "artifact": {
       "properties": {
         "type": { "const": "artifact" },
-        "kind": { "enum": ["adapter", "merged", "gguf", "brpatch", "report", "dataset", "model"] },
+        "kind": { "enum": ["adapter", "merged", "gguf", "inkpatch", "report", "dataset", "model"] },
         "path": { "type": "string" },
         "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
       },

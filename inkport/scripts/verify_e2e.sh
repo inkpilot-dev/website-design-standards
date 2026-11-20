@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Barnraise end-to-end verification (Linux / macOS).
+# Inkport end-to-end verification (Linux / macOS).
 #
 # Proves the layers work together through the real Rust supervisor:
 #   Rust CLI -> Python engine (NDJSON) -> ingest + hidden-test split -> LoRA training on a tiny
@@ -7,16 +7,16 @@
 #   API (auth, Host/Origin checks, streaming) -> signed adapter export -> tamper-rejected import.
 #
 # Usage: scripts/verify_e2e.sh            (creates .e2e/venv with CPU PyTorch)
-#        BARNRAISE_PYTHON=/path/to/python scripts/verify_e2e.sh   (reuse an environment)
+#        INKPORT_PYTHON=/path/to/python scripts/verify_e2e.sh   (reuse an environment)
 #        SKIP_FRONTEND=1 / SKIP_UNIT=1    (skip those stages)
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-WORK="${BARNRAISE_E2E_DIR:-$ROOT/.e2e}"
-PORT="${BARNRAISE_E2E_PORT:-11535}"
+WORK="${INKPORT_E2E_DIR:-$ROOT/.e2e}"
+PORT="${INKPORT_E2E_PORT:-11535}"
 rm -rf "$WORK/home" "$WORK/run"
 mkdir -p "$WORK/run"
-export BARNRAISE_HOME="$WORK/home"
+export INKPORT_HOME="$WORK/home"
 LOG="$WORK/run/e2e.log"
 : >"$LOG"
 SERVE_PID=""
@@ -33,17 +33,17 @@ jget() { "$PY" -c "import json,sys; d=json.load(sys.stdin); print(eval(sys.argv[
 
 # --------------------------------------------------------------------------- 1. Python
 step "Python engine environment"
-if [ -z "${BARNRAISE_PYTHON:-}" ]; then
-  command -v uv >/dev/null || fail "uv is required (https://docs.astral.sh/uv/) or set BARNRAISE_PYTHON"
+if [ -z "${INKPORT_PYTHON:-}" ]; then
+  command -v uv >/dev/null || fail "uv is required (https://docs.astral.sh/uv/) or set INKPORT_PYTHON"
   if [ ! -x "$WORK/venv/bin/python" ]; then
     uv venv -q --python 3.12 "$WORK/venv"
     uv pip install -q --python "$WORK/venv/bin/python" torch --index-url https://download.pytorch.org/whl/cpu >>"$LOG" 2>&1 \
       || uv pip install -q --python "$WORK/venv/bin/python" torch >>"$LOG" 2>&1
   fi
   uv pip install -q --python "$WORK/venv/bin/python" -e "$ROOT[dev]" >>"$LOG" 2>&1 || fail "engine install"
-  export BARNRAISE_PYTHON="$WORK/venv/bin/python"
+  export INKPORT_PYTHON="$WORK/venv/bin/python"
 fi
-PY="$BARNRAISE_PYTHON"
+PY="$INKPORT_PYTHON"
 "$PY" -c "import engine, torch, transformers, peft; print('    engine', engine.__version__, '| torch', torch.__version__, '| transformers', transformers.__version__, '| peft', peft.__version__)"
 
 if [ -z "${SKIP_UNIT:-}" ]; then
@@ -54,8 +54,8 @@ fi
 # --------------------------------------------------------------------------- 2. Rust
 step "Rust supervisor: tests + headless CLI build"
 (cd "$ROOT/src-tauri" && cargo test -q --no-default-features) >>"$LOG" 2>&1 && pass "cargo test" || fail "cargo test"
-(cd "$ROOT/src-tauri" && cargo build -q --no-default-features --bin barnraise-cli) >>"$LOG" 2>&1 || fail "cargo build"
-CLI="$ROOT/target/debug/barnraise-cli"
+(cd "$ROOT/src-tauri" && cargo build -q --no-default-features --bin inkport-cli) >>"$LOG" 2>&1 || fail "cargo build"
+CLI="$ROOT/target/debug/inkport-cli"
 cli() { "$CLI" "$@" 2>>"$LOG"; }
 
 # --------------------------------------------------------------------------- 3. Fixtures
@@ -98,27 +98,27 @@ for _ in $(seq 1 180); do
   sleep 1
 done
 curl -sf "http://127.0.0.1:$PORT/health" | grep -q '"model_loaded":true' || fail "API did not come up"
-TOKEN=$(cat "$BARNRAISE_HOME/api_token")
+TOKEN=$(cat "$INKPORT_HOME/api_token")
 API="http://127.0.0.1:$PORT/v1"
 [ "$(curl -s -o /dev/null -w '%{http_code}' "$API/models")" = "401" ] && pass "missing API key -> 401" || fail "auth not enforced"
 [ "$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $TOKEN" -H 'Host: evil.example' "$API/models")" = "403" ] && pass "DNS-rebinding Host -> 403" || fail "host check"
 [ "$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $TOKEN" -H 'Origin: https://evil.example' "$API/models")" = "403" ] && pass "foreign web Origin -> 403" || fail "origin check"
 MODELS=$(curl -sf -H "Authorization: Bearer $TOKEN" "$API/models")
-echo "$MODELS" | grep -q 'barnraise/expense-sorter' && pass "/v1/models lists barnraise/expense-sorter" || fail "models: $MODELS"
+echo "$MODELS" | grep -q 'inkport/expense-sorter' && pass "/v1/models lists inkport/expense-sorter" || fail "models: $MODELS"
 CHAT=$(curl -sf -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' "$API/chat/completions" \
-  -d '{"model":"barnraise/expense-sorter","messages":[{"role":"user","content":"Paid $42 at Shell for the delivery van"}],"max_tokens":40}')
+  -d '{"model":"inkport/expense-sorter","messages":[{"role":"user","content":"Paid $42 at Shell for the delivery van"}],"max_tokens":40}')
 CONTENT=$(echo "$CHAT" | jget "d['choices'][0]['message']['content']")
 echo "    model answered: $CONTENT"
 echo "$CONTENT" | "$PY" -c "import json,sys; o=json.loads(sys.stdin.read()); assert 'category' in o and 'amount' in o" && pass "chat completion returns the trained JSON format" || fail "chat: $CHAT"
 curl -sfN -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' "$API/chat/completions" \
-  -d '{"model":"barnraise/expense-sorter","stream":true,"messages":[{"role":"user","content":"Zoom receipt $15 monthly plan"}],"max_tokens":30}' | grep -q '\[DONE\]' && pass "SSE streaming" || fail "streaming"
+  -d '{"model":"inkport/expense-sorter","stream":true,"messages":[{"role":"user","content":"Zoom receipt $15 monthly plan"}],"max_tokens":30}' | grep -q '\[DONE\]' && pass "SSE streaming" || fail "streaming"
 kill "$SERVE_PID"; wait "$SERVE_PID" 2>/dev/null || true; SERVE_PID=""
 
 # --------------------------------------------------------------------------- 6. Adapters
 step "Signed adapter export / import"
-EX=$(cli export --project expense-sorter --out "$WORK/run/v1.brpatch" | result)
+EX=$(cli export --project expense-sorter --out "$WORK/run/v1.inkpatch" | result)
 echo "    sha256 $(echo "$EX" | jget "d['sha256']")"
-"$PY" - "$WORK/run/v1.brpatch" "$WORK/run/tampered.brpatch" <<'PYEOF'
+"$PY" - "$WORK/run/v1.inkpatch" "$WORK/run/tampered.inkpatch" <<'PYEOF'
 import sys, zipfile
 src, dst = sys.argv[1], sys.argv[2]
 with zipfile.ZipFile(src) as zin, zipfile.ZipFile(dst, "w") as zout:
@@ -128,9 +128,9 @@ with zipfile.ZipFile(src) as zin, zipfile.ZipFile(dst, "w") as zout:
             data = data[:-4] + b"\x00\x00\x80\x7f"  # flip the last weight to +inf
         zout.writestr(i.filename, data)
 PYEOF
-TI=$(cli import --project expense-sorter --file "$WORK/run/tampered.brpatch" --preset smoke | result || true)
+TI=$(cli import --project expense-sorter --file "$WORK/run/tampered.inkpatch" --preset smoke | result || true)
 echo "$TI" | grep -q 'SHA-256 mismatch' && pass "tampered package rejected (SHA-256)" || fail "tampered import not rejected: $TI"
-OK=$(cli import --project expense-sorter --file "$WORK/run/v1.brpatch" --preset smoke | result)
+OK=$(cli import --project expense-sorter --file "$WORK/run/v1.inkpatch" --preset smoke | result)
 echo "    re-import gate: $(echo "$OK" | jget "d['gate']['decision']") (an identical adapter must not be promoted twice)"
 [ "$(echo "$OK" | jget "d['import']['signature_verified']")" = "True" ] && pass "signature + hashes + tensors verified, then gated" || fail "import: $OK"
 

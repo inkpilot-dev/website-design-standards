@@ -1,6 +1,6 @@
-"""Adapter packaging: signed .brpatch export/import, MLX->PEFT conversion, GGUF export.
+"""Adapter packaging: signed .inkpatch export/import, MLX->PEFT conversion, GGUF export.
 
-A .brpatch is a zip with:
+A .inkpatch is a zip with:
     manifest.json      - base model fingerprint, LoRA config, eval summary, sha256 of every file
     signature.json     - Ed25519 signature over canonical JSON of manifest.json
     adapter/...        - adapter_model.safetensors + adapter_config.json (PEFT format)
@@ -36,7 +36,7 @@ ALLOWED_ENTRIES = {
     "report.json",
     "adapter/adapter_model.safetensors",
     "adapter/adapter_config.json",
-    "adapter/barnraise_adapter.json",
+    "adapter/inkport_adapter.json",
 }
 ALLOWED_TARGETS = {"q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"}
 KEY_RE = re.compile(r"^base_model\.model\.(?:model\.)?(?:language_model\.)?(?:model\.)?layers\.(\d+)\.(?:self_attn|mlp)\.(q_proj|k_proj|v_proj|o_proj|gate_proj|up_proj|down_proj)\.(lora_A|lora_B)\.weight$")
@@ -49,7 +49,7 @@ class PatchRejected(Exception):
 
 
 def home_dir() -> Path:
-    return Path(os.environ.get("BARNRAISE_HOME") or (Path.home() / ".barnraise"))
+    return Path(os.environ.get("INKPORT_HOME") or (Path.home() / ".inkport"))
 
 
 # ------------------------------------------------------------------------------------------
@@ -209,7 +209,7 @@ def validate_peft_adapter(adir: Path, model_path: str) -> dict:
 # ------------------------------------------------------------------------------------------
 
 
-def export_brpatch(root: Path, out_file: Path, version: Optional[str] = None) -> dict:
+def export_inkpatch(root: Path, out_file: Path, version: Optional[str] = None) -> dict:
     project = load_project(root)
     paths = ProjectPaths(root)
     version = version or (active_version(root) or {}).get("version")
@@ -222,13 +222,13 @@ def export_brpatch(root: Path, out_file: Path, version: Optional[str] = None) ->
         "adapter/adapter_config.json": adir / "adapter_config.json",
         "report.json": vdir / "report.json",
     }
-    if (adir / "barnraise_adapter.json").is_file():
-        files["adapter/barnraise_adapter.json"] = adir / "barnraise_adapter.json"
+    if (adir / "inkport_adapter.json").is_file():
+        files["adapter/inkport_adapter.json"] = adir / "inkport_adapter.json"
     report = json.loads((vdir / "report.json").read_text())
     acfg = json.loads((adir / "adapter_config.json").read_text())
     key, pub = _keys()
     manifest = {
-        "format": "brpatch",
+        "format": "inkpatch",
         "version": 1,
         "name": project["name"],
         "template": project["template"],
@@ -249,18 +249,18 @@ def export_brpatch(root: Path, out_file: Path, version: Optional[str] = None) ->
             z.write(p, name)
     os.replace(tmp, out_file)
     digest = sha256_file(out_file)
-    events.emit("artifact", kind="brpatch", path=str(out_file), sha256=digest)
+    events.emit("artifact", kind="inkpatch", path=str(out_file), sha256=digest)
     return {"path": str(out_file), "sha256": digest, "version": version, "publisher": pub, "files": manifest["files"]}
 
 
-def import_brpatch(root: Path, patch: Path, trust: bool = False) -> dict:
+def import_inkpatch(root: Path, patch: Path, trust: bool = False) -> dict:
     """Validate and unpack. Returns {"adapter_dir", ...}; raises PatchRejected on any problem."""
     from cryptography.exceptions import InvalidSignature  # noqa: WPS433
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey  # noqa: WPS433
 
     project = load_project(root)
     if not zipfile.is_zipfile(patch):
-        raise PatchRejected("this file is not a Barnraise adapter package")
+        raise PatchRejected("this file is not a Inkport adapter package")
     with zipfile.ZipFile(patch) as z:
         infos = z.infolist()
         names = [i.filename for i in infos]
@@ -283,7 +283,7 @@ def import_brpatch(root: Path, patch: Path, trust: bool = False) -> dict:
                 raise PatchRejected(f"package is missing {required}")
         manifest = json.loads(z.read("manifest.json"))
         sig = json.loads(z.read("signature.json"))
-        if manifest.get("format") != "brpatch" or manifest.get("version") != 1:
+        if manifest.get("format") != "inkpatch" or manifest.get("version") != 1:
             raise PatchRejected("unsupported package format")
         if sig.get("alg") != "ed25519" or sig.get("public_key") != manifest.get("publisher", {}).get("public_key"):
             raise PatchRejected("signature does not match the publisher in the manifest")
@@ -373,8 +373,8 @@ def mlx_to_peft(mlx_dir: Path, out_dir: Path, plan: dict) -> None:
 
 
 def try_export_gguf(plan: dict, adapter_dir: Path, out_dir: Path) -> Optional[Path]:
-    """GGUF LoRA via llama.cpp's convert_lora_to_gguf.py when BARNRAISE_LLAMA_CPP points at a checkout."""
-    llama = os.environ.get("BARNRAISE_LLAMA_CPP")
+    """GGUF LoRA via llama.cpp's convert_lora_to_gguf.py when INKPORT_LLAMA_CPP points at a checkout."""
+    llama = os.environ.get("INKPORT_LLAMA_CPP")
     if not llama:
         return None
     script = Path(llama) / "convert_lora_to_gguf.py"

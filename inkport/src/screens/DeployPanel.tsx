@@ -65,7 +65,7 @@ export function DeployPanel({ project }: { project: ProjectInfo }) {
   };
 
   const doExport = async () => {
-    const dest = await pickSavePath(`${project.slug}-${project.active_version ?? "v1"}.brpatch`);
+    const dest = await pickSavePath(`${project.slug}-${project.active_version ?? "v1"}.inkpatch`);
     if (!dest) return;
     try {
       const r = await api.exportAdapter(project.id, dest);
@@ -76,7 +76,7 @@ export function DeployPanel({ project }: { project: ProjectInfo }) {
   };
 
   const doImport = async (trust = false, file?: string) => {
-    const f = file ?? (await pickFiles([".brpatch"]))[0];
+    const f = file ?? (await pickFiles([".inkpatch"]))[0];
     if (!f) return;
     setTransfer(["Checking signature, SHA-256 hashes and every tensor…"]);
     try {
@@ -106,7 +106,7 @@ export function DeployPanel({ project }: { project: ProjectInfo }) {
     <div className="space-y-6">
       <header>
         <h1 className="text-3xl font-bold tracking-tight">Use your AI anywhere on this computer</h1>
-        <p className="mt-2 text-muted">Barnraise runs a private, OpenAI-compatible endpoint. Any app that lets you set a “custom OpenAI URL” can use your model.</p>
+        <p className="mt-2 text-muted">Inkport runs a private, OpenAI-compatible endpoint. Any app that lets you set a “custom OpenAI URL” can use your model.</p>
       </header>
       <ErrorNote error={error} />
       <Card className="space-y-4">
@@ -120,7 +120,7 @@ export function DeployPanel({ project }: { project: ProjectInfo }) {
         {info && (
           <>
             <div className="grid gap-3 md:grid-cols-3">
-              {([["API address", info.base_url], ["Model name", info.model], ["API key", showKey ? info.token : "br_" + "•".repeat(20)]] as const).map(([label, value]) => (
+              {([["API address", info.base_url], ["Model name", info.model], ["API key", showKey ? info.token : "ik_" + "•".repeat(20)]] as const).map(([label, value]) => (
                 <div key={label} className="rounded-xl bg-canvas p-3">
                   <div className="text-xs text-muted">{label}</div>
                   <div className="mt-1 flex items-center justify-between gap-2">
@@ -152,7 +152,7 @@ export function DeployPanel({ project }: { project: ProjectInfo }) {
           <div className="max-h-72 space-y-2 overflow-auto">
             {chat.length === 0 && <div className="text-sm text-muted">Send a message to your model.</div>}
             {chat.map((m, i) => (
-              <div key={i} className={`max-w-[85%] rounded-xl px-3 py-2 text-sm ${m.role === "user" ? "ml-auto bg-accent text-white" : "bg-canvas font-mono"}`}>{m.content}</div>
+              <div key={i} className={`max-w-[85%] rounded-xl px-3 py-2 text-sm ${m.role === "user" ? "ml-auto bg-accent text-on-accent" : "bg-canvas font-mono"}`}>{m.content}</div>
             ))}
           </div>
           <div className="flex gap-2">

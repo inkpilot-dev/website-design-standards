@@ -80,7 +80,7 @@ class Backend(ABC):
             "quant": self.plan.get("quant"),
             "lora": self.plan.get("lora"),
         }
-        (d / "barnraise_adapter.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
+        (d / "inkport_adapter.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
 
 
 def make_backend(plan: dict, inference_only: bool = False) -> Backend:

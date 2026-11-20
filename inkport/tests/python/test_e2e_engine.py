@@ -22,7 +22,7 @@ def run(*args, env):
 def test_full_engine_pipeline(tmp_path):
     import os
 
-    env = {**os.environ, "BARNRAISE_HOME": str(tmp_path / "home")}
+    env = {**os.environ, "INKPORT_HOME": str(tmp_path / "home")}
     done, _ = run("smoke-model", "--out", str(tmp_path / "model"), env=env)
     assert done["ok"]
     run("smoke-data", "--out", str(tmp_path / "data"), env=env)
@@ -34,5 +34,5 @@ def test_full_engine_pipeline(tmp_path):
     assert done["ok"], done
     assert done["result"]["decision"] == "PROMOTE", done["result"]["explanation"]
     assert (Path(proj) / "active.json").is_file()
-    done, _ = run("export", "--project", proj, "--out", str(tmp_path / "v1.brpatch"), env=env)
+    done, _ = run("export", "--project", proj, "--out", str(tmp_path / "v1.inkpatch"), env=env)
     assert done["ok"] and len(done["result"]["sha256"]) == 64

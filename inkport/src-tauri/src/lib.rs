@@ -1,4 +1,4 @@
-//! Barnraise desktop supervisor.
+//! Inkport desktop supervisor.
 //!
 //! Layers: [`hardware`] detection -> [`runtime`] bootstrap -> [`sidecar`] engine supervision
 //! (NDJSON events) -> [`api_server`] local OpenAI-compatible gateway, tied together by

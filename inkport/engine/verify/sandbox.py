@@ -87,7 +87,7 @@ def run_tests(code: str, tests: list[dict], timeout_s: float = 6.0, mem_mb: int 
         kwargs["preexec_fn"] = _limits(int(timeout_s) + 1, mem_mb)
     else:
         kwargs["creationflags"] = 0x08000000 | 0x00000200  # CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP
-    with tempfile.TemporaryDirectory(prefix="br-sbx-") as cwd:
+    with tempfile.TemporaryDirectory(prefix="ik-sbx-") as cwd:
         try:
             proc = subprocess.run(
                 [sys.executable, "-I", "-S", "-B", str(RUNNER)],

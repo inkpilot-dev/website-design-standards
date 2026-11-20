@@ -54,7 +54,7 @@ export function SystemReady({ onReady }: { onReady: (hw: HardwareReport) => void
     <div className="space-y-6">
       <header>
         <h1 className="text-3xl font-bold tracking-tight">Let’s check your computer</h1>
-        <p className="mt-2 text-muted">Barnraise trains a private AI on this machine. Nothing you add leaves your computer.</p>
+        <p className="mt-2 text-muted">Inkport trains a private AI on this machine. Nothing you add leaves your computer.</p>
       </header>
       <ErrorNote error={error} onRetry={load} />
       <Card>
@@ -79,7 +79,7 @@ export function SystemReady({ onReady }: { onReady: (hw: HardwareReport) => void
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <div className="text-sm text-muted">Setup</div>
-              <div className="text-lg font-semibold">{rt?.ready ? "Everything is installed" : "One click installs a private copy of everything Barnraise needs"}</div>
+              <div className="text-lg font-semibold">{rt?.ready ? "Everything is installed" : "One click installs a private copy of everything Inkport needs"}</div>
             </div>
             {rt?.ready ? <Badge tone="good">Ready · engine {rt.engine_version}</Badge> : <Badge>Not set up yet</Badge>}
           </div>

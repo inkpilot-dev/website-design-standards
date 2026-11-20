@@ -1,7 +1,7 @@
 //! Zero-terminal Python runtime bootstrap.
 //!
 //! Uses `uv` (bundled as a resource, or found on PATH) to create an isolated CPython 3.12
-//! virtualenv under the Barnraise home directory, installs the right PyTorch build for the
+//! virtualenv under the Inkport home directory, installs the right PyTorch build for the
 //! detected hardware (CUDA on NVIDIA, ROCm on AMD Linux, CPU elsewhere; none on Apple
 //! Silicon, which uses MLX), installs the engine with the matching extra, verifies it with
 //! `python -m engine hello`, and optionally downloads the recommended base model.
@@ -19,10 +19,10 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 
 pub fn home_dir() -> PathBuf {
-    if let Ok(h) = std::env::var("BARNRAISE_HOME") {
+    if let Ok(h) = std::env::var("INKPORT_HOME") {
         return PathBuf::from(h);
     }
-    dirs::data_dir().unwrap_or_else(|| dirs::home_dir().unwrap_or_else(|| PathBuf::from("."))).join("Barnraise")
+    dirs::data_dir().unwrap_or_else(|| dirs::home_dir().unwrap_or_else(|| PathBuf::from("."))).join("Inkport")
 }
 
 pub fn venv_dir(home: &Path) -> PathBuf {
@@ -38,14 +38,14 @@ pub fn venv_python(home: &Path) -> PathBuf {
     }
 }
 
-/// The interpreter to run the engine with. BARNRAISE_PYTHON overrides (development, CI).
+/// The interpreter to run the engine with. INKPORT_PYTHON overrides (development, CI).
 pub fn python_path(home: &Path) -> PathBuf {
-    std::env::var("BARNRAISE_PYTHON").map(PathBuf::from).unwrap_or_else(|_| venv_python(home))
+    std::env::var("INKPORT_PYTHON").map(PathBuf::from).unwrap_or_else(|_| venv_python(home))
 }
 
 /// In development the engine is imported straight from the checkout (no reinstall needed).
 pub fn dev_engine_root() -> Option<PathBuf> {
-    if let Ok(p) = std::env::var("BARNRAISE_ENGINE_SRC") {
+    if let Ok(p) = std::env::var("INKPORT_ENGINE_SRC") {
         return Some(PathBuf::from(p));
     }
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent()?.to_path_buf();
@@ -53,7 +53,7 @@ pub fn dev_engine_root() -> Option<PathBuf> {
 }
 
 fn find_uv(resource_dir: Option<&Path>) -> Option<PathBuf> {
-    if let Ok(p) = std::env::var("BARNRAISE_UV") {
+    if let Ok(p) = std::env::var("INKPORT_UV") {
         return Some(PathBuf::from(p));
     }
     let exe = if cfg!(windows) { "uv.exe" } else { "uv" };
@@ -156,7 +156,7 @@ async fn engine_hello(python: &Path, pythonpath: Option<&Path>) -> Result<(Strin
 pub async fn status(home: &Path, pythonpath: Option<&Path>) -> RuntimeStatus {
     let python = python_path(home);
     let mut st = RuntimeStatus { home: home.display().to_string(), python: Some(python.display().to_string()), ..Default::default() };
-    if !python.is_file() && std::env::var("BARNRAISE_PYTHON").is_err() {
+    if !python.is_file() && std::env::var("INKPORT_PYTHON").is_err() {
         st.message = "Not set up yet".into();
         return st;
     }
@@ -182,12 +182,12 @@ pub async fn bootstrap(home: &Path, hw: &HardwareReport, resource_dir: Option<&P
     let (extra, torch_index) = install_plan(hw);
     let python = python_path(home);
 
-    if std::env::var("BARNRAISE_PYTHON").is_ok() {
+    if std::env::var("INKPORT_PYTHON").is_ok() {
         rep.step(0, "Using the developer's Python", "completed", &python.display().to_string());
-        rep.step(1, "Installing PyTorch", "completed", "skipped (BARNRAISE_PYTHON is set)");
-        rep.step(2, "Installing the Barnraise engine", "completed", "skipped (BARNRAISE_PYTHON is set)");
+        rep.step(1, "Installing PyTorch", "completed", "skipped (INKPORT_PYTHON is set)");
+        rep.step(2, "Installing the Inkport engine", "completed", "skipped (INKPORT_PYTHON is set)");
     } else {
-        let uv = find_uv(resource_dir).ok_or_else(|| anyhow!("The installer helper (uv) is missing. Reinstall Barnraise."))?;
+        let uv = find_uv(resource_dir).ok_or_else(|| anyhow!("The installer helper (uv) is missing. Reinstall Inkport."))?;
         rep.step(0, "Creating a private Python 3.12", "running", "");
         if !python.is_file() {
             run_streaming(&uv, &["venv".into(), "--python".into(), "3.12".into(), "--seed".into(), venv_dir(home).display().to_string()], &rep, 0, "Creating a private Python 3.12", &[]).await?;
@@ -203,11 +203,11 @@ pub async fn bootstrap(home: &Path, hw: &HardwareReport, resource_dir: Option<&P
             run_streaming(&uv, &args, &rep, 1, "Installing PyTorch", &[]).await?;
         }
         rep.step(1, "Installing PyTorch", "completed", if torch_index.is_none() { "not needed on Apple Silicon (uses MLX)" } else { "" });
-        rep.step(2, "Installing the Barnraise engine", "running", "");
-        let src = engine_source(resource_dir).ok_or_else(|| anyhow!("The Barnraise engine package is missing from this installation."))?;
+        rep.step(2, "Installing the Inkport engine", "running", "");
+        let src = engine_source(resource_dir).ok_or_else(|| anyhow!("The Inkport engine package is missing from this installation."))?;
         let spec = format!("{}[{extra}]", src.display());
-        run_streaming(&uv, &["pip".into(), "install".into(), "--python".into(), py, spec], &rep, 2, "Installing the Barnraise engine", &[]).await?;
-        rep.step(2, "Installing the Barnraise engine", "completed", extra);
+        run_streaming(&uv, &["pip".into(), "install".into(), "--python".into(), py, spec], &rep, 2, "Installing the Inkport engine", &[]).await?;
+        rep.step(2, "Installing the Inkport engine", "completed", extra);
     }
 
     rep.step(3, "Checking everything works", "running", "");

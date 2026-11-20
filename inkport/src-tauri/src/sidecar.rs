@@ -68,9 +68,9 @@ impl Supervisor {
     fn command(&self, job_id: &str, spec: &JobSpec) -> Command {
         let mut cmd = Command::new(&self.cfg.python);
         cmd.arg("-u").arg("-m").arg("engine").args(&spec.args);
-        cmd.env("BARNRAISE_JOB_ID", job_id)
-            .env("BARNRAISE_WATCH_STDIN", "1")
-            .env("BARNRAISE_HOME", &self.cfg.home)
+        cmd.env("INKPORT_JOB_ID", job_id)
+            .env("INKPORT_WATCH_STDIN", "1")
+            .env("INKPORT_HOME", &self.cfg.home)
             .env("PYTHONUNBUFFERED", "1")
             .env("PYTHONIOENCODING", "utf-8")
             .env("TOKENIZERS_PARALLELISM", "false")
@@ -96,7 +96,7 @@ impl Supervisor {
         let mut child: Child = self
             .command(&job_id, &spec)
             .spawn()
-            .with_context(|| format!("could not start the Barnraise engine ({}). Run setup first.", self.cfg.python.display()))?;
+            .with_context(|| format!("could not start the Inkport engine ({}). Run setup first.", self.cfg.python.display()))?;
         let pid = child.id();
         let (cancel_tx, cancel_rx) = watch::channel(false);
         self.jobs.lock().unwrap().insert(job_id.clone(), Running { pid, cancel: cancel_tx, kind: spec.kind });

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://barnraise.dev/contracts/plan.schema.json",
+  "$id": "https://inkport.dev/contracts/plan.schema.json",
   "title": "TrainingPlan",
   "description": "runs/<run_id>/plan.json written by `engine plan` and consumed by `engine train`.",
   "type": "object",

@@ -6,6 +6,7 @@ import { TemplateLauncher } from "./screens/TemplateLauncher";
 import { DataRulesStudio } from "./screens/DataRulesStudio";
 import { TrainingArena } from "./screens/TrainingArena";
 import { DeployPanel } from "./screens/DeployPanel";
+import logo from "./assets/logo.png";
 
 type Step = 0 | 1 | 2 | 3 | 4;
 const STEPS = ["Your computer", "Choose a goal", "Data & rules", "Train & prove", "Use it"];
@@ -30,8 +31,8 @@ export function App() {
   return (
     <div className="flex h-full">
       <aside className="hidden w-64 flex-none flex-col border-r border-line bg-panel p-5 md:flex">
-        <div className="flex items-center gap-2 text-lg font-bold">
-          <span aria-hidden>🏚️</span> Barnraise
+        <div className="flex items-center gap-2.5 text-lg font-bold tracking-tight">
+          <img src={logo} alt="" className="h-8 w-8" /> Inkport
         </div>
         <p className="mt-1 text-xs text-muted">Train your own AI. Prove it got better.</p>
         <nav className="mt-8 space-y-1" aria-label="Steps">
@@ -39,7 +40,7 @@ export function App() {
             const enabled = i <= reached;
             return (
               <button key={label} disabled={!enabled} onClick={() => go(i as Step)} className={`flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left text-sm transition ${step === i ? "bg-accent-soft font-semibold text-ink" : enabled ? "text-ink hover:bg-canvas" : "text-muted/60"}`} aria-current={step === i ? "step" : undefined}>
-                <span className={`inline-flex h-6 w-6 items-center justify-center rounded-full text-xs ${i < reached ? "bg-accent text-white" : step === i ? "border-2 border-accent" : "border border-line"}`}>{i < reached ? "✓" : i + 1}</span>
+                <span className={`inline-flex h-6 w-6 items-center justify-center rounded-full text-xs ${i < reached ? "bg-accent text-on-accent" : step === i ? "border-2 border-accent" : "border border-line"}`}>{i < reached ? "✓" : i + 1}</span>
                 {label}
               </button>
             );

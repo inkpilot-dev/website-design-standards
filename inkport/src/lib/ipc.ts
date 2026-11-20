@@ -76,7 +76,7 @@ export async function pickFiles(extensions: string[]): Promise<string[]> {
 export async function pickSavePath(defaultName: string): Promise<string | null> {
   if (inTauri) {
     const { save } = await import("@tauri-apps/plugin-dialog");
-    return await save({ defaultPath: defaultName, filters: [{ name: "Barnraise adapter", extensions: ["brpatch"] }] });
+    return await save({ defaultPath: defaultName, filters: [{ name: "Inkport adapter", extensions: ["inkpatch"] }] });
   }
   return `~/Downloads/${defaultName}`;
 }

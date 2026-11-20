@@ -75,7 +75,7 @@ async function simulateTraining() {
   }
   emit("training://progress", ev({ type: "eval", split: "test", model: "candidate", n: 120, passed: 104, pass_rate: 0.867, ci95: [0.79, 0.92] }));
   const explanation = "Your trained model passed 87% of the 120 hidden test questions, versus 32% for the base (+55.0 points). That difference is statistically solid (95% range +45.8 to +63.3 points). General skills: no meaningful drop.";
-  emit("training://progress", ev({ type: "gate", decision: "PROMOTE", label: "VERIFIED", delta_pts: 55, baseline_pass_rate: 0.317, candidate_pass_rate: 0.867, checks: { task: true, general: true, format: true, audit: true, leakage: true }, version: "v1", report_path: "~/Barnraise/projects/expense-sorter/versions/v1/report.json", explanation }));
+  emit("training://progress", ev({ type: "gate", decision: "PROMOTE", label: "VERIFIED", delta_pts: 55, baseline_pass_rate: 0.317, candidate_pass_rate: 0.867, checks: { task: true, general: true, format: true, audit: true, leakage: true }, version: "v1", report_path: "~/Inkport/projects/expense-sorter/versions/v1/report.json", explanation }));
   trained = true;
   emit("training://progress", ev({ type: "done", ok: true, result: { decision: "PROMOTE", version: "v1", explanation } }));
 }
@@ -86,15 +86,15 @@ export async function mockInvoke<T>(cmd: string, args: Record<string, unknown> =
     case "detect_hardware":
       return hardware as T;
     case "runtime_status":
-      return { ready: false, backends: {}, home: "~/Library/Application Support/Barnraise", message: "Not set up yet" } as T;
+      return { ready: false, backends: {}, home: "~/Library/Application Support/Inkport", message: "Not set up yet" } as T;
     case "bootstrap_runtime": {
-      const steps = ["Creating a private Python 3.12", "Installing PyTorch", "Installing the Barnraise engine", "Checking everything works", "Downloading Qwen3 8B"];
+      const steps = ["Creating a private Python 3.12", "Installing PyTorch", "Installing the Inkport engine", "Checking everything works", "Downloading Qwen3 8B"];
       for (let i = 0; i < steps.length; i++) {
         emit("runtime://progress", { type: "runtime", step: i + 1, total: steps.length, label: steps[i], status: "running", detail: "", pct: (100 * i) / steps.length });
         await sleep(i === 4 ? 1400 : 600);
         emit("runtime://progress", { type: "runtime", step: i + 1, total: steps.length, label: steps[i], status: "completed", detail: i === 1 ? "not needed on Apple Silicon (uses MLX)" : "", pct: (100 * (i + 1)) / steps.length });
       }
-      return { ready: true, engine_version: "0.1.0", backends: { mlx: true, torch: false }, home: "~/Library/Application Support/Barnraise", message: "Ready" } as T;
+      return { ready: true, engine_version: "0.1.0", backends: { mlx: true, torch: false }, home: "~/Library/Application Support/Inkport", message: "Ready" } as T;
     }
     case "list_templates":
       return templates as T;
@@ -102,7 +102,7 @@ export async function mockInvoke<T>(cmd: string, args: Record<string, unknown> =
       return (project ? [project] : []) as T;
     case "create_project": {
       const req = args.request as { name: string; template: string };
-      project = { id: "p1", slug: req.name.toLowerCase().replace(/[^a-z0-9]+/g, "-"), name: req.name, template: req.template, dir: "~/Barnraise/projects/" + req.name, base_model: { id: "qwen3-8b", path: "" }, active_version: null };
+      project = { id: "p1", slug: req.name.toLowerCase().replace(/[^a-z0-9]+/g, "-"), name: req.name, template: req.template, dir: "~/Inkport/projects/" + req.name, base_model: { id: "qwen3-8b", path: "" }, active_version: null };
       return project as T;
     }
     case "get_project":
@@ -133,7 +133,7 @@ export async function mockInvoke<T>(cmd: string, args: Record<string, unknown> =
       return { cases: 1, wins: { trained: 1, baseline: 0, tie: 0 } } as T;
     }
     case "start_local_api":
-      return { url: "http://127.0.0.1:11435/v1/chat/completions", base_url: "http://127.0.0.1:11435/v1", token: "br_preview0000000000000000000000000000000000000000000000000000000000", model: "barnraise/expense-sorter", base_model: "barnraise/expense-sorter@base", version: "v1" } as T;
+      return { url: "http://127.0.0.1:11435/v1/chat/completions", base_url: "http://127.0.0.1:11435/v1", token: "ik_preview0000000000000000000000000000000000000000000000000000000000", model: "inkport/expense-sorter", base_model: "inkport/expense-sorter@base", version: "v1" } as T;
     case "stop_local_api":
       return undefined as T;
     case "export_adapter":

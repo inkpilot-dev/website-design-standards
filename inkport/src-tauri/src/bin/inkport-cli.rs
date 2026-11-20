@@ -1,16 +1,16 @@
-//! Headless Barnraise: the same supervisor, engine and gateway as the desktop app, driven
+//! Headless Inkport: the same supervisor, engine and gateway as the desktop app, driven
 //! from a terminal. Used by scripts/verify_e2e.sh and handy for servers and CI.
 //! Prints the final result as one JSON line prefixed with `RESULT `.
 
-use barnraise_lib::app::{App, AppError, CreateProjectRequest, TrainRequest};
-use barnraise_lib::events::StdoutSink;
-use barnraise_lib::runtime;
+use inkport_lib::app::{App, AppError, CreateProjectRequest, TrainRequest};
+use inkport_lib::events::StdoutSink;
+use inkport_lib::runtime;
 use clap::{Parser, Subcommand};
 use serde_json::{json, Value};
 use std::sync::Arc;
 
 #[derive(Parser)]
-#[command(name = "barnraise-cli", version, about = "Train, verify and serve specialist models locally")]
+#[command(name = "inkport-cli", version, about = "Train, verify and serve specialist models locally")]
 struct Cli {
     /// Print every raw engine event
     #[arg(long, global = true)]
@@ -91,14 +91,14 @@ enum Cmd {
         #[arg(long, default_value_t = 11435)]
         port: u16,
     },
-    /// Export a signed .brpatch
+    /// Export a signed .inkpatch
     Export {
         #[arg(long)]
         project: String,
         #[arg(long)]
         out: String,
     },
-    /// Verify a .brpatch (signature + SHA-256 + tensors) and gate it before activation
+    /// Verify a .inkpatch (signature + SHA-256 + tensors) and gate it before activation
     Import {
         #[arg(long)]
         project: String,

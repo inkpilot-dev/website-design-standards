@@ -1,24 +1,24 @@
 [package]
-name = "barnraise"
+name = "inkport"
 version = "0.1.0"
-description = "Barnraise: train verifiable specialist models on your own computer"
+description = "Inkport: train verifiable specialist models on your own computer"
 edition = "2021"
 rust-version = "1.80"
 license = "Apache-2.0"
-default-run = "barnraise"
+default-run = "inkport"
 
 [lib]
-name = "barnraise_lib"
+name = "inkport_lib"
 path = "src/lib.rs"
 
 [[bin]]
-name = "barnraise"
+name = "inkport"
 path = "src/main.rs"
 required-features = ["desktop"]
 
 [[bin]]
-name = "barnraise-cli"
-path = "src/bin/barnraise-cli.rs"
+name = "inkport-cli"
+path = "src/bin/inkport-cli.rs"
 
 [features]
 default = ["desktop"]

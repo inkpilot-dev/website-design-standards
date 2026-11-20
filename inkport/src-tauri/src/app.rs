@@ -236,7 +236,7 @@ impl App {
             kind: JobKind::Serve,
             args: vec!["serve".into(), "--project".into(), info.dir.clone(), "--port".into(), "0".into()],
             project_id: Some(project_id.to_string()),
-            env: vec![("BARNRAISE_WORKER_TOKEN".into(), worker_token.clone())],
+            env: vec![("INKPORT_WORKER_TOKEN".into(), worker_token.clone())],
         })?;
         *self.serve_job.lock().await = Some(sp.job_id.clone());
         let ready = tokio::select! {
@@ -244,7 +244,7 @@ impl App {
             _ = tokio::time::sleep(std::time::Duration::from_secs(900)) => return Err(anyhow!("WORKER_TIMEOUT: the model took too long to load").into()),
         };
         let wport = ready["port"].as_u64().ok_or_else(|| anyhow!("worker did not report a port"))? as u16;
-        let model = format!("barnraise/{}", info.slug);
+        let model = format!("inkport/{}", info.slug);
         let version = info.active_version.clone().unwrap_or_else(|| "base".into());
         self.gateway.set_upstream(Some(Upstream { base_url: format!("http://127.0.0.1:{wport}"), worker_token, models: vec![model.clone(), format!("{model}@base")], project_id: project_id.into(), version: version.clone() })).await;
         let gport = self.gateway.start(port.unwrap_or(DEFAULT_PORT)).await?;

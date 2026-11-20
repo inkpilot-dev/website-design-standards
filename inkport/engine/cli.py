@@ -169,17 +169,17 @@ def cmd_serve(a: argparse.Namespace) -> dict:
 
 
 def cmd_export(a: argparse.Namespace) -> dict:
-    from engine.adapters import export_brpatch  # noqa: WPS433
+    from engine.adapters import export_inkpatch  # noqa: WPS433
 
-    return export_brpatch(Path(a.project), Path(a.out), a.version)
+    return export_inkpatch(Path(a.project), Path(a.out), a.version)
 
 
 def cmd_import(a: argparse.Namespace) -> dict:
-    from engine.adapters import import_brpatch  # noqa: WPS433
+    from engine.adapters import import_inkpatch  # noqa: WPS433
     from engine.pipeline.train_and_gate import run_gate_only  # noqa: WPS433
 
     events.stage("import", "started", "Checking signature, SHA-256 hashes and every tensor")
-    info = import_brpatch(Path(a.project), Path(a.file), trust=a.trust)
+    info = import_inkpatch(Path(a.project), Path(a.file), trust=a.trust)
     events.stage("import", "completed", f"{info['checks']['tensors']} tensors verified")
     result: dict[str, Any] = {"import": {k: v for k, v in info.items() if k != "manifest"}, "name": info["manifest"].get("name")}
     if not a.no_gate:
@@ -244,7 +244,7 @@ def cmd_fetch_model(a: argparse.Namespace) -> dict:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="python -m engine", description="Barnraise engine sidecar")
+    p = argparse.ArgumentParser(prog="python -m engine", description="Inkport engine sidecar")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     def add(name: str, fn: Callable[[argparse.Namespace], dict], help_: str) -> argparse.ArgumentParser:
@@ -299,11 +299,11 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--project", required=True)
     sp.add_argument("--port", type=int, default=0)
     sp.add_argument("--version")
-    sp = add("export", cmd_export, "export a signed .brpatch")
+    sp = add("export", cmd_export, "export a signed .inkpatch")
     sp.add_argument("--project", required=True)
     sp.add_argument("--out", required=True)
     sp.add_argument("--version")
-    sp = add("import", cmd_import, "verify a .brpatch and gate it before activation")
+    sp = add("import", cmd_import, "verify a .inkpatch and gate it before activation")
     sp.add_argument("--project", required=True)
     sp.add_argument("--file", required=True)
     sp.add_argument("--trust", action="store_true", help="trust this publisher from now on")
@@ -366,7 +366,7 @@ def main(argv: list[str] | None = None) -> int:
         code, retry = _classify(exc)
         message = str(exc)
         if code == "OOM":
-            message = "Ran out of graphics memory. Barnraise will retry with a smaller batch."
+            message = "Ran out of graphics memory. Inkport will retry with a smaller batch."
         events.error(code, message, retryable=retry)
         events.done(False, code=code, message=message)
         return 1

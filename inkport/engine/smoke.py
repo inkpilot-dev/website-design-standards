@@ -175,6 +175,6 @@ def build_smoke_model(out: Path, steps: int = 800, seed: int = 0) -> dict:
     model.generation_config.pad_token_id = tok.pad_token_id
     model.save_pretrained(str(out), safe_serialization=True)
     tok.save_pretrained(str(out))
-    (out / "barnraise_smoke.json").write_text(json.dumps({"steps": steps, "seed": seed, "params": sum(p.numel() for p in model.parameters())}))
+    (out / "inkport_smoke.json").write_text(json.dumps({"steps": steps, "seed": seed, "params": sum(p.numel() for p in model.parameters())}))
     events.stage("smoke_model", "completed", f"{sum(p.numel() for p in model.parameters()) / 1e6:.1f}M parameters")
     return {"path": str(out), "params": sum(p.numel() for p in model.parameters()), "final_loss": float(loss)}

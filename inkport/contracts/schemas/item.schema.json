@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://barnraise.dev/contracts/item.schema.json",
+  "$id": "https://inkport.dev/contracts/item.schema.json",
   "title": "DatasetItem",
   "description": "One line of data/train.jsonl, data/dev.jsonl or data/test.jsonl. Produced by engine/pipeline/ingest_and_verify.py.",
   "type": "object",

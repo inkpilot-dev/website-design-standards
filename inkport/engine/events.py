@@ -20,7 +20,7 @@ SCHEMA_VERSION = 1
 
 _lock = threading.Lock()
 _stream = sys.stdout
-_job_id = os.environ.get("BARNRAISE_JOB_ID", "local")
+_job_id = os.environ.get("INKPORT_JOB_ID", "local")
 _last_emit = time.monotonic()
 _heartbeat_started = False
 
@@ -132,12 +132,12 @@ def start_heartbeat(interval_s: float = 15.0) -> None:
             if time.monotonic() - _last_emit >= interval_s:
                 emit("heartbeat")
 
-    threading.Thread(target=_beat, name="barnraise-heartbeat", daemon=True).start()
+    threading.Thread(target=_beat, name="inkport-heartbeat", daemon=True).start()
 
 
 def watch_parent_stdin() -> None:
     """Exit when the supervisor dies: it holds our stdin open; EOF means it is gone."""
-    if os.environ.get("BARNRAISE_WATCH_STDIN") != "1":
+    if os.environ.get("INKPORT_WATCH_STDIN") != "1":
         return
 
     def _watch() -> None:
@@ -148,4 +148,4 @@ def watch_parent_stdin() -> None:
             pass
         os._exit(3)
 
-    threading.Thread(target=_watch, name="barnraise-parent-watch", daemon=True).start()
+    threading.Thread(target=_watch, name="inkport-parent-watch", daemon=True).start()
