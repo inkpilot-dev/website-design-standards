@@ -93,8 +93,11 @@ if [ "$MODEL" = "smoke-tiny" ]; then
   echo "$T" | grep -q '"decision":"PROMOTE"' || fail "training/gate did not promote: $T"
 else
   # A short real run on the bundled model: proves training + hidden-test gate complete offline.
-  T=$("$CLI" train --project clean-check --preset fast --overrides '{"sft":{"max_steps":40,"eval_every":20,"checkpoint_every":20},"stage2":{"mode":"none"},"gate":{"general_suite_n":20}}' 2>>"$WORK/cli.log" | json) || fail "training crashed"
-  echo "$T" | grep -qE '"decision":"(PROMOTE|REJECT|INSUFFICIENT_DATA)"' || fail "training/gate did not finish: $T"
+  # The side check on general skills is switched off here (it is noisy on 20 questions and is
+  # not what this check is about), so the run must end in PROMOTE and the steps below always
+  # exercise answering with a trained version.
+  T=$("$CLI" train --project clean-check --preset fast --overrides '{"sft":{"max_steps":40,"eval_every":20,"checkpoint_every":20},"stage2":{"mode":"none"},"gate":{"general_suite_n":20,"max_general_drop_pts":100}}' 2>>"$WORK/cli.log" | json) || fail "training crashed"
+  echo "$T" | grep -q '"decision":"PROMOTE"' || fail "training finished but the trained model was not promoted on the bundled samples: $T"
 fi
 pass "trained + gated on the hidden test: $(echo "$T" | field decision) $(echo "$T" | field version)"
 

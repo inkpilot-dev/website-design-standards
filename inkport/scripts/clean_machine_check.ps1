@@ -17,7 +17,10 @@ param(
   [Parameter(Mandatory = $true)][string]$Installer,
   [int]$Port = 11541,
   [switch]$Quick,
-  [string]$TrainOverrides = '{"sft":{"max_steps":40,"eval_every":20,"checkpoint_every":20},"stage2":{"mode":"none"},"gate":{"general_suite_n":20}}'
+  # The side check on general skills is switched off for this run (noisy on a handful of questions),
+  # so training on the bundled samples must end in PROMOTE and answering with a trained version is
+  # always exercised.
+  [string]$TrainOverrides = '{"sft":{"max_steps":40,"eval_every":20,"checkpoint_every":20},"stage2":{"mode":"none"},"gate":{"general_suite_n":20,"max_general_drop_pts":100}}'
 )
 $ErrorActionPreference = "Stop"
 $Installer = (Resolve-Path $Installer).Path
@@ -177,7 +180,7 @@ if (-not $Quick) {
     if (-not $t -or $t.decision -ne "PROMOTE") { Fail "training/gate did not promote: $($t | ConvertTo-Json -Compress)" }
   } else {
     $t = InkCli train --project clean-check --preset fast --overrides (JsonArg $TrainOverrides)
-    if (-not $t -or $t.decision -notin @("PROMOTE", "REJECT", "INSUFFICIENT_DATA")) { Fail "training/gate did not finish" }
+    if (-not $t -or $t.decision -ne "PROMOTE") { Fail "training finished but the trained model was not promoted on the bundled samples: $($t | ConvertTo-Json -Compress -Depth 4)" }
   }
   if ($sampler) { Stop-Job $sampler -ErrorAction SilentlyContinue; Remove-Job $sampler -Force -ErrorAction SilentlyContinue }
   Pass "trained + gated on the hidden test: $($t.decision) $($t.version)"

@@ -39,10 +39,12 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: pnpm, cache-dependency-path: inkport/pnpm-lock.yaml }
       - name: Build installer
+        id: build
         run: scripts/build_all_in_one.sh
       - name: Clean-machine check (offline)
         run: scripts/clean_machine_check.sh build/installers/macos-aarch64-mlx/*.dmg
       - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}   # a failed check turns the job red but keeps the download
         with:
           name: Inkport-macOS-AppleSilicon
           path: |
@@ -134,7 +136,7 @@ jobs:
           $f = @(Get-ChildItem build/installers/windows-x86_64-cpu/* -Include *.exe, *.zip) | Sort-Object { $_.Extension -ne ".exe" } | Select-Object -First 1
           Write-Host "### checking $($f.Name)"
           # A short run: this proves training, the gate and adapter serving work on Windows; it is not a quality benchmark.
-          ./scripts/clean_machine_check.ps1 -Installer $f.FullName -TrainOverrides '{"sft":{"max_steps":12,"eval_every":12,"checkpoint_every":12},"stage2":{"mode":"none"},"gate":{"general_suite_n":8,"max_new_tokens":96},"dev_eval_n":8}'
+          ./scripts/clean_machine_check.ps1 -Installer $f.FullName -TrainOverrides '{"sft":{"max_steps":12,"eval_every":12,"checkpoint_every":12},"stage2":{"mode":"none"},"gate":{"general_suite_n":8,"max_new_tokens":96,"max_general_drop_pts":100},"dev_eval_n":8}'
           if ($LASTEXITCODE -ne 0) { exit 1 }
       - name: The .exe installer must exist (the portable zip alone is not a complete release)
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
@@ -171,10 +173,12 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: pnpm, cache-dependency-path: inkport/pnpm-lock.yaml }
       - name: Build installers
+        id: build
         run: scripts/build_all_in_one.sh
       - name: Clean-machine check (offline)
         run: scripts/clean_machine_check.sh build/installers/linux-x86_64-cpu/*.AppImage
       - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}   # a failed check turns the job red but keeps the download
         with:
           name: Inkport-Linux-x64
           path: |
