@@ -99,7 +99,7 @@ jobs:
         run: ./scripts/build_all_in_one.ps1 -VulkanOptional -Bundles nsis
       - name: Quick clean-machine check (offline install, integrity, practice exam, answers)
         shell: pwsh
-        timeout-minutes: 45
+        timeout-minutes: 30
         run: |
           $files = @(Get-ChildItem build/installers/windows-x86_64-cpu/* -Include *.exe, *.zip)
           if ($files.Count -eq 0) { throw "no Windows installer was produced" }
@@ -129,7 +129,7 @@ jobs:
           retention-days: 30
       - name: Full clean-machine check (adds training + the hidden-test gate on the processor)
         shell: pwsh
-        timeout-minutes: 180
+        timeout-minutes: 100
         run: |
           $f = @(Get-ChildItem build/installers/windows-x86_64-cpu/* -Include *.exe, *.zip) | Sort-Object { $_.Extension -ne ".exe" } | Select-Object -First 1
           Write-Host "### checking $($f.Name)"

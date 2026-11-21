@@ -139,13 +139,50 @@ def watch_parent_stdin() -> None:
     """Exit when the supervisor dies: it holds our stdin open; EOF means it is gone."""
     if os.environ.get("INKPORT_WATCH_STDIN") != "1":
         return
+    target = _watch_stdin_windows if os.name == "nt" else _watch_stdin_posix
+    threading.Thread(target=target, name="inkport-parent-watch", daemon=True).start()
 
-    def _watch() -> None:
-        try:
-            while sys.stdin.read(1024):
-                pass
-        except Exception:  # noqa: BLE001
+
+def _watch_stdin_posix() -> None:
+    try:
+        while sys.stdin.read(1024):
             pass
-        os._exit(3)
+    except Exception:  # noqa: BLE001
+        pass
+    os._exit(3)
 
-    threading.Thread(target=_watch, name="inkport-parent-watch", daemon=True).start()
+
+def _watch_stdin_windows() -> None:
+    """Poll the pipe instead of blocking in a read.
+
+    On Windows a blocking read on the stdin pipe serializes every other operation on that pipe,
+    including the start-up of any child process that inherits it: the child (and the thread that
+    waits for it) would hang forever. PeekNamedPipe returns immediately and reports a broken pipe
+    once the supervisor is gone.
+    """
+    try:
+        import ctypes  # noqa: WPS433
+        import msvcrt  # noqa: WPS433
+        from ctypes import wintypes  # noqa: WPS433
+
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.GetFileType.argtypes = [wintypes.HANDLE]
+        k32.GetFileType.restype = wintypes.DWORD
+        k32.PeekNamedPipe.argtypes = [wintypes.HANDLE, wintypes.LPVOID, wintypes.DWORD, wintypes.LPDWORD, wintypes.LPDWORD, wintypes.LPDWORD]
+        k32.PeekNamedPipe.restype = wintypes.BOOL
+        fd = sys.stdin.fileno()
+        handle = msvcrt.get_osfhandle(fd)
+        if k32.GetFileType(handle) != 3:  # FILE_TYPE_PIPE; a console or NUL is never watched
+            return
+        while True:
+            avail = wintypes.DWORD(0)
+            if not k32.PeekNamedPipe(handle, None, 0, None, ctypes.byref(avail), None):
+                if ctypes.get_last_error() in (109, 233):  # ERROR_BROKEN_PIPE, ERROR_PIPE_NOT_CONNECTED
+                    break
+                return  # anything unexpected: stop watching rather than risk killing a healthy job
+            if avail.value:
+                os.read(fd, min(int(avail.value), 65536))  # data is waiting, so this cannot block
+            time.sleep(0.5)
+    except Exception:  # noqa: BLE001
+        return
+    os._exit(3)

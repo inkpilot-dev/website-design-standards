@@ -99,7 +99,7 @@ impl App {
         let cfg = match &bundle {
             Some(b) => {
                 let (env, env_remove) = b.engine_env(&home);
-                EngineConfig { python: b.python(), pythonpath: None, home: home.clone(), stall_secs: 600, python_flags: vec!["-I".into(), "-B".into()], env, env_remove }
+                EngineConfig { python: b.python(), pythonpath: None, home: home.clone(), stall_secs: 600, python_flags: vec!["-I".into(), "-B".into(), "-X".into(), "utf8".into()], env, env_remove }
             }
             None => EngineConfig { python: runtime::python_path(&home), pythonpath: runtime::dev_engine_root(), home: home.clone(), stall_secs: 600, python_flags: vec![], env: vec![], env_remove: vec![] },
         };

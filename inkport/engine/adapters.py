@@ -384,7 +384,19 @@ def try_export_gguf(plan: dict, adapter_dir: Path, out_dir: Path) -> Optional[Pa
     out_dir.mkdir(parents=True, exist_ok=True)
     out = out_dir / "adapter-f16.gguf"
     env = {**os.environ, "PYTHONPATH": str(Path(llama)) + os.pathsep + os.environ.get("PYTHONPATH", ""), "NO_LOCAL_GGUF": "1"}
-    proc = subprocess.run([sys.executable, str(script), "--base", plan["base_model"]["path"], "--outfile", str(out), "--outtype", "f16", str(adapter_dir)], capture_output=True, text=True, env=env)
+    env.pop("INKPORT_WATCH_STDIN", None)
+    cmd = [sys.executable, "-X", "utf8", str(script), "--base", plan["base_model"]["path"], "--outfile", str(out), "--outtype", "f16", str(adapter_dir)]
+    try:
+        # stdin=DEVNULL: the child must never inherit our stdin pipe (on Windows that can hang it
+        # at start-up). No console window on Windows; bounded time so a stuck export cannot hold
+        # a finished training run hostage (the version is then served by the Python worker).
+        proc = subprocess.run(cmd, stdin=subprocess.DEVNULL, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, timeout=1800, creationflags=0x08000000 if os.name == "nt" else 0)
+    except subprocess.TimeoutExpired:
+        events.log("GGUF export timed out; this version will be served without the fast answer engine", "warn")
+        return None
+    except OSError as exc:
+        events.log(f"GGUF export could not start: {exc}", "warn")
+        return None
     if proc.returncode != 0 or not out.is_file():
         events.log("GGUF export failed: " + proc.stderr[-400:], "warn")
         return None

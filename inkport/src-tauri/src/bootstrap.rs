@@ -376,7 +376,7 @@ fn command(program: &Path) -> tokio::process::Command {
 pub async fn engine_hello(bundle: &Bundle, home: &Path) -> Result<(String, BTreeMap<String, bool>)> {
     let (set, remove) = bundle.engine_env(home);
     let mut c = command(&bundle.python());
-    c.args(["-I", "-B", "-m", "engine", "hello"]);
+    c.args(["-I", "-B", "-X", "utf8", "-m", "engine", "hello"]);
     for k in &remove {
         c.env_remove(k);
     }

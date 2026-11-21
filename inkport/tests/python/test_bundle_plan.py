@@ -22,3 +22,29 @@ def test_gguf_base_on_nvidia_trains_in_bf16_without_bitsandbytes(tmp_path):
     project = {"base_model": {"id": "q", "path": str(tmp_path), "gguf": "q.gguf"}, "backend": "unsloth"}
     plan = make_plan(project, _report("nvidia"), preset="fast")
     assert plan["quant"] == "bf16" and plan["backend"] == "torch"
+
+
+def test_gguf_export_never_inherits_stdin(tmp_path, monkeypatch):
+    """Windows: a child that inherits the engine's stdin pipe hangs at start-up (the engine polls
+    that pipe to notice a dead supervisor), so the converter must get its own stdin and a time limit."""
+    import subprocess
+
+    from engine import adapters
+
+    conv = tmp_path / "convert"
+    conv.mkdir()
+    (conv / "convert_lora_to_gguf.py").write_text("")
+    monkeypatch.setenv("INKPORT_LLAMA_CPP", str(conv))
+    monkeypatch.setenv("INKPORT_WATCH_STDIN", "1")
+    seen = {}
+
+    def fake_run(cmd, **kwargs):
+        seen.update(kwargs, cmd=cmd)
+        return subprocess.CompletedProcess(cmd, 1, "", "boom")
+
+    monkeypatch.setattr(adapters.subprocess, "run", fake_run)
+    assert adapters.try_export_gguf({"base_model": {"path": str(tmp_path)}}, tmp_path / "adapter", tmp_path / "out") is None
+    assert seen["stdin"] is subprocess.DEVNULL
+    assert seen["timeout"] and seen["timeout"] <= 3600
+    assert "INKPORT_WATCH_STDIN" not in seen["env"]
+    assert seen["cmd"][1:3] == ["-X", "utf8"]

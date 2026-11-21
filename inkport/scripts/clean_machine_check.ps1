@@ -155,6 +155,23 @@ Pass "bundled model answers on 127.0.0.1:${Port}: 401 without key, models listed
 
 if (-not $Quick) {
   Say "Training on the bundled samples (slow without an NVIDIA GPU: expect 30-90 minutes on a processor)"
+  # Every two minutes report free memory and the engine's memory/CPU use, so a stall or a PC that
+  # is out of memory is visible in the output instead of looking like a silent wait.
+  $sampler = $null
+  if (Get-Command Start-ThreadJob -ErrorAction SilentlyContinue) {
+    $sampler = Start-ThreadJob -ScriptBlock {
+      while ($true) {
+        Start-Sleep -Seconds 120
+        try {
+          $os = Get-CimInstance Win32_OperatingSystem
+          $line = "      [{0:HH:mm:ss}] memory: {1:N1} of {2:N1} GB free" -f (Get-Date), ($os.FreePhysicalMemory / 1MB), ($os.TotalVisibleMemorySize / 1MB)
+          $py = Get-Process python -ErrorAction SilentlyContinue | Sort-Object WorkingSet64 -Descending | Select-Object -First 1
+          if ($py) { $line += "; engine: {0:N1} GB in RAM, {1:N1} GB reserved, {2:N0} s of processor time" -f ($py.WorkingSet64 / 1GB), ($py.PrivateMemorySize64 / 1GB), $py.CPU }
+          [Console]::WriteLine($line)
+        } catch { }
+      }
+    }
+  }
   if ($model -eq "smoke-tiny") {
     $t = InkCli train --project clean-check --preset smoke
     if (-not $t -or $t.decision -ne "PROMOTE") { Fail "training/gate did not promote: $($t | ConvertTo-Json -Compress)" }
@@ -162,6 +179,7 @@ if (-not $Quick) {
     $t = InkCli train --project clean-check --preset fast --overrides (JsonArg $TrainOverrides)
     if (-not $t -or $t.decision -notin @("PROMOTE", "REJECT", "INSUFFICIENT_DATA")) { Fail "training/gate did not finish" }
   }
+  if ($sampler) { Stop-Job $sampler -ErrorAction SilentlyContinue; Remove-Job $sampler -Force -ErrorAction SilentlyContinue }
   Pass "trained + gated on the hidden test: $($t.decision) $($t.version)"
 
   $a = InkCli api-smoke --project clean-check --port $Port

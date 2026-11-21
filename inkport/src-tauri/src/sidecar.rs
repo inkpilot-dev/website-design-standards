@@ -18,7 +18,7 @@ use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::io::BufReader;
 use tokio::process::{Child, Command};
 use tokio::sync::{oneshot, watch};
 
@@ -148,8 +148,11 @@ impl Supervisor {
         let stdout = child.stdout.take().expect("piped stdout");
         let stderr = child.stderr.take().expect("piped stderr");
         let _stdin = child.stdin.take(); // keep open for the engine's parent-death watch
-        let mut lines = BufReader::new(stdout).lines();
-        let mut errs = BufReader::new(stderr).lines();
+        // Read raw lines and decode leniently: one byte that is not valid UTF-8 (a legacy Windows
+        // code page, a library printing binary) must never stop us draining the pipes, or the
+        // engine would block forever on a full pipe.
+        let (mut out_r, mut out_buf) = (BufReader::new(stdout), Vec::new());
+        let (mut err_r, mut err_buf) = (BufReader::new(stderr), Vec::new());
         let mut ready_tx = Some(ready_tx);
         let mut done: Option<(bool, Value)> = None;
         let mut error: Option<EngineError> = None;
@@ -165,7 +168,7 @@ impl Supervisor {
                 break false;
             }
             tokio::select! {
-                line = lines.next_line(), if stdout_open => match line {
+                line = next_line_lossy(&mut out_r, &mut out_buf), if stdout_open => match line {
                     Ok(Some(line)) => {
                         last = Instant::now();
                         let trimmed = line.trim();
@@ -186,7 +189,7 @@ impl Supervisor {
                     }
                     _ => stdout_open = false,
                 },
-                line = errs.next_line(), if stderr_open => match line {
+                line = next_line_lossy(&mut err_r, &mut err_buf), if stderr_open => match line {
                     Ok(Some(line)) => {
                         last = Instant::now();
                         if stderr_tail.len() >= 40 { stderr_tail.remove(0); }
@@ -271,3 +274,16 @@ async fn kill_tree(child: &mut Child) {
     }
     let _ = child.kill().await;
 }
+/// Next line from a child pipe, decoded leniently (invalid UTF-8 becomes U+FFFD). Cancel-safe:
+/// bytes read before a `select!` cancellation stay in `buf` and are continued by the next call.
+async fn next_line_lossy<R: tokio::io::AsyncBufRead + Unpin>(reader: &mut R, buf: &mut Vec<u8>) -> std::io::Result<Option<String>> {
+    use tokio::io::AsyncBufReadExt;
+    let n = reader.read_until(b'\n', buf).await?;
+    if n == 0 && buf.is_empty() {
+        return Ok(None);
+    }
+    let line = String::from_utf8_lossy(buf).trim_end_matches(['\r', '\n']).to_string();
+    buf.clear();
+    Ok(Some(line))
+}
+

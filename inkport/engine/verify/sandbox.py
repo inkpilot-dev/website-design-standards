@@ -90,10 +90,12 @@ def run_tests(code: str, tests: list[dict], timeout_s: float = 6.0, mem_mb: int 
     with tempfile.TemporaryDirectory(prefix="ik-sbx-") as cwd:
         try:
             proc = subprocess.run(
-                [sys.executable, "-I", "-S", "-B", str(RUNNER)],
+                [sys.executable, "-I", "-S", "-B", "-X", "utf8", str(RUNNER)],
                 input=json.dumps({"code": code, "tests": tests, "nonce": nonce}),
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=timeout_s,
                 cwd=cwd,
                 env=env,
