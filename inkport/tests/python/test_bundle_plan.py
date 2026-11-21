@@ -48,3 +48,15 @@ def test_gguf_export_never_inherits_stdin(tmp_path, monkeypatch):
     assert seen["timeout"] and seen["timeout"] <= 3600
     assert "INKPORT_WATCH_STDIN" not in seen["env"]
     assert seen["cmd"][1:3] == ["-X", "utf8"]
+
+
+def test_format_check_needs_a_real_drop():
+    """Two malformed answers out of ~90 must not veto a model (it used to: a fixed 2-point limit)."""
+    from engine.pipeline.train_and_gate import format_check
+
+    ref = [True] * 88
+    assert format_check(1.0, 85 / 88, ref, [True] * 85 + [False] * 3)  # 3.4 points, p = 0.25: noise
+    assert not format_check(1.0, 80 / 88, ref, [True] * 80 + [False] * 8)  # 9 points, p = 0.008: real
+    assert format_check(1.0, 0.99, ref, [True] * 88)  # within the 2-point tolerance
+    assert format_check(None, 0.5, None, [])  # nothing to compare
+    assert not format_check(1.0, 0.9, None, [True] * 88)  # old cached baseline: plain threshold

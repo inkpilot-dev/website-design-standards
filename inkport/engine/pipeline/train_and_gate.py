@@ -116,6 +116,31 @@ def format_rate(res: dict) -> Optional[float]:
     return (sum(vals) / len(vals)) if vals else None
 
 
+def format_pass(res: dict) -> list[Optional[bool]]:
+    """Per test item: did every JSON-validity check pass (None when the item has no such check)."""
+    out: list[Optional[bool]] = []
+    for r in res["results"]:
+        vals = [bool(v["pass"]) for v in r["verdicts"] if v["kind"] == "json_valid" and v["pass"] is not None]
+        out.append(all(vals) if vals else None)
+    return out
+
+
+def format_check(f_ref: Optional[float], f_cand: Optional[float], ref_items: Optional[list], cand_items: list) -> bool:
+    """False only when the candidate formats answers worse than the reference beyond noise.
+
+    A drop of more than 2 points must also be statistically visible on the paired items (exact
+    McNemar, p <= 0.10), like the general-skills check: on ~90 questions two malformed answers are
+    already 2.3 points, which used to veto models that were far better on the task itself.
+    """
+    if f_ref is None or f_cand is None or f_cand >= f_ref - 0.02:
+        return True
+    if not ref_items or len(ref_items) != len(cand_items):
+        return False  # no per-item data (older cached baseline): keep the plain threshold
+    pairs = [(bool(x), bool(y)) for x, y in zip(ref_items, cand_items) if x is not None and y is not None]
+    gained, lost = discordant([x for x, _ in pairs], [y for _, y in pairs])
+    return mcnemar_exact(gained, lost) > 0.10
+
+
 def audit_rate(res: dict) -> Optional[float]:
     """Among items that passed, the fraction that also pass the held-out audit verifiers."""
     vals = [r["audit_pass"] for r in res["results"] if r["pass"] and r["audit_pass"] is not None]
@@ -219,7 +244,7 @@ class Trainer:
         gen = eval_general(b, int(self.gate_cfg["general_suite_n"]), use_adapter=False)
         emit_eval("general", "base", gen)
         data = {
-            "test": {k: test[k] for k in ("n", "passed", "pass")} | {"format_rate": format_rate(test), "outputs": test["outputs"]},
+            "test": {k: test[k] for k in ("n", "passed", "pass")} | {"format_rate": format_rate(test), "format_pass": format_pass(test), "outputs": test["outputs"]},
             "dev_outputs": dev_res["outputs"],
             "dev_pass": dev_res["pass"],
             "general": gen,
@@ -458,7 +483,7 @@ class Trainer:
                 else:
                     bi = self.load(inc_dir)
                     r = evaluate(bi, self.test, self.vset, self.ctx, self.max_new, progress=prog, offset=len(self.test))
-                    inc = {"n": r["n"], "passed": r["passed"], "pass": r["pass"], "format_rate": format_rate(r), "general": eval_general(bi, int(self.gate_cfg["general_suite_n"]))}
+                    inc = {"n": r["n"], "passed": r["passed"], "pass": r["pass"], "format_rate": format_rate(r), "format_pass": format_pass(r), "general": eval_general(bi, int(self.gate_cfg["general_suite_n"]))}
                     atomic_write_json(cache, inc)
                 emit_eval("test", "incumbent", inc)
                 ref_name, ref, ref_gen = f"current version {incumbent['version']}", inc, inc["general"]
@@ -484,7 +509,7 @@ class Trainer:
         verified = n >= int(self.gate_cfg["verified_min_items"])
         task_ok = delta >= float(self.gate_cfg["min_delta_pts"]) and ((lo > 0) if verified else (p_val < 0.05))
         general_ok = not (g_drop > float(self.gate_cfg["max_general_drop_pts"]) and g_p <= 0.10)
-        format_ok = True if (f_ref is None or f_cand is None) else (f_cand >= f_ref - 0.02)
+        format_ok = format_check(f_ref, f_cand, ref.get("format_pass"), format_pass(cand))
         audit_ok = True if aud is None else aud >= 0.9
         checks = {"task": task_ok, "general": general_ok, "format": format_ok, "audit": audit_ok, "leakage": True}
         if decision != "INSUFFICIENT_DATA":
