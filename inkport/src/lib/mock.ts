@@ -137,8 +137,8 @@ export async function mockInvoke<T>(cmd: string, args: Record<string, unknown> =
     case "list_projects":
       return (project ? [project] : []) as T;
     case "create_project": {
-      const req = args.request as { name: string; template: string };
-      project = { id: "p1", slug: req.name.toLowerCase().replace(/[^a-z0-9]+/g, "-"), name: req.name, template: req.template, dir: "~/Inkport/projects/" + req.name, base_model: { id: "qwen3-8b", path: "" }, active_version: null };
+      const req = args.request as { name: string; template: string; base_model_id?: string | null };
+      project = { id: "p1", slug: req.name.toLowerCase().replace(/[^a-z0-9]+/g, "-"), name: req.name, template: req.template, dir: "~/Inkport/projects/" + req.name, base_model: { id: req.base_model_id ?? "qwen3-1.7b", path: "" }, active_version: null };
       return project as T;
     }
     case "get_project":

@@ -1,18 +1,19 @@
 import { useEffect, useRef, useState } from "react";
 import type { AppError, EngineEvent, ProjectInfo } from "../lib/contract";
 import { api, on, subscribe, toAppError } from "../lib/ipc";
-import { Badge, Button, Card, Drawer, ErrorNote, fmtEta, LiftGauge, ProgressBar, Sparkline } from "../components/ui";
+import { Check, Gauge, Rocket, X } from "lucide-react";
+import { Badge, Button, Card, ChoiceCard, Drawer, ErrorNote, fmtEta, Icon, LiftGauge, PageHeader, ProgressBar, SectionTitle, Sparkline, TextInput } from "../components/ui";
 
 type Bench = Extract<EngineEvent, { type: "benchmark" }>;
 type Gate = Extract<EngineEvent, { type: "gate" }>;
 
-const STAGES: { id: string; label: string }[] = [
-  { id: "verify_data", label: "Check data" },
-  { id: "baseline", label: "Test the original" },
-  { id: "sft", label: "Learn" },
-  { id: "stage2", label: "Practice" },
-  { id: "gate", label: "Final exam" },
-  { id: "promote", label: "Save" },
+const STAGES: { id: string; label: string; what: string }[] = [
+  { id: "verify_data", label: "Check data", what: "Confirms that no final-exam question leaked into the training set." },
+  { id: "baseline", label: "Test the original", what: "The untouched model sits the hidden final exam, to set the score to beat." },
+  { id: "sft", label: "Learn", what: "Your model studies your examples and is checked on practice questions as it goes." },
+  { id: "stage2", label: "Practice", what: "It answers practice questions and keeps learning from the ones it gets right." },
+  { id: "gate", label: "Final exam", what: "The trained model sits the same hidden exam as the original." },
+  { id: "promote", label: "Save", what: "A new version is saved only if it clearly beat the original." },
 ];
 
 export function TrainingArena({ project, onDeploy }: { project: ProjectInfo; onDeploy: () => void }) {
@@ -115,35 +116,54 @@ export function TrainingArena({ project, onDeploy }: { project: ProjectInfo; onD
   const finished = !running && (gate !== null || overall >= 100);
 
   return (
-    <div className="space-y-6">
-      <header className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight">Train “{project.name}”</h1>
-          <p className="mt-2 text-muted">Your AI studies your examples, then sits a final exam it has never seen. It is only kept if it beats the original.</p>
-        </div>
-        {!running && !finished && (
-          <div className="flex gap-2">
-            <Button onClick={() => start("standard")}>Start training (best results)</Button>
-            <Button variant="secondary" onClick={() => start("fast")}>Quick run</Button>
-          </div>
-        )}
-        {running && <Button variant="danger" onClick={cancel}>Stop</Button>}
-      </header>
+    <div className="space-y-10">
+      <PageHeader
+        eyebrow={project.name}
+        title="Train and prove"
+        lead="Your AI studies your examples, then sits a final exam it has never seen. It is only kept if it beats the original."
+        action={running ? <Button variant="danger" onClick={cancel}>Stop training</Button> : undefined}
+      />
       <ErrorNote error={error} onRetry={error?.retryable ? () => start("standard") : undefined} />
 
+      {!running && !finished && (
+        <>
+          <div className="grid gap-5 sm:grid-cols-2">
+            <ChoiceCard icon={Rocket} title="Best results" onClick={() => start("standard")}>
+              Trains for as long as it keeps improving, up to about 8 hours. Choose this when the result matters.
+            </ChoiceCard>
+            <ChoiceCard icon={Gauge} title="Quick run" onClick={() => start("fast")}>
+              A shorter run, up to about 90 minutes. Good for a first look at whether your examples teach the skill.
+            </ChoiceCard>
+          </div>
+          <section className="space-y-5 pt-4">
+            <SectionTitle title="What happens" lead="Six steps run on this computer, in order. You can stop at any time and nothing is saved unless the last step passes." />
+            <ol className="divide-y divide-line border-y border-line">
+              {STAGES.map((s, i) => (
+                <li key={s.id} className="flex gap-5 py-4 text-[15px]">
+                  <span className="w-5 flex-none font-mono text-[13px] leading-6 text-faint">{i + 1}</span>
+                  <span className="w-40 flex-none font-semibold">{s.label}</span>
+                  <span className="leading-relaxed text-muted">{s.what}</span>
+                </li>
+              ))}
+            </ol>
+          </section>
+        </>
+      )}
+
       {(running || finished) && (
-        <Card className="space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="text-sm text-muted">{running ? stageDetail || "Starting…" : "Finished"}</div>
-            <div className="text-sm font-semibold tabular-nums">{Math.round(overall)}% · {running ? `${fmtEta(eta)} left in this step` : "done"}</div>
+        <Card className="space-y-5">
+          <div className="flex flex-wrap items-baseline justify-between gap-2">
+            <div className="text-[15px] text-muted">{running ? stageDetail || "Starting…" : "Finished"}</div>
+            <div className="text-[15px] font-medium tabular-nums">{Math.round(overall)}%<span className="ml-2 font-normal text-muted">{running ? `${fmtEta(eta)} left in this step` : "done"}</span></div>
           </div>
           <ProgressBar value={overall} label="Overall training progress" />
-          <ol className="flex flex-wrap gap-2">
+          <ol className="flex flex-wrap gap-x-6 gap-y-2 text-sm">
             {STAGES.map((s) => {
               const st = stageState[s.id];
               return (
-                <li key={s.id} className={`rounded-full border px-3 py-1 text-xs ${st === "done" ? "border-accent/40 bg-accent-soft text-accent" : st === "active" ? "border-accent text-ink" : st === "failed" ? "border-bad text-bad" : "border-line text-muted"}`}>
-                  {st === "done" ? "✓ " : st === "active" ? "● " : ""}{s.label}
+                <li key={s.id} className={`inline-flex items-center gap-1.5 ${st === "done" ? "text-ink" : st === "active" ? "font-semibold text-ink" : st === "failed" ? "text-bad" : "text-faint"}`}>
+                  {st === "done" ? <Icon icon={Check} size={14} className="text-good" /> : st === "failed" ? <Icon icon={X} size={14} /> : <span className={`h-1.5 w-1.5 rounded-full ${st === "active" ? "animate-pulse bg-ink" : "bg-line"}`} aria-hidden />}
+                  {s.label}
                 </li>
               );
             })}
@@ -151,80 +171,90 @@ export function TrainingArena({ project, onDeploy }: { project: ProjectInfo; onD
         </Card>
       )}
 
-      {(running || finished) && (
-        <div className="grid gap-4 lg:grid-cols-5">
-          <Card className="lg:col-span-2">
-            <LiftGauge label={candRate !== null ? "Final exam (hidden questions)" : "Practice score so far"} before={baseRate} after={candRate ?? devPass} />
-            <p className="mt-3 text-xs text-muted">“Original” is the untouched model on the hidden exam. {candRate === null ? "“Yours” is your model on practice questions while it learns." : "“Yours” is your trained model on the same hidden exam."}</p>
-          </Card>
-          <Card className="space-y-3 lg:col-span-3">
-            <div className="text-sm font-semibold">Proof Arena: same question, both models</div>
-            {duels.length === 0 && <div className="text-sm text-muted">Side-by-side answers appear here as training checks its progress.</div>}
-            {duels.slice(0, 3).map((d) => (
-              <Duel key={d.case_id} d={d} />
-            ))}
-          </Card>
-        </div>
-      )}
-
       {gate && (
-        <Card className={promoted ? "border-accent/50" : "border-warn/60"}>
+        <Card className={`space-y-4 ${promoted ? "border-ink" : ""}`}>
           <div className="flex flex-wrap items-center gap-2">
-            {promoted ? <Badge tone="good">✓ Better: new version {gate.version ?? ""} saved</Badge> : gate.decision === "INSUFFICIENT_DATA" ? <Badge tone="warn">Need more examples</Badge> : <Badge tone="warn">Not better yet: your previous version stays active</Badge>}
+            {promoted ? <Badge tone="good"><Icon icon={Check} size={13} /> Better: new version {gate.version ?? ""} saved</Badge> : gate.decision === "INSUFFICIENT_DATA" ? <Badge tone="warn">Need more examples</Badge> : <Badge tone="warn">{project.active_version ? "Not better yet: your current version stays active" : "Not better yet: nothing was saved"}</Badge>}
             {gate.label && <Badge>{gate.label === "VERIFIED" ? "Verified result" : "Preliminary result"}</Badge>}
           </div>
-          <p className="mt-3 text-[15px] leading-relaxed">{gate.explanation}</p>
-          <div className="mt-4 flex flex-wrap gap-3">
+          <p className="max-w-[70ch] text-[17px] leading-[1.65]">{gate.explanation}</p>
+          <div className="flex flex-wrap gap-3 pt-1">
             {promoted && <Button onClick={onDeploy}>Use it in your apps</Button>}
             <Button variant="secondary" onClick={() => start("standard")}>Train again</Button>
           </div>
         </Card>
       )}
 
-      {finished && promoted && (
-        <Card className="space-y-3">
-          <div className="text-sm font-semibold">Ask both models yourself</div>
-          <div className="flex gap-2">
-            <input value={prompt} onChange={(e) => setPrompt(e.target.value)} onKeyDown={(e) => e.key === "Enter" && ask()} placeholder="Type a new example, or leave empty to use practice questions" className="flex-1 rounded-xl border border-line bg-canvas px-3 py-2 text-sm outline-none focus:border-accent" />
-            <Button onClick={ask} busy={asking}>Compare</Button>
-          </div>
-          {arena.map((d, i) => (
-            <Duel key={d.case_id + i} d={d} />
-          ))}
-        </Card>
+      {(running || finished) && (
+        <div className="grid gap-5 lg:grid-cols-5">
+          <Card className="lg:col-span-2 lg:self-start">
+            <LiftGauge label={candRate !== null ? "Final exam, hidden questions" : "Practice score so far"} before={baseRate} after={candRate ?? devPass} />
+            <p className="mt-6 text-sm leading-relaxed text-muted">“Original” is the untouched model on the hidden exam. {candRate === null ? "“Yours” is your model on practice questions while it learns." : "“Yours” is your trained model on the same hidden exam."}</p>
+          </Card>
+          <Card className="space-y-4 lg:col-span-3">
+            <h2 className="text-[17px] font-semibold tracking-[-0.01em]">Same question, both models</h2>
+            {duels.length === 0 && <div className="text-[15px] leading-relaxed text-muted">Side-by-side answers appear here as training checks its progress.</div>}
+            <div className="divide-y divide-line">
+              {duels.slice(0, 3).map((d) => (
+                <Duel key={d.case_id} d={d} />
+              ))}
+            </div>
+          </Card>
+        </div>
       )}
 
-      <Drawer title="Advanced metrics" open={advanced} onToggle={() => setAdvanced(!advanced)}>
-        <div className="grid gap-4 md:grid-cols-2">
-          <div>
-            <div className="text-xs text-muted">Training loss</div>
-            <Sparkline values={loss} />
+      {finished && promoted && (
+        <section className="space-y-5 pt-4">
+          <SectionTitle title="Ask both models yourself" lead="Type a new example, or leave the box empty to draw from your practice questions." />
+          <div className="flex gap-2">
+            <TextInput value={prompt} onChange={setPrompt} onEnter={ask} placeholder="e.g. a new line from your records" label="Question for both models" />
+            <Button onClick={ask} busy={asking}>Compare</Button>
           </div>
-          <dl className="grid grid-cols-2 gap-1 font-mono text-xs">
-            {Object.entries(metrics).map(([k, v]) => (
-              <div key={k} className="contents">
-                <dt className="text-muted">{k}</dt>
-                <dd>{v === null ? "–" : Math.abs(v) < 0.01 && v !== 0 ? v.toExponential(2) : Number(v.toFixed(4))}</dd>
-              </div>
-            ))}
-          </dl>
-        </div>
-        <pre className="mt-3 max-h-56 overflow-auto rounded-lg bg-canvas p-2 font-mono text-[11px] leading-snug">{logs.join("\n") || "Logs appear here."}</pre>
-      </Drawer>
+          {arena.length > 0 && (
+            <Card className="divide-y divide-line py-1">
+              {arena.map((d, i) => (
+                <Duel key={d.case_id + i} d={d} />
+              ))}
+            </Card>
+          )}
+        </section>
+      )}
+
+      {(running || finished) && (
+        <Drawer title="Advanced metrics" open={advanced} onToggle={() => setAdvanced(!advanced)}>
+          <div className="grid gap-6 md:grid-cols-2">
+            <div>
+              <div className="mb-2 text-xs text-muted">Training loss</div>
+              <Sparkline values={loss} />
+            </div>
+            <dl className="grid grid-cols-2 gap-1.5 font-mono text-xs">
+              {Object.entries(metrics).map(([k, v]) => (
+                <div key={k} className="contents">
+                  <dt className="text-muted">{k}</dt>
+                  <dd>{v === null ? "–" : Math.abs(v) < 0.01 && v !== 0 ? v.toExponential(2) : Number(v.toFixed(4))}</dd>
+                </div>
+              ))}
+            </dl>
+          </div>
+          <pre className="mt-5 max-h-56 overflow-auto rounded-xl bg-canvas p-4 font-mono text-[11px] leading-relaxed">{logs.join("\n") || "Logs appear here."}</pre>
+        </Drawer>
+      )}
     </div>
   );
 }
 
 function Duel({ d }: { d: Bench }) {
-  const mark = (p: boolean | null) => (p === null ? "" : p ? "✓" : "✗");
   return (
-    <div className="rounded-xl border border-line p-3 text-sm">
-      <div className="mb-2 line-clamp-2 font-medium">{d.prompt}</div>
-      <div className="grid gap-2 sm:grid-cols-2">
+    <div className="py-4 text-[15px]">
+      <div className="mb-3 line-clamp-2 font-medium leading-relaxed">{d.prompt}</div>
+      <div className="grid gap-3 sm:grid-cols-2">
         {([["Original", d.baseline], ["Yours", d.trained]] as const).map(([name, side]) => (
-          <div key={name} className={`rounded-lg p-2 ${side.pass ? "bg-accent-soft" : side.pass === false ? "bg-bad-soft" : "bg-canvas"}`}>
-            <div className="text-xs font-semibold">{name} {mark(side.pass)}</div>
-            <div className="mt-1 line-clamp-4 whitespace-pre-wrap break-words font-mono text-xs">{side.output || "(no answer)"}</div>
+          <div key={name} className={`rounded-xl px-3.5 py-3 ${side.pass ? "bg-good-soft" : side.pass === false ? "bg-bad-soft" : "bg-canvas"}`}>
+            <div className={`flex items-center gap-1.5 text-[13px] font-semibold ${side.pass ? "text-good" : side.pass === false ? "text-bad" : "text-muted"}`}>
+              {side.pass ? <Icon icon={Check} size={14} /> : side.pass === false ? <Icon icon={X} size={14} /> : null}
+              {name}
+            </div>
+            <div className="mt-1.5 line-clamp-4 whitespace-pre-wrap break-words font-mono text-[13px] leading-relaxed">{side.output || "(no answer)"}</div>
           </div>
         ))}
       </div>

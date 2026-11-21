@@ -534,7 +534,8 @@ class Trainer:
                 why.append("it formats answers correctly less often than before")
             if not audit_ok:
                 why.append("some correct-looking answers fail on scrambled data (likely memorized)")
-            lines.append("Not promoted because " + "; ".join(why) + ". Your current version stays active.")
+            kept = "Your current version stays active." if ref_name != "base" else "Nothing was saved, and the original model is unchanged."
+            lines.append("Not promoted because " + "; ".join(why) + ". " + kept)
 
         report = {
             "version": 1,

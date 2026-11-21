@@ -1,19 +1,59 @@
 import type { ReactNode } from "react";
+import { ChevronRight, type LucideIcon } from "lucide-react";
+
+/** Line icon at the size and weight used throughout the app. */
+export function Icon({ icon: I, size = 16, className = "" }: { icon: LucideIcon; size?: number; className?: string }) {
+  return <I size={size} strokeWidth={1.75} className={`flex-none ${className}`} aria-hidden />;
+}
+
+/** Page title block: a quiet line above, a large title, one lead paragraph, an optional action on the right. */
+export function PageHeader({ eyebrow, title, lead, action }: { eyebrow: string; title: string; lead: ReactNode; action?: ReactNode }) {
+  return (
+    <header>
+      <div className="text-[15px] text-muted">{eyebrow}</div>
+      <div className="mt-2 flex items-start justify-between gap-6">
+        <h1 className="min-w-0 flex-1 text-[40px] font-bold leading-[1.1] tracking-[-0.03em]">{title}</h1>
+        {action && <div className="flex flex-none gap-2 pt-1">{action}</div>}
+      </div>
+      <p className="mt-6 max-w-[62ch] text-[17px] leading-[1.65] text-muted">{lead}</p>
+    </header>
+  );
+}
+
+export function SectionTitle({ title, lead }: { title: string; lead?: ReactNode }) {
+  return (
+    <div>
+      <h2 className="text-[26px] font-bold leading-tight tracking-[-0.02em]">{title}</h2>
+      {lead && <p className="mt-3 max-w-[62ch] text-[16px] leading-[1.6] text-muted">{lead}</p>}
+    </div>
+  );
+}
 
 export function Card({ children, className = "" }: { children: ReactNode; className?: string }) {
-  return <div className={`rounded-2xl border border-line bg-panel p-5 shadow-sm ${className}`}>{children}</div>;
+  return <div className={`rounded-2xl border border-line bg-panel p-6 ${className}`}>{children}</div>;
+}
+
+/** A card that is one big button: icon, bold title, grey description. */
+export function ChoiceCard({ icon, title, children, selected, onClick, disabled }: { icon: LucideIcon; title: string; children: ReactNode; selected?: boolean; onClick: () => void; disabled?: boolean }) {
+  return (
+    <button onClick={onClick} disabled={disabled} aria-pressed={selected} className={`flex flex-col rounded-2xl border bg-panel p-7 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${selected ? "border-ink" : "border-line hover:border-ink"}`}>
+      <Icon icon={icon} size={26} />
+      <div className="mt-5 text-[17px] font-semibold tracking-[-0.01em]">{title}</div>
+      <div className="mt-1.5 text-[15px] leading-[1.6] text-muted">{children}</div>
+    </button>
+  );
 }
 
 type Variant = "primary" | "secondary" | "ghost" | "danger";
 export function Button({ children, onClick, variant = "primary", disabled, busy, className = "", title }: { children: ReactNode; onClick?: () => void; variant?: Variant; disabled?: boolean; busy?: boolean; className?: string; title?: string }) {
   const styles: Record<Variant, string> = {
-    primary: "bg-accent text-on-accent hover:brightness-110",
-    secondary: "border border-line bg-panel hover:bg-canvas",
-    ghost: "text-muted hover:text-ink",
-    danger: "border border-bad/40 text-bad hover:bg-bad-soft",
+    primary: "border border-ink bg-ink text-panel hover:opacity-85",
+    secondary: "border border-line bg-panel hover:border-ink",
+    ghost: "border border-transparent text-muted hover:text-ink",
+    danger: "border border-line bg-panel text-bad hover:border-bad",
   };
   return (
-    <button title={title} onClick={onClick} disabled={disabled || busy} className={`inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 ${styles[variant]} ${className}`}>
+    <button title={title} onClick={onClick} disabled={disabled || busy} className={`inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-[15px] font-medium transition disabled:cursor-not-allowed disabled:opacity-45 ${styles[variant]} ${className}`}>
       {busy && <Spinner />}
       {children}
     </button>
@@ -21,21 +61,28 @@ export function Button({ children, onClick, variant = "primary", disabled, busy,
 }
 
 export function Spinner() {
-  return <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" aria-hidden />;
+  return <span className="inline-block h-4 w-4 flex-none animate-spin rounded-full border-2 border-current border-t-transparent" aria-hidden />;
 }
 
 export function Badge({ children, tone = "neutral" }: { children: ReactNode; tone?: "neutral" | "good" | "warn" | "bad" }) {
-  const t = { neutral: "bg-canvas text-muted border-line", good: "bg-accent-soft text-accent border-accent/30", warn: "bg-warn-soft text-ink border-warn/40", bad: "bg-bad-soft text-bad border-bad/30" }[tone];
-  return <span className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-xs font-medium ${t}`}>{children}</span>;
+  const t = { neutral: "border-line text-muted", good: "border-good/25 bg-good-soft text-good", warn: "border-warn/30 bg-warn-soft text-ink", bad: "border-bad/25 bg-bad-soft text-bad" }[tone];
+  return <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[13px] font-medium leading-none ${t}`}>{children}</span>;
+}
+
+/** Short inline code or a value to copy, on a light grey chip. */
+export function Code({ children, className = "" }: { children: ReactNode; className?: string }) {
+  return <code className={`rounded-md bg-canvas px-1.5 py-0.5 font-mono text-[0.9em] ${className}`}>{children}</code>;
+}
+
+export function TextInput({ value, onChange, onEnter, placeholder, label }: { value: string; onChange: (v: string) => void; onEnter?: () => void; placeholder?: string; label?: string }) {
+  return <input value={value} aria-label={label} onChange={(e) => onChange(e.target.value)} onKeyDown={(e) => e.key === "Enter" && onEnter?.()} placeholder={placeholder} className="w-full min-w-0 flex-1 rounded-xl border border-line bg-panel px-3.5 py-2.5 text-[15px] outline-none transition-colors placeholder:text-faint focus:border-ink" />;
 }
 
 export function ProgressBar({ value, label }: { value: number; label?: string }) {
   const v = Math.max(0, Math.min(100, value));
   return (
-    <div>
-      <div className="h-3 w-full overflow-hidden rounded-full bg-line" role="progressbar" aria-valuenow={Math.round(v)} aria-valuemin={0} aria-valuemax={100} aria-label={label}>
-        <div className="h-full rounded-full bg-accent transition-[width] duration-500" style={{ width: `${v}%` }} />
-      </div>
+    <div className="h-1.5 w-full overflow-hidden rounded-full bg-line" role="progressbar" aria-valuenow={Math.round(v)} aria-valuemin={0} aria-valuemax={100} aria-label={label}>
+      <div className="h-full rounded-full bg-ink transition-[width] duration-500" style={{ width: `${v}%` }} />
     </div>
   );
 }
@@ -43,11 +90,11 @@ export function ProgressBar({ value, label }: { value: number; label?: string })
 export function ErrorNote({ error, onRetry }: { error: { code: string; message: string } | null; onRetry?: () => void }) {
   if (!error) return null;
   return (
-    <div className="rounded-xl border border-bad/30 bg-bad-soft p-3 text-sm" role="alert">
+    <div className="rounded-2xl border border-bad/30 bg-bad-soft p-5 text-[15px]" role="alert">
       <div className="font-semibold text-bad">Something went wrong</div>
-      <div className="mt-1 whitespace-pre-wrap">{error.message}</div>
+      <div className="mt-1 whitespace-pre-wrap leading-relaxed">{error.message}</div>
       {onRetry && (
-        <button className="mt-2 text-sm font-semibold text-bad underline" onClick={onRetry}>
+        <button className="mt-3 text-[15px] font-medium text-bad underline underline-offset-4" onClick={onRetry}>
           Try again
         </button>
       )}
@@ -57,12 +104,12 @@ export function ErrorNote({ error, onRetry }: { error: { code: string; message: 
 
 export function Drawer({ title, open, onToggle, children }: { title: string; open: boolean; onToggle: () => void; children: ReactNode }) {
   return (
-    <div className="rounded-xl border border-line">
-      <button onClick={onToggle} className="flex w-full items-center justify-between px-4 py-3 text-left text-sm font-semibold text-muted hover:text-ink" aria-expanded={open}>
+    <div className="rounded-2xl border border-line">
+      <button onClick={onToggle} className="flex w-full items-center justify-between rounded-2xl px-6 py-4 text-left text-[15px] font-medium text-muted transition-colors hover:text-ink" aria-expanded={open}>
         {title}
-        <span className={`transition ${open ? "rotate-90" : ""}`}>›</span>
+        <Icon icon={ChevronRight} className={`transition-transform ${open ? "rotate-90" : ""}`} />
       </button>
-      {open && <div className="border-t border-line px-4 py-3 text-sm">{children}</div>}
+      {open && <div className="border-t border-line px-6 py-5 text-sm">{children}</div>}
     </div>
   );
 }
@@ -74,31 +121,32 @@ export function Sparkline({ values, height = 40 }: { values: number[]; height?: 
   const max = Math.max(...values);
   const pts = values.map((v, i) => `${(i / (values.length - 1)) * w},${height - ((v - min) / (max - min || 1)) * (height - 4) - 2}`).join(" ");
   return (
-    <svg width={w} height={height} viewBox={`0 0 ${w} ${height}`} className="text-accent" aria-hidden>
-      <polyline points={pts} fill="none" stroke="currentColor" strokeWidth={2} strokeLinejoin="round" />
+    <svg width={w} height={height} viewBox={`0 0 ${w} ${height}`} className="text-ink" aria-hidden>
+      <polyline points={pts} fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinejoin="round" />
     </svg>
   );
 }
 
 export function LiftGauge({ before, after, label }: { before: number | null; after: number | null; label: string }) {
-  const b = before ?? 0;
-  const a = after ?? 0;
-  const lift = after !== null && before !== null ? Math.round((a - b) * 100) : null;
+  const lift = after !== null && before !== null ? Math.round((after - before) * 100) : null;
   return (
-    <div className="space-y-2">
-      <div className="flex items-baseline justify-between">
-        <div className="text-sm font-semibold">{label}</div>
-        {lift !== null && <div className={`text-2xl font-bold ${lift > 0 ? "text-accent" : lift < 0 ? "text-bad" : "text-muted"}`}>{lift > 0 ? "+" : ""}{lift} pts</div>}
+    <div>
+      <div className="text-[15px] text-muted">{label}</div>
+      <div className={`mt-1 text-[40px] font-bold leading-none tracking-[-0.03em] tabular-nums ${lift === null ? "text-faint" : lift < 0 ? "text-bad" : ""}`}>
+        {lift === null ? "–" : `${lift > 0 ? "+" : ""}${lift}`}
+        <span className="ml-1.5 text-[17px] font-medium tracking-normal text-muted">points</span>
       </div>
-      {[["Original", before, "bg-muted/50"], ["Yours", after, "bg-accent"]].map(([name, v, color]) => (
-        <div key={name as string} className="flex items-center gap-3">
-          <div className="w-16 text-xs text-muted">{name as string}</div>
-          <div className="h-2.5 flex-1 overflow-hidden rounded-full bg-line">
-            <div className={`h-full rounded-full ${color as string} transition-[width] duration-700`} style={{ width: `${Math.round(((v as number | null) ?? 0) * 100)}%` }} />
+      <div className="mt-6 space-y-3">
+        {([["Original", before, "bg-faint"], ["Yours", after, "bg-ink"]] as const).map(([name, v, color]) => (
+          <div key={name} className="flex items-center gap-3">
+            <div className="w-16 text-sm text-muted">{name}</div>
+            <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-line">
+              <div className={`h-full rounded-full ${color} transition-[width] duration-700`} style={{ width: `${Math.round((v ?? 0) * 100)}%` }} />
+            </div>
+            <div className="w-10 text-right text-sm font-medium tabular-nums">{v === null ? "–" : `${Math.round(v * 100)}%`}</div>
           </div>
-          <div className="w-10 text-right text-xs tabular-nums">{v === null ? "–" : `${Math.round((v as number) * 100)}%`}</div>
-        </div>
-      ))}
+        ))}
+      </div>
     </div>
   );
 }
