@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { AppError, IngestSummary, Preview, ProjectInfo, RuleReport, Template } from "../lib/contract";
-import { api, onFileDrop, pickFiles, toAppError } from "../lib/ipc";
+import { api, onFileDrop, pickFiles, subscribe, toAppError } from "../lib/ipc";
 import { Badge, Button, Card, Drawer, ErrorNote } from "../components/ui";
 
 const basename = (p: string) => p.split(/[\\/]/).pop() ?? p;
@@ -25,9 +25,7 @@ export function DataRulesStudio({ project, template, onBuilt }: { project: Proje
   }, []);
 
   useEffect(() => {
-    let un: (() => void) | undefined;
-    void onFileDrop(addFiles).then((u) => (un = u));
-    return () => un?.();
+    return subscribe(onFileDrop(addFiles));
   }, []);
 
   const addRule = async (text: string) => {

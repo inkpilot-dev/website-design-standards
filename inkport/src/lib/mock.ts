@@ -77,6 +77,9 @@ async function simulateTraining() {
   emit("training://progress", ev({ type: "eval", split: "test", model: "candidate", n: 120, passed: 104, pass_rate: 0.867, ci95: [0.79, 0.92] }));
   const explanation = "Your trained model passed 87% of the 120 hidden test questions, versus 32% for the base (+55.0 points). That difference is statistically solid (95% range +45.8 to +63.3 points). General skills: no meaningful drop.";
   emit("training://progress", ev({ type: "gate", decision: "PROMOTE", label: "VERIFIED", delta_pts: 55, baseline_pass_rate: 0.317, candidate_pass_rate: 0.867, checks: { task: true, general: true, format: true, audit: true, leakage: true }, version: "v1", report_path: "~/Inkport/projects/expense-sorter/versions/v1/report.json", explanation }));
+  emit("training://progress", ev({ type: "stage", stage: "promote", status: "started", detail: "Saving your new version" }));
+  await sleep(200);
+  emit("training://progress", ev({ type: "stage", stage: "promote", status: "completed", detail: "v1" }));
   trained = true;
   emit("training://progress", ev({ type: "done", ok: true, result: { decision: "PROMOTE", version: "v1", explanation } }));
 }

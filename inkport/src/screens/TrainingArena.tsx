@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { AppError, EngineEvent, ProjectInfo } from "../lib/contract";
-import { api, on, toAppError } from "../lib/ipc";
+import { api, on, subscribe, toAppError } from "../lib/ipc";
 import { Badge, Button, Card, Drawer, ErrorNote, fmtEta, LiftGauge, ProgressBar, Sparkline } from "../components/ui";
 
 type Bench = Extract<EngineEvent, { type: "benchmark" }>;
@@ -38,9 +38,8 @@ export function TrainingArena({ project, onDeploy }: { project: ProjectInfo; onD
   const jobRef = useRef<string | null>(null);
 
   useEffect(() => {
-    const uns: (() => void)[] = [];
     const mine = (e: EngineEvent) => !jobRef.current || e.job_id === jobRef.current || e.job_kind === "arena";
-    void on<EngineEvent>("training://progress", (e) => {
+    const progress = on<EngineEvent>("training://progress", (e) => {
       if (!mine(e)) return;
       if (e.type === "progress") {
         setOverall(e.overall_pct);
@@ -65,16 +64,16 @@ export function TrainingArena({ project, onDeploy }: { project: ProjectInfo; onD
         setOverall(100);
         setEta(0);
       }
-    }).then((u) => uns.push(u));
-    void on<EngineEvent>("benchmark://result", (e) => {
+    });
+    const results = on<EngineEvent>("benchmark://result", (e) => {
       if (e.type !== "benchmark") return;
       if (e.source === "training_dev") setDuels((d) => [e, ...d.filter((x) => x.case_id !== e.case_id)].slice(0, 6));
       else setArena((a) => [e, ...a].slice(0, 6));
-    }).then((u) => uns.push(u));
-    void on<EngineEvent>("training://log", (e) => {
+    });
+    const logLines = on<EngineEvent>("training://log", (e) => {
       if (e.type === "log" && e.level !== "debug") setLogs((l) => [...l.slice(-200), `${e.level.toUpperCase()}  ${e.message}`]);
-    }).then((u) => uns.push(u));
-    return () => uns.forEach((u) => u());
+    });
+    return subscribe(progress, results, logLines);
   }, []);
 
   const start = async (preset: "standard" | "fast" | "smoke") => {

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { AppError, HardwareReport, PackProgress, PackState, PreflightProgress, PreflightReport, RuntimeProgress } from "../lib/contract";
-import { api, on, toAppError } from "../lib/ipc";
+import { api, on, subscribe, toAppError } from "../lib/ipc";
 import { Badge, Button, Card, Drawer, ErrorNote, ProgressBar, Spinner } from "../components/ui";
 
 const gb = (bytes: number) => `${(bytes / 1e9).toFixed(1)} GB`;
@@ -33,12 +33,10 @@ export function SystemReady({ onReady }: { onReady: (hw: HardwareReport) => void
 
   useEffect(() => {
     void check();
-    let un: (() => void) | undefined;
-    void on<PreflightProgress | RuntimeProgress>("runtime://progress", (p) => {
+    return subscribe(on<PreflightProgress | RuntimeProgress>("runtime://progress", (p) => {
       if (p.type === "preflight") setProgress(p);
       else setDevSteps((prev) => [...prev.filter((s) => s.step !== p.step), p].sort((a, b) => a.step - b.step));
-    }).then((u) => (un = u));
-    return () => un?.();
+    }));
   }, []);
 
   const devSetup = async () => {
@@ -148,12 +146,10 @@ function AddOns() {
 
   useEffect(() => {
     void refresh();
-    let un: (() => void) | undefined;
-    void on<PackProgress>("packs://progress", (p) => {
+    return subscribe(on<PackProgress>("packs://progress", (p) => {
       setLive((l) => ({ ...l, [p.pack_id]: p }));
       if (p.status === "installed" || p.status === "failed" || p.status === "cancelled") void refresh();
-    }).then((u) => (un = u));
-    return () => un?.();
+    }));
   }, []);
 
   if (packs.length === 0) return null;

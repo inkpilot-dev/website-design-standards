@@ -36,6 +36,19 @@ export async function on<T>(channel: Channel, cb: (payload: T) => void): Promise
   return mockListen(channel, cb as (p: unknown) => void);
 }
 
+/** Use inside a React effect: `return subscribe(on(...), on(...))`. Also unsubscribes listeners
+ * that only finish registering after the effect was torn down (otherwise they would leak and
+ * every event would be handled twice). */
+export function subscribe(...pending: Promise<() => void>[]): () => void {
+  let alive = true;
+  const uns: (() => void)[] = [];
+  for (const p of pending) void p.then((u) => (alive ? uns.push(u) : u()));
+  return () => {
+    alive = false;
+    uns.forEach((u) => u());
+  };
+}
+
 export const api = {
   detectHardware: () => call<HardwareReport>("detect_hardware"),
   preflight: (forceFull = false) => call<PreflightReport>("preflight", { forceFull }),
