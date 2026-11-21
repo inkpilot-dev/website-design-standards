@@ -95,6 +95,29 @@ Every engine line is `{"v":1,"type":…,"job_id":…,"ts":…}` plus the type's 
 | Untrusted code can't escape | Rules are parsed with `ast` and run by a whitelisting interpreter (no `eval`). Model-written Python goes through an AST screen, then a separate `python -I -S` process with PEP 578 audit hooks (no file writes, reads outside the stdlib, sockets, subprocesses or ctypes), POSIX rlimits and a timeout. SQL runs on a read-only, immutable SQLite with an authorizer that allows only SELECT/READ/FUNCTION, and a step limit. |
 | Shared adapters can't poison you | A `.inkpatch` is Ed25519-signed with a SHA-256 for every file. Import checks zip safety, signature, publisher trust, adapter config (no `modules_to_save` or custom code), and every tensor's name, shape, dtype and finiteness against your base model. The adapter then has to win **your** hidden-test gate before activation. |
 
+## Install (no build tools needed)
+
+Ready-made installers are built by the **Inkport installers** GitHub Actions workflow; open its
+latest successful run and download one artifact. Everything is inside: nothing else is downloaded,
+and the app works offline.
+
+| Your computer | Download | Then |
+|---|---|---|
+| Windows 10/11 (64-bit) | `Inkport-Windows-x64-Installer` | Unzip, run `Inkport_<version>_x64-setup.exe`. It installs for your user only (no administrator password) and adds Inkport to the Start menu. |
+| Windows, no installer | `Inkport-Windows-x64-Portable` | Unzip, extract the inner zip anywhere, double-click `Inkport\Inkport.exe`. |
+| Mac with Apple Silicon | `Inkport-macOS-AppleSilicon` | Unzip, open the `.dmg`, drag Inkport to Applications. |
+| Linux (64-bit) | `Inkport-Linux-x64` | `chmod +x` the `.AppImage` and run it, or install the `.deb`. |
+
+The builds are not signed with paid certificates yet, so the first launch needs one extra click:
+on Windows choose **More info -> Run anyway** in the SmartScreen prompt; on macOS right-click the
+app and choose **Open** (if macOS says the app is damaged, run `xattr -cr /Applications/Inkport.app`
+once).
+
+Good to know on Windows: about 2.1 GB on disk; training without an NVIDIA graphics card runs on the
+processor (roughly 20-40 minutes for a short run on 200 examples, about 9 GB of memory); answers
+use any Vulkan-capable graphics card and fall back to the processor on their own. Set
+`INKPORT_ANSWERS_ON_CPU=1` to keep answers off the graphics card.
+
 ## Setup
 
 Prerequisites (all platforms): Rust ≥ 1.80, Node 22 + pnpm, [uv](https://docs.astral.sh/uv/), plus the Tauri v2 system dependencies:
@@ -139,7 +162,7 @@ there is no setup wizard: the first launch verifies the files and lands on the r
 
 | | Linux x86_64 | Windows x64 | macOS Apple Silicon |
 |---|---|---|---|
-| Installers | AppImage, `.deb`, portable `.tar.zst` (no root, no FUSE) | NSIS `.exe` (per-user, no admin), `.msi` | `.dmg`, `.app` |
+| Installers | AppImage, `.deb`, portable `.tar.zst` (no root, no FUSE) | NSIS `.exe` (per-user, no admin), portable `.zip` | `.dmg`, `.app` |
 | Training | PyTorch CPU (`cpu` flavor) or CUDA (`cuda` flavor) | PyTorch CPU or CUDA | MLX on the Apple GPU (no PyTorch shipped) |
 | Inference | llama.cpp: Vulkan (NVIDIA/AMD/Intel) [+ CUDA], CPU fallback | llama.cpp: Vulkan [+ CUDA], CPU fallback | MLX; llama.cpp with Metal for GGUF |
 | Starter model | Qwen3 1.7B, GGUF Q4_K_M (~1.1 GB): served by llama.cpp, dequantized in memory for training | same | Qwen3 1.7B, MLX 4-bit (~1 GB) |
@@ -157,6 +180,19 @@ powershell -ExecutionPolicy Bypass -File scripts\build_all_in_one.ps1
 
 Options: `--flavor cuda` / `-Flavor cuda` for NVIDIA training, `--smoke-model` / `-SmokeModel` to
 bundle the tiny offline test model (CI), `--debug`, `--skip-payload`.
+
+Windows specifics:
+
+- NSIS cannot hold more than 2 GiB. `src-tauri/nsis/installer.nsi` is Tauri's template with
+  per-file instead of solid compression, so only the compressed total (about 1.4 GiB) has to fit.
+  The MSI format has the same limit and no such switch, so the build defaults to
+  `-Bundles nsis` in CI; a portable zip is always produced as well.
+- `scripts/lib/pe_audit.py` reads the import table of every bundled `.exe`/`.dll`/`.pyd` and
+  fails the build if one needs a Visual C++/OpenMP runtime DLL that is not shipped next to it
+  (build machines have those DLLs system-wide, so a runtime test alone cannot catch this).
+- llama.cpp is built in a short folder at the drive root (`<drive>:\ikb`), because the Vulkan
+  shader generator otherwise exceeds the 260-character path limit. `-VulkanOptional` falls back
+  to processor-only answers when the Vulkan SDK is missing or the backend does not build.
 
 Pipeline:
 
@@ -183,8 +219,8 @@ At launch, `src-tauri/src/bootstrap.rs`:
 - Finds the payload and checks the manifest against the compiled-in hash.
 - Hashes every file on first launch (multi-threaded; 5.2 GB took 1.8 s here) and checks sizes plus
   critical files afterwards.
-- Runs the bundled interpreter isolated (`-I -B`, user `PYTHON*` variables removed) with
-  Hugging Face/transformers forced offline.
+- Runs the bundled interpreter isolated and in UTF-8 mode (`-I -B -X utf8`, user `PYTHON*`
+  variables removed) with Hugging Face/transformers forced offline.
 - Warms up the engine and detects accelerators: MLX/CUDA/CPU for training, and
   Metal/CUDA/Vulkan/CPU via `llama-server --list-devices` for answers.
 
@@ -212,6 +248,9 @@ On Windows:
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\clean_machine_check.ps1 -Installer .\Inkport_0.1.0_x64-setup.exe
 ```
+
+Add `-Quick` to skip training (about three minutes: install, integrity, practice exam, answers
+from the bundled model). The `.exe`, the `.msi` and the portable `.zip` are all accepted.
 
 The check installs or unpacks the installer without root and cuts off the network:
 - Linux: a private network namespace with only loopback.
