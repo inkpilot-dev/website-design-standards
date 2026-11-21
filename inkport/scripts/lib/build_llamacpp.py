@@ -104,6 +104,16 @@ def main() -> None:
 
     src = llama_source()
     build = CACHE / f"llama-build-{a.platform}{'-cuda' if a.cuda else ''}"
+    if a.platform.startswith("windows"):
+        # MSBuild still enforces the 260-character path limit, and the Vulkan shader generator is a
+        # nested CMake project whose scratch paths are ~170 characters below the build folder.
+        # Build in a short folder at the drive root (override with INKPORT_LLAMA_BUILD_DIR).
+        short = Path(os.environ.get("INKPORT_LLAMA_BUILD_DIR") or Path(ROOT.anchor) / "ikb" / build.name.replace("llama-build-", ""))
+        try:
+            short.mkdir(parents=True, exist_ok=True)
+            build = short
+        except OSError as exc:
+            log(f"note: cannot use the short build folder {short} ({exc}); building under {build}")
 
     def compile_llama(vulkan: bool) -> None:
         run(["cmake", "-S", src, "-B", build, *cmake_args(a.platform, a.cuda, vulkan)])

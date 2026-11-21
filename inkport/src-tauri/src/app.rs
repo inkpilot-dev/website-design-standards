@@ -408,7 +408,9 @@ impl App {
         // First with whatever accelerator llama.cpp finds (Vulkan / CUDA / Metal). If the server
         // cannot start that way (for example a broken GPU driver), once more on the processor only.
         let mut last_err = None;
-        for (attempt, extra) in [&[][..], &["--device", "none"][..]].into_iter().enumerate() {
+        // INKPORT_ANSWERS_ON_CPU=1 skips the graphics card entirely (escape hatch for bad drivers).
+        let cpu_only = std::env::var("INKPORT_ANSWERS_ON_CPU").map(|v| v == "1").unwrap_or(false);
+        for (attempt, extra) in [&[][..], &["--device", "none"][..]].into_iter().enumerate().skip(usize::from(cpu_only)) {
             let log_name = if attempt == 0 { "llama-server.log" } else { "llama-server-cpu.log" };
             match self.spawn_llama(b, &server, &base, adapter.as_deref(), info, key, extra, &log_dir.join(log_name)).await {
                 Ok((port, child)) => {

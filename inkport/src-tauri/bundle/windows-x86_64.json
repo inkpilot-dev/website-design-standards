@@ -11,6 +11,7 @@
       "webviewInstallMode": { "type": "embedBootstrapper", "silent": true },
       "nsis": {
         "installMode": "currentUser",
+        "template": "nsis/installer.nsi",
         "compression": "lzma",
         "displayLanguageSelector": false,
         "languages": ["English"],

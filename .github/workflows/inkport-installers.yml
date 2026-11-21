@@ -136,6 +136,11 @@ jobs:
           # A short run: this proves training, the gate and adapter serving work on Windows; it is not a quality benchmark.
           ./scripts/clean_machine_check.ps1 -Installer $f.FullName -TrainOverrides '{"sft":{"max_steps":12,"eval_every":12,"checkpoint_every":12},"stage2":{"mode":"none"},"gate":{"general_suite_n":8,"max_new_tokens":96},"dev_eval_n":8}'
           if ($LASTEXITCODE -ne 0) { exit 1 }
+      - name: The .exe installer must exist (the portable zip alone is not a complete release)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        shell: pwsh
+        run: |
+          if (-not (Get-ChildItem build/installers/windows-x86_64-cpu/*.exe -ErrorAction SilentlyContinue)) { throw "the NSIS installer was not produced; see the Build installer step" }
 
   linux:
     name: Linux (x64)

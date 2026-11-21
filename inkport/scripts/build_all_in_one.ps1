@@ -119,11 +119,12 @@ $bundleConfig | ConvertTo-Json -Depth 20 | Set-Content -Encoding UTF8 $merged
 $env:RUSTFLAGS = "-C target-feature=+crt-static"   # the Rust app itself needs no VC++ runtime either
 $tauriArgs = @("tauri", "build", "--config", $merged, "--target", $Triple, "--bundles", $Bundles)
 if ($DebugBuild) { $tauriArgs += "--debug" }
-# NSIS and MSI cannot hold more than 2 GB. If the payload is too large for them, the bundling step
-# fails AFTER the app binaries are built; the portable zip below is then the deliverable.
+# NSIS and MSI cannot hold more than 2 GiB (compressed; see src-tauri/nsis/installer.nsi). If the
+# payload ever outgrows that, the bundling step fails AFTER the app binaries are built; the
+# portable zip below is then still produced.
 & pnpm @tauriArgs
 $bundleOk = ($LASTEXITCODE -eq 0)
-if (-not $bundleOk) { Write-Host "    note: installer bundling failed (payload likely over the 2 GB NSIS/MSI limit); shipping the portable zip" -ForegroundColor Yellow }
+if (-not $bundleOk) { Write-Host "    note: installer bundling FAILED (see the makensis output above); only the portable zip will be produced" -ForegroundColor Yellow }
 
 $buildProfile = if ($DebugBuild) { "debug" } else { "release" }
 $targetDir = Join-Path $Root "target\$Triple\$buildProfile"
