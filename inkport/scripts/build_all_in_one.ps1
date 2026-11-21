@@ -20,6 +20,7 @@ param(
   [switch]$DebugBuild,
   [switch]$SkipPayload,
   [switch]$NoVulkan,                       # CPU-only llama.cpp (when the Vulkan SDK is not installed)
+  [switch]$VulkanOptional,                 # use Vulkan when the SDK is present and builds; otherwise CPU-only (CI)
   [string]$Bundles = "nsis,msi"
 )
 $ErrorActionPreference = "Stop"
@@ -42,6 +43,13 @@ Need uv "https://docs.astral.sh/uv/"
 Need cargo "https://rustup.rs"
 Need pnpm "npm install -g pnpm"
 Need cmake "https://cmake.org"
+if ($VulkanOptional -and -not $NoVulkan) {
+  $glslc = if ($env:VULKAN_SDK) { Join-Path $env:VULKAN_SDK "Bin\glslc.exe" } else { $null }
+  if (-not $glslc -or -not (Test-Path $glslc)) {
+    Write-Host "    note: Vulkan SDK not found; building CPU-only inference" -ForegroundColor Yellow
+    $NoVulkan = $true
+  }
+}
 if (-not $NoVulkan -and -not $env:VULKAN_SDK) { throw "Install the Vulkan SDK (https://vulkan.lunarg.com) so llama.cpp can be built with GPU support for every vendor, or pass -NoVulkan." }
 
 # Enter the Visual Studio developer environment (cl.exe, VCToolsRedistDir) if not already in it.
@@ -65,14 +73,18 @@ if (-not $SkipPayload) {
 
   Step "3/7 llama.cpp for $Platform"
   $llamaArgs = @("--platform", $Platform, "--out", (Join-Path $Payload "llama"))
-  if ($NoVulkan) { $llamaArgs += "--no-vulkan" }
+  if ($NoVulkan) { $llamaArgs += "--no-vulkan" } elseif ($VulkanOptional) { $llamaArgs += "--vulkan-optional" }
   if ($Flavor -eq "cuda") { Need nvcc "CUDA toolkit (build machine only; users need just the NVIDIA driver)"; $llamaArgs += "--cuda" }
   Py scripts/lib/build_llamacpp.py @llamaArgs
 
   Step "3b/7 App-local MSVC runtime (no VC++ redistributable needed on user machines)"
+  $ompDir = Get-ChildItem (Join-Path $env:VCToolsRedistDir "x64") -Directory | Where-Object { $_.Name -like "Microsoft.VC14*.OpenMP" } | Select-Object -First 1
   foreach ($target in @((Join-Path $Payload "llama"), (Join-Path $Payload "python"))) {
     Copy-Item (Join-Path $crtDir.FullName "*.dll") $target -Force
+    if ($ompDir) { Copy-Item (Join-Path $ompDir.FullName "*.dll") $target -Force }
   }
+  # Static proof that no bundled program needs a runtime DLL a fresh Windows PC does not have.
+  Py scripts/lib/pe_audit.py $Payload
 
   Step "4/7 Starter model"
   if ($SmokeModel) { Py scripts/lib/starter_model.py --platform $Platform --payload $Payload --smoke }

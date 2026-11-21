@@ -4,6 +4,12 @@ name: Inkport installers
 
 on:
   workflow_dispatch:
+    inputs:
+      platforms:
+        description: Which installers to build
+        type: choice
+        default: all
+        options: [all, windows, macos, linux]
   push:
     branches: [claude/busy-goodall-wyjcg6]
     paths: ["inkport/**", ".github/workflows/inkport-installers.yml"]
@@ -19,6 +25,7 @@ defaults:
 jobs:
   macos:
     name: macOS (Apple Silicon)
+    if: github.event_name == 'push' || inputs.platforms == 'all' || inputs.platforms == 'macos'
     runs-on: macos-15
     timeout-minutes: 240
     env:
@@ -46,6 +53,7 @@ jobs:
 
   windows:
     name: Windows (x64)
+    if: github.event_name == 'push' || inputs.platforms == 'all' || inputs.platforms == 'windows'
     runs-on: windows-2022
     timeout-minutes: 300
     steps:
@@ -53,37 +61,85 @@ jobs:
         run: git config --system core.longpaths true
         working-directory: .
       - uses: actions/checkout@v4
+      - name: Check the PowerShell scripts parse (fails in seconds instead of after the build)
+        shell: pwsh
+        run: |
+          $bad = 0
+          foreach ($f in Get-ChildItem scripts/*.ps1) {
+            $tokens = $null; $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$tokens, [ref]$errors)
+            if ($errors.Count) { $bad++; $errors | ForEach-Object { Write-Host ("{0}:{1}: {2}" -f $f.Name, $_.Extent.StartLineNumber, $_.Message) } } else { Write-Host "OK $($f.Name)" }
+          }
+          if ($bad) { exit 1 }
       - uses: astral-sh/setup-uv@v6
       - uses: dtolnay/rust-toolchain@stable
       - uses: pnpm/action-setup@v4
         with: { version: 10 }
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: pnpm, cache-dependency-path: inkport/pnpm-lock.yaml }
+      - name: Vulkan SDK (build machine only; lets answers use any graphics card)
+        continue-on-error: true   # without it the build falls back to processor-only answers
+        shell: pwsh
+        working-directory: .
+        run: |
+          $exe = Join-Path $env:RUNNER_TEMP "vulkan_sdk.exe"
+          curl.exe -fsSL --retry 3 -o $exe https://sdk.lunarg.com/sdk/download/latest/windows/vulkan_sdk.exe
+          if ($LASTEXITCODE -ne 0) { throw "could not download the Vulkan SDK" }
+          $root = "C:\VulkanSDK\inkport"
+          $p = Start-Process -FilePath $exe -ArgumentList @("--root", $root, "--accept-licenses", "--default-answer", "--confirm-command", "install") -PassThru
+          $null = $p.Handle
+          if (-not $p.WaitForExit(15 * 60 * 1000)) { $p.Kill(); throw "the Vulkan SDK installer did not finish" }
+          if (-not (Test-Path "$root\Bin\glslc.exe")) { throw "glslc.exe not found after installing the Vulkan SDK (exit code $($p.ExitCode))" }
+          "VULKAN_SDK=$root" >> $env:GITHUB_ENV
+          "$root\Bin" >> $env:GITHUB_PATH
+          & "$root\Bin\glslc.exe" --version
       - name: Build installer
+        id: build
         shell: pwsh
-        run: ./scripts/build_all_in_one.ps1 -NoVulkan -Bundles nsis
-      - name: Clean-machine check (offline)
+        run: ./scripts/build_all_in_one.ps1 -VulkanOptional -Bundles nsis
+      - name: Quick clean-machine check (offline install, integrity, practice exam, answers)
         shell: pwsh
+        timeout-minutes: 45
         run: |
           $files = @(Get-ChildItem build/installers/windows-x86_64-cpu/* -Include *.exe, *.zip)
           if ($files.Count -eq 0) { throw "no Windows installer was produced" }
           foreach ($f in $files) {
             Write-Host "`n### checking $($f.Name)"
-            ./scripts/clean_machine_check.ps1 -Installer $f.FullName
+            ./scripts/clean_machine_check.ps1 -Installer $f.FullName -Quick
             if ($LASTEXITCODE -ne 0) { exit 1 }
           }
-      - uses: actions/upload-artifact@v4
+      # Uploaded as soon as the installer exists, so the download never waits for the long training test.
+      - name: Upload the installer (.exe)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
         with:
-          name: Inkport-Windows-x64
+          name: Inkport-Windows-x64-Installer
           path: |
             inkport/build/installers/windows-x86_64-cpu/*.exe
-            inkport/build/installers/windows-x86_64-cpu/*.zip
             inkport/build/installers/windows-x86_64-cpu/SHA256SUMS
           compression-level: 0
           retention-days: 30
+      - name: Upload the portable zip (no installer)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: Inkport-Windows-x64-Portable
+          path: inkport/build/installers/windows-x86_64-cpu/*.zip
+          compression-level: 0
+          retention-days: 30
+      - name: Full clean-machine check (adds training + the hidden-test gate on the processor)
+        shell: pwsh
+        timeout-minutes: 180
+        run: |
+          $f = @(Get-ChildItem build/installers/windows-x86_64-cpu/* -Include *.exe, *.zip) | Sort-Object { $_.Extension -ne ".exe" } | Select-Object -First 1
+          Write-Host "### checking $($f.Name)"
+          # A short run: this proves training, the gate and adapter serving work on Windows; it is not a quality benchmark.
+          ./scripts/clean_machine_check.ps1 -Installer $f.FullName -TrainOverrides '{"sft":{"max_steps":12,"eval_every":12,"checkpoint_every":12},"stage2":{"mode":"none"},"gate":{"general_suite_n":8,"max_new_tokens":96},"dev_eval_n":8}'
+          if ($LASTEXITCODE -ne 0) { exit 1 }
 
   linux:
     name: Linux (x64)
+    if: github.event_name == 'push' || inputs.platforms == 'all' || inputs.platforms == 'linux'
     runs-on: ubuntu-22.04
     timeout-minutes: 240
     steps:

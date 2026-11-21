@@ -38,6 +38,8 @@ def cmake_args(plat: str, cuda: bool, vulkan: bool = True) -> list[str]:
         "-DGGML_NATIVE=OFF",
         # No embedded web UI: Inkport runs llama-server with --no-webui, and the prebuilt-UI
         # download from a Hugging Face bucket is non-hermetic (it broke CI with partial assets).
+        # ggml's own thread pool instead of OpenMP: no libgomp / vcomp140.dll runtime to ship or miss.
+        "-DGGML_OPENMP=OFF",
         "-DLLAMA_BUILD_UI=OFF",
         "-DLLAMA_USE_PREBUILT_UI=OFF",
     ]
@@ -94,6 +96,7 @@ def main() -> None:
     ap.add_argument("--tools-out", default=str(ROOT / "build" / "tools"))
     ap.add_argument("--cuda", action="store_true", help="also build the CUDA backend (needs the CUDA toolkit on the build machine)")
     ap.add_argument("--no-vulkan", action="store_true", help="skip the Vulkan backend (CPU-only inference on Windows/Linux)")
+    ap.add_argument("--vulkan-optional", action="store_true", help="if the Vulkan backend fails to build, fall back to a CPU-only build instead of failing")
     ap.add_argument("--jobs", default=str(os.cpu_count() or 4))
     a = ap.parse_args()
     if a.platform != host_platform():
@@ -101,8 +104,23 @@ def main() -> None:
 
     src = llama_source()
     build = CACHE / f"llama-build-{a.platform}{'-cuda' if a.cuda else ''}"
-    run(["cmake", "-S", src, "-B", build, *cmake_args(a.platform, a.cuda, not a.no_vulkan)])
-    run(["cmake", "--build", build, "--config", "Release", "-j", a.jobs, "--target", "llama-server", "llama-quantize"])
+
+    def compile_llama(vulkan: bool) -> None:
+        run(["cmake", "-S", src, "-B", build, *cmake_args(a.platform, a.cuda, vulkan)])
+        run(["cmake", "--build", build, "--config", "Release", "-j", a.jobs, "--target", "llama-server", "llama-quantize"])
+
+    vulkan = not a.no_vulkan and a.platform != "macos-aarch64"
+    try:
+        compile_llama(vulkan)
+    except SystemExit:
+        if not (vulkan and a.vulkan_optional):
+            raise
+        # The GPU backend is an accelerator, never a requirement: ship CPU inference rather than nothing.
+        log("WARNING: the Vulkan backend failed to build; rebuilding llama.cpp CPU-only (--vulkan-optional)")
+        rmtree(build)
+        vulkan = False
+        compile_llama(False)
+    log(f"llama.cpp backends: CPU{' + Vulkan' if vulkan else ''}{' + CUDA' if a.cuda else ''}{' + Metal' if a.platform == 'macos-aarch64' else ''}")
     # Single-config generators put everything in bin/; MSVC puts it in bin/Release/.
     bindir = build / "bin" / "Release" if (build / "bin" / "Release").is_dir() else build / "bin"
 

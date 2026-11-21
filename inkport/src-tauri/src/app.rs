@@ -403,13 +403,37 @@ impl App {
         if matches!(&adapter, Some(a) if !a.is_file()) {
             return Ok(None); // trained version without a GGUF adapter: the Python worker serves it
         }
-        let port = std::net::TcpListener::bind("127.0.0.1:0")?.local_addr()?.port();
         let log_dir = self.home.join("logs");
         std::fs::create_dir_all(&log_dir)?;
-        let log = std::fs::File::create(log_dir.join("llama-server.log"))?;
-        let mut cmd = tokio::process::Command::new(&server);
+        // First with whatever accelerator llama.cpp finds (Vulkan / CUDA / Metal). If the server
+        // cannot start that way (for example a broken GPU driver), once more on the processor only.
+        let mut last_err = None;
+        for (attempt, extra) in [&[][..], &["--device", "none"][..]].into_iter().enumerate() {
+            let log_name = if attempt == 0 { "llama-server.log" } else { "llama-server-cpu.log" };
+            match self.spawn_llama(b, &server, &base, adapter.as_deref(), info, key, extra, &log_dir.join(log_name)).await {
+                Ok((port, child)) => {
+                    *self.llama.lock().await = Some(child);
+                    return Ok(Some((port, adapter.is_some())));
+                }
+                Err(e) => {
+                    if attempt == 0 {
+                        self.sink.emit("training://log", &json!({"type": "log", "level": "warn", "message": format!("the answer engine did not start with the graphics card, retrying on the processor: {e}")}));
+                    }
+                    last_err = Some(e);
+                }
+            }
+        }
+        Err(last_err.unwrap_or_else(|| anyhow!("llama-server could not be started")))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn spawn_llama(&self, b: &bootstrap::Bundle, server: &Path, base: &Path, adapter: Option<&Path>, info: &ProjectInfo, key: &str, extra: &[&str], log_path: &Path) -> Result<(u16, tokio::process::Child)> {
+        let port = std::net::TcpListener::bind("127.0.0.1:0")?.local_addr()?.port();
+        let log = std::fs::File::create(log_path)?;
+        let mut cmd = tokio::process::Command::new(server);
         cmd.args(["--model", &base.display().to_string(), "--host", "127.0.0.1", "--port", &port.to_string(), "--api-key", key, "--no-webui", "--jinja", "--ctx-size", "4096", "--parallel", "2", "--alias", &format!("inkport/{}", info.slug)]);
-        if let Some(a) = &adapter {
+        cmd.args(extra);
+        if let Some(a) = adapter {
             cmd.args(["--lora", &a.display().to_string()]);
         }
         let ck = &info.base_model["chat_kwargs"];
@@ -434,7 +458,7 @@ impl App {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(180);
         loop {
             if let Some(status) = child.try_wait()? {
-                bail!("llama-server exited during startup ({status}); see {}", log_dir.join("llama-server.log").display());
+                bail!("llama-server exited during startup ({status}); see {}", log_path.display());
             }
             if let Ok(r) = client.get(format!("http://127.0.0.1:{port}/health")).send().await {
                 if r.status().is_success() {
@@ -447,8 +471,7 @@ impl App {
             }
             tokio::time::sleep(std::time::Duration::from_millis(300)).await;
         }
-        *self.llama.lock().await = Some(child);
-        Ok(Some((port, adapter.is_some())))
+        Ok((port, child))
     }
 
     async fn stop_worker(&self) {
