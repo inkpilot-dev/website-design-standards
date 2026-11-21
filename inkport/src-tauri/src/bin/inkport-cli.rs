@@ -169,7 +169,13 @@ async fn api_smoke(info: &inkport_lib::contract::ApiInfo, prompt: &str) -> anyho
     let mut answers = serde_json::Map::new();
     for model in [&info.model, &info.base_model] {
         let body = json!({"model": model, "temperature": 0, "max_tokens": 64, "messages": [{"role": "user", "content": prompt}]});
-        let r: Value = c.post(format!("{}/chat/completions", info.base_url)).bearer_auth(&info.token).json(&body).send().await?.error_for_status()?.json().await?;
+        let resp = c.post(format!("{}/chat/completions", info.base_url)).bearer_auth(&info.token).json(&body).send().await?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let detail: String = resp.text().await.unwrap_or_default().chars().take(600).collect();
+            bail!("chat completion for {model} failed with {status}: {detail}");
+        }
+        let r: Value = resp.json().await?;
         let text = r["choices"][0]["message"]["content"].as_str().context("chat completion content")?.to_string();
         answers.insert(model.clone(), json!(text));
     }

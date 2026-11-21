@@ -113,6 +113,14 @@ class Worker:
             return len(text.split())
 
 
+def _log_generation_error(exc: BaseException) -> None:
+    """A failed answer must leave its cause in the log, not just an HTTP 500."""
+    import traceback  # noqa: WPS433
+
+    tail = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))[-1500:]
+    events.log(f"generation failed: {exc!r}\n{tail}", "error")
+
+
 def make_handler(worker: Worker, token: str) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
@@ -193,11 +201,19 @@ def make_handler(worker: Worker, token: str) -> type[BaseHTTPRequestHandler]:
                     self.wfile.flush()
                 except (BrokenPipeError, ConnectionResetError):
                     pass
+                except Exception as exc:  # noqa: BLE001
+                    _log_generation_error(exc)
+                    try:
+                        self.wfile.write(f"data: {json.dumps({'error': {'message': f'generation failed: {exc}'}})}\n\n".encode())
+                        self.wfile.flush()
+                    except OSError:
+                        pass
                 self.close_connection = True
                 return None
             try:
                 text = backend.generate([msgs], max_tokens, temperature, top_p, 1, 0, use_adapter=use_adapter)[0][0]
             except Exception as exc:  # noqa: BLE001
+                _log_generation_error(exc)
                 return self._json(500, {"error": {"message": f"generation failed: {exc}"}})
             prompt_tokens = sum(worker.count(m["content"]) for m in msgs)
             completion_tokens = worker.count(text)

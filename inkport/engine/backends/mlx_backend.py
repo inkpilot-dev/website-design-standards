@@ -55,6 +55,10 @@ class MlxBackend(Backend):
             mlx_dir = adapter_dir / "mlx" if (adapter_dir / "mlx").is_dir() else adapter_dir
             self.model, self.tok = mlx_load(path, adapter_path=str(mlx_dir))
             self._adapter = True
+            # mlx-lm attaches adapter weights lazily. MLX arrays must be materialized on the thread
+            # that created them: the local API answers on other threads, and evaluating them there
+            # fails ("no Stream in current thread"). Base weights are already evaluated by mlx-lm.
+            self.mx.eval(self.model.parameters())
             if trainable:
                 self.model.freeze()
                 self.model.unfreeze(keys=["lora_a", "lora_b", "m"], strict=False)
@@ -90,6 +94,7 @@ class MlxBackend(Backend):
             from mlx_lm import load as mlx_load  # noqa: WPS433
 
             self.base_model, _ = mlx_load(self.plan["base_model"]["path"])
+            self.mx.eval(self.base_model.parameters())
         return self.base_model
 
     def generate(self, convs: list[list[dict]], max_new_tokens: int, temperature: float = 0.0, top_p: float = 1.0, n: int = 1, seed: int = 0, use_adapter: bool = True) -> list[list[str]]:
