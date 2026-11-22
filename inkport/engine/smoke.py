@@ -56,7 +56,7 @@ LEASE = """# Residential Lease Agreement
 
 ## 1. Parties and premises
 
-This lease is made on February 12, 2026 between the landlord, Harborview Property Group, and the tenant, Maria Okafor. The premises are Apartment 4B at 218 Linden Street, on the fourth floor of the building known as Linden Court. The apartment has two bedrooms and may be occupied by no more than 4 people. The building manager is Daniel Reyes, who can be reached at the office between 9 hours and 17 hours on weekdays. The tenant received 3 keys and 2 entry fobs on the day the lease was signed.
+This lease is made on February 12, 2026 between the landlord, Harborview Property Group, and the tenant, Maria Okafor. The premises are Apartment 4B at 218 Linden Street, on the fourth floor of the building known as Linden Court. The apartment has two bedrooms and may be occupied by no more than 4 people. The building manager is Daniel Reyes, who can be reached at the office from Monday to Friday and answers messages within 2 days. The tenant received 3 keys and 2 entry fobs on the day the lease was signed.
 
 ## 2. Term
 
@@ -88,7 +88,7 @@ The landlord must give 24 hours of notice before entering the apartment, except 
 
 ## 9. Pets
 
-Pets are allowed with a deposit of $300 per pet. No more than 2 pets may live in the apartment, and each must weigh under 25 kilograms. Monthly pet rent is $25 for a cat and $40 for a dog. Dogs must be kept on a lead in the shared areas, and the courtyard is closed to pets after 22 hours. The pet deposit is returned within 30 days if there is no pet damage, as confirmed by Harborview Property Group.
+Pets are allowed with a deposit of $300 per pet. No more than 2 pets may live in the apartment, and each must weigh under 25 kilograms. Monthly pet rent is $25 for a cat and $40 for a dog. Dogs must be kept on a lead in the shared areas, and no pet may be left alone for more than 12 hours. The pet deposit is returned within 30 days if there is no pet damage, as confirmed by Harborview Property Group.
 
 ## 10. Parking and storage
 
@@ -100,7 +100,7 @@ A guest may stay for up to 14 days in any six-month period without the landlord'
 
 ## 12. Noise and shared areas
 
-Quiet hours run from 22 hours to 7 hours on every day of the week. The laundry room is open for 14 hours each day, and a wash costs $2.50. The roof terrace may be reserved for private events for a fee of $50. A reservation must be made at least 5 days ahead with the building manager, Daniel Reyes. Smoking is not allowed within 8 meters of any door or window.
+Quiet hours run from 10 p.m. to 7 a.m. on all 7 days of the week. The laundry room is open for 14 hours each day, and a wash costs $2.50. The roof terrace may be reserved for private events for a fee of $50. A reservation must be made at least 5 days ahead with the building manager, Daniel Reyes. Smoking is not allowed within 8 meters of any door or window.
 
 ## 13. Insurance
 
@@ -112,11 +112,39 @@ The landlord will offer a renewal at least 75 days before the lease ends. The te
 
 ## 15. Moving out
 
-The tenant must return all keys by 12 hours on the last day of the lease. A move-out inspection takes place within 3 days of the keys being returned. Professional carpet cleaning, if needed, is charged at $120. Items left behind are stored for 30 days and then disposed of. The lift may be reserved for moving for up to 4 hours, with a refundable booking deposit of $100.
+The tenant must return all keys within 24 hours of the lease ending. A move-out inspection takes place within 3 days of the keys being returned. Professional carpet cleaning, if needed, is charged at $120. Items left behind are stored for 30 days and then disposed of. The lift may be reserved for moving for up to 4 hours, with a refundable booking deposit of $100.
 
 ## 16. Notices and disputes
 
 Written notices to the landlord are sent to the office of Harborview Property Group at 40 Quay Road. A notice sent by post is treated as received 3 days after posting. Disputes are first referred to mediation at the Riverside Housing Mediation Service, and each party pays 50% of the cost. Mediation must begin within 20 days of a written request. This lease was signed on February 12, 2026 by both parties.
+
+## 17. Building services
+
+The front desk is staffed for 12 hours each day, and parcels are held for up to 10 days. A lost mailbox key costs $20 to replace. The gym on the ground floor is free for tenants, and a guest pass costs $8 per visit. The lift is serviced every 3 months by Summit Elevator Company. Window cleaning takes place 2 times per year, in April and October. The building's fire alarm is tested on the first Monday of each month and lasts about 5 minutes, according to the building manager, Daniel Reyes. Heating problems are answered within 4 hours during the winter months.
+
+## 18. Alterations and decoration
+
+The tenant may hang pictures, but may not paint the walls without written consent. A request to redecorate is answered within 14 days. Shelving fixed to a wall must be removed at the end of the lease, and each unfilled hole larger than a coin is charged at $15. The tenant may install a washing machine if a licensed plumber fits it, and must keep the invoice for 2 years. Satellite dishes are not allowed, and an unauthorized dish is removed at a cost of $90. Window boxes are allowed on the balcony up to a weight of 20 kilograms. Any improvement costing more than $500 needs the approval of Harborview Property Group.
+
+## 19. Safety and access
+
+The entry code is changed every 6 months, and tenants are told 7 days before each change. A replacement entry code after a lockout costs $60 outside office hours. Fire doors in the corridors must stay closed, and blocking one carries a charge of $40. Barbecues are allowed only on the roof terrace and must be put out within 2 hours of use. The basement is closed for cleaning for 3 days each August. Each apartment has one fire extinguisher, which is inspected every 12 months by Northgate Maintenance Services. A tenant who is away for more than 21 days must tell the building manager.
+
+## 20. Fees at a glance
+
+The application fee paid before signing was $55 and is not refundable. A copy of this lease costs $10, and a letter confirming the tenancy costs $25. Changing the name of a tenant on the lease costs $150. A second set of keys costs $30, and a replacement parking permit costs $12. Late return of the lift booking deposit form delays the refund by up to 14 days. The cleaning charge for the shared barbecue area is $35 if it is left dirty. All fees in this section may rise by no more than 3% per year, as agreed with the tenant, Maria Okafor.
+
+## 21. Cleaning and waste
+
+The corridors and stairs are cleaned 3 times per week by a company called Clearwater Cleaning Services. Bulky items such as furniture are collected on the last Thursday of each month, for a charge of $18 per item. Rubbish left in a corridor is removed at a cost of $25 per bag. The bin store is locked at night and reopens after 6 hours. Glass is recycled separately, and the glass container is emptied every 2 weeks. Cooking oil must not be poured into the sinks, and clearing a blocked drain caused by oil costs $130. The tenant must clean the balcony drain at least 4 times per year.
+
+## 22. Absence and emergencies
+
+During an absence of more than 21 days the heating must be left on at no less than 12 degrees. The landlord may check the apartment once every 14 days while the tenant is away. A burst pipe must be reported to the emergency line within 1 hour of being discovered. The emergency line promises to call back within 30 minutes at any time of day. If the apartment floods, the landlord pays for a hotel for up to 5 days at no more than $140 per night. The tenant's emergency contact is recorded as Samuel Okafor. Power cuts lasting more than 48 hours reduce the rent by 10% for that month.
+
+## 23. Rent reviews and records
+
+The rent is reviewed once a year, on January 15, and any change takes effect 90 days later. A rent statement is sent to the tenant every 3 months. Receipts for rent paid in cash are issued within 2 days. The landlord keeps payment records for 6 years after the lease ends. A dispute about the amount owed must be raised within 60 days of the statement. An overpayment of more than $20 is refunded within 10 days, and smaller amounts are credited to the next month. The annual service charge statement is prepared by an accountant, Priya Nair, and is available on request.
 """
 
 
@@ -134,7 +162,7 @@ def write_smoke_data(out: Path) -> dict:
         w.writeheader()
         for i in range(60):
             q = rng.randint(1, 9)
-            w.writerow({"order_id": i + 1, "customer_id": rng.randint(1, 8), "region": rng.choice(["North", "South", "East", "West"]), "product": rng.choice(["widget", "gadget", "gizmo"]), "quantity": q, "total": round(q * rng.uniform(5, 40), 2)})
+            w.writerow({"order_id": i + 1, "customer_id": rng.randint(1, 8), "region": rng.choice(["North", "South", "East", "West"]), "product": rng.choice(["widget", "gadget", "gizmo", "sprocket"]), "quantity": q, "total": round(q * rng.uniform(5, 40), 2)})
     with open(out / "customers.csv", "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=["customer_id", "name", "segment"])
         w.writeheader()

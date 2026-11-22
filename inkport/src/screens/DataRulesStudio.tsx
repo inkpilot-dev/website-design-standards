@@ -172,7 +172,7 @@ export function DataRulesStudio({ project, template, draft, onDraft, trainingRun
         <Card className="space-y-5">
           <h2 className="text-[17px] font-semibold tracking-[-0.01em]">Rules your AI must always follow <span className="font-normal text-muted">(optional)</span></h2>
           <div className="flex gap-2">
-            <TextInput value={text} onChange={setText} onEnter={() => addRule(text)} placeholder="e.g. amount must be positive" label="New rule" />
+            <TextInput value={text} onChange={setText} onEnter={() => addRule(text)} placeholder={`e.g. ${template.example_rules[1] ?? template.example_rules[0] ?? "no more than 50 words"}`} label="New rule" />
             <Button variant="secondary" onClick={() => addRule(text)} disabled={!text.trim()}>Add</Button>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -245,8 +245,8 @@ export function DataRulesStudio({ project, template, draft, onDraft, trainingRun
             <div className="grid gap-5 md:grid-cols-2">
               {d.preview.items.map((it) => (
                 <div key={it.item_id} className="rounded-2xl border border-line p-5 text-[15px]">
-                  <div className="line-clamp-4 whitespace-pre-wrap break-words leading-relaxed">{it.prompt}</div>
-                  <div className="mt-3 break-words rounded-lg bg-canvas px-3 py-2 font-mono text-[13px]">{it.reference}</div>
+                  <div className="line-clamp-4 whitespace-pre-wrap break-words leading-relaxed">{it.question ?? it.prompt}</div>
+                  <div className="mt-3 max-h-40 overflow-hidden whitespace-pre-wrap break-words rounded-lg bg-canvas px-3 py-2 font-mono text-[13px]">{it.reference}</div>
                   <div className="mt-3 text-[13px] text-muted">from {it.source}</div>
                 </div>
               ))}

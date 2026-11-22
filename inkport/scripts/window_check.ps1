@@ -177,6 +177,13 @@ $null = CloseApp $app
 if ($code -ne 0) { Die "the window test after a restart failed" }
 Pass "after a restart the project opens on 'Use it' and the trained model answers"
 
+Say "Every goal: its sample data with every suggested rule must give an exam that can be trained on"
+$app = StartApp
+$code = Drive "goals"
+Screen "desktop-after-goals"
+$null = CloseApp $app
+if ($code -eq 0) { Pass "Small Business, Code & SQL and Personal Docs each build a usable exam from their samples" } else { Bad "a goal's sample data or suggested rules did not give a usable exam (see the lines above)" }
+
 Say "Checking the installation is unchanged"
 $doctor = (& $Cli doctor --full 2>$null | Where-Object { $_ -like "RESULT *" } | Select-Object -Last 1)
 if ($doctor -and ($doctor.Substring(7) | ConvertFrom-Json).ok) { Pass "every installed file still matches the manifest" } else { Bad "the installation no longer verifies: $doctor" }

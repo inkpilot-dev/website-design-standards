@@ -161,4 +161,4 @@ def test_documents_without_blank_lines_are_cut_into_excerpts():
     assert len(wall) > 10 and max(len(c) for c in wall) <= 760
     # Normal prose with blank lines keeps whole paragraphs together.
     prose = chunk_document("First paragraph. It has two sentences.\n\nSecond paragraph.")
-    assert prose == ["First paragraph. It has two sentences. Second paragraph."]
+    assert prose == ["First paragraph. It has two sentences.\nSecond paragraph."]  # paragraphs keep their own line

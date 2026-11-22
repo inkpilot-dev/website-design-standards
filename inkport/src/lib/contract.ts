@@ -198,6 +198,8 @@ export interface PreviewItem {
   item_id: string;
   split: "train" | "dev";
   prompt: string;
+  /** The part of the prompt worth showing on a card (a document question without its excerpt). */
+  question?: string;
   reference: string | null;
   source: string;
 }

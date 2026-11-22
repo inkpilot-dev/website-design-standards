@@ -67,3 +67,41 @@ def test_try_the_sample_data_gives_a_trainable_exam_with_every_suggested_rule(pr
     assert [r["ok"] for r in summary["rules"]] == [True] * len(suggested), summary["rules"]
     assert not any(r.get("warning") for r in summary["rules"]), summary["rules"]
     assert not summary["warnings"], summary["warnings"]
+
+
+def test_document_headings_are_context_not_quiz_sentences(project, tmp_path):
+    from engine.pipeline.ingest_and_verify import chunk_document, cloze_items, preview
+
+    text = "# Lease\n\n## 1. Parties and premises\n\nThis lease is made on February 12, 2026 between Harborview Property Group and Maria Okafor. The rent is $1,450 per month.\n\n## 2. Term\nThe term is 12 months.\n"
+    chunks = chunk_document(text)
+    assert chunks == ["# Lease\n## 1. Parties and premises\nThis lease is made on February 12, 2026 between Harborview Property Group and Maria Okafor. The rent is $1,450 per month.\n## 2. Term\nThe term is 12 months."]
+    items = cloze_items({"path": "lease.md", "text": text})
+    quotes = [it["reference_json"]["quote"] for it in items]
+    # A heading used to be glued to the sentence after it, and was quizzed as a sentence itself.
+    assert quotes and all(not q.startswith("#") and "Parties and premises" not in q and "Term" not in q.split()[0] for q in quotes), quotes
+    assert quotes[0].startswith("This lease is made on")
+    # Text without blank lines (PDF, Word) is still packed sentence by sentence into several excerpts.
+    long = " ".join(f"Clause {i} sets a fee of ${i * 10} payable within {i + 3} days." for i in range(1, 120))
+    assert len(chunk_document(long)) > 5 and all(len(c) <= 760 for c in chunk_document(long))
+
+    _retemplate(project, "docs_legal")
+    data = tmp_path / "s"
+    write_smoke_data(data)
+    run_ingest(project, [str(data / "lease.md")], [])
+    cards = preview(project, 8)["items"]
+    assert all(c["question"].startswith("Fill in the blank") and c["source"] == "lease.md" for c in cards), cards[:2]
+    assert not any(c["reference"].startswith('{"answer": "Lease Agreement"') for c in cards)
+
+
+def test_generated_sql_questions_read_naturally(project, tmp_path):
+    from engine.pipeline.ingest_and_verify import preview
+
+    _retemplate(project, "code_sql")
+    data = tmp_path / "s"
+    write_smoke_data(data)
+    run_ingest(project, [str(data / "orders.csv"), str(data / "customers.csv"), str(data / "helpers.py")], [])
+    prompts = [it["messages"][-1]["content"] for split in ("train", "dev", "test") for it in read_jsonl(project / "data" / f"{split}.jsonl")]
+    assert not any("total total" in p for p in prompts)
+    assert any("highest total?" in p for p in prompts)
+    sources = {c["source"] for c in preview(project, 12)["items"]}
+    assert sources <= {"your tables", "helpers.py"}, sources

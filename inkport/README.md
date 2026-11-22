@@ -272,12 +272,14 @@ The clean-machine check drives the engine through the command line. The window c
 real app window and uses it, with the real engine behind it: create a project, build the exam from
 the bundled samples, start training, leave the step and come back, read the verdict, start the
 local API, chat with the trained model, stop a second run; then it closes the app, opens it again
-and checks that the project, its exam and its trained version are still there.
+and checks that the project, its exam and its trained version are still there. A last pass
+(`goals`) takes every goal that ships sample data through "Try the sample data" with every
+suggested rule, which must end in an exam that can be trained on.
 
 ```bash
 # Linux: needs Xvfb, WebKitWebDriver (package webkit2gtk-driver), dbus-run-session and node
 scripts/window_check.sh build/installers/linux-x86_64-cpu/Inkport_0.1.0_amd64.AppImage
-WINDOW_PHASES="first reopen" scripts/window_check.sh ...     # a full training run and a restart
+WINDOW_PHASES="first reopen goals" scripts/window_check.sh ...     # a full training run, a restart, every goal
 ```
 
 ```powershell

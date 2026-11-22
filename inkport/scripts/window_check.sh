@@ -5,7 +5,8 @@
 #   scripts/window_check.sh build/installers/linux-x86_64-cpu/Inkport_0.1.0_amd64.AppImage [out-dir]
 #   scripts/window_check.sh target/debug/inkport out-dir        # a bare binary; set INKPORT_BUNDLE_DIR
 #
-#   WINDOW_PHASES="smoke"          start a run, see progress, stop it (a few minutes; the default)
+#   WINDOW_PHASES="smoke goals"    start a run, see progress, stop it; then every goal's sample data
+#                                  with every suggested rule (a few minutes; the default)
 #   WINDOW_PHASES="first reopen"   a full run to a verdict, then restart the app and check it is all still there
 #   INKPORT_TEST_PRESET / INKPORT_TEST_OVERRIDES keep training short (see src-tauri/src/app.rs)
 #
@@ -14,7 +15,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ART="${1:?pass an AppImage or the inkport binary}"
 OUT="${2:-window-check}"
-PHASES="${WINDOW_PHASES:-smoke}"
+PHASES="${WINDOW_PHASES:-smoke goals}"
 PORT="${WINDOW_DRIVER_PORT:-4455}"
 DISPLAY_NUM="${WINDOW_DISPLAY:-95}"
 for tool in Xvfb WebKitWebDriver dbus-run-session node; do
@@ -39,6 +40,8 @@ FAILED=0
 XVFB_PID=""; DRIVER_PID=""
 cleanup() {
   [ -n "$DRIVER_PID" ] && kill "$DRIVER_PID" 2>/dev/null || true
+  # $DRIVER_PID is dbus-run-session; the driver itself is its child and would outlive it.
+  pkill -f "WebKitWebDriver --port=$PORT" 2>/dev/null || true
   [ -n "$XVFB_PID" ] && kill "$XVFB_PID" 2>/dev/null || true
   pkill -f "$WORK" 2>/dev/null || true
   rm -rf "$WORK" 2>/dev/null || true   # a desktop-portal mount inside it may refuse; harmless
@@ -52,12 +55,17 @@ export DISPLAY=":$DISPLAY_NUM" INKPORT_HOME="$DATA" XDG_DATA_HOME="$WORK/xdg/dat
 export TAURI_WEBVIEW_AUTOMATION=true TAURI_AUTOMATION=true
 # A virtual display has no GPU; keep WebKit on software rendering.
 export WEBKIT_DISABLE_COMPOSITING_MODE=1 WEBKIT_DISABLE_DMABUF_RENDERER=1 LIBGL_ALWAYS_SOFTWARE=1
+# A driver left over from an earlier run would answer on the same port with that run's settings.
+pkill -f "WebKitWebDriver --port=$PORT" 2>/dev/null && sleep 1 || true
 dbus-run-session -- WebKitWebDriver "--port=$PORT" --host=127.0.0.1 >"$OUT/webdriver.log" 2>&1 &
 DRIVER_PID=$!
 for _ in $(seq 1 40); do
   node -e "require('http').get('http://127.0.0.1:$PORT/status',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))" 2>/dev/null && break
   sleep 0.5
 done
+if grep -q "Unable to listen" "$OUT/webdriver.log" 2>/dev/null || ! kill -0 "$DRIVER_PID" 2>/dev/null; then
+  echo "the test driver could not start on port $PORT:" >&2; tail -3 "$OUT/webdriver.log" >&2; exit 2
+fi
 
 for phase in $PHASES; do
   printf '\n\033[1;34m==> Window test: %s\033[0m\n' "$phase"

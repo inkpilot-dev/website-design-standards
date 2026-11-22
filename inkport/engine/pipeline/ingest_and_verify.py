@@ -298,20 +298,20 @@ def sql_questions(schema: dict[str, list[tuple[str, str]]], tables: dict[str, li
                 add(f"{t}:countwhere:{c}={v}", [f"How many {t} rows have {c} equal to '{v}'?", f"Count the {t} where {c} is {v}."], f"SELECT COUNT(*) FROM {T} WHERE {C} = {_lit(v)}")
                 for n in nums[:3]:
                     N = _q(n)
-                    add(f"{t}:sumwhere:{n}:{c}={v}", [f"What is the total {n} for {c} '{v}'?", f"Add up {n} where {c} is {v}."], f"SELECT SUM({N}) FROM {T} WHERE {C} = {_lit(v)}")
+                    add(f"{t}:sumwhere:{n}:{c}={v}", [f"What is the {_total(n)} for {c} '{v}'?", f"Add up {n} where {c} is {v}."], f"SELECT SUM({N}) FROM {T} WHERE {C} = {_lit(v)}")
                     add(f"{t}:maxwhere:{n}:{c}={v}", [f"What is the largest {n} where {c} is '{v}'?"], f"SELECT MAX({N}) FROM {T} WHERE {C} = {_lit(v)}")
                     budget -= 3
             for n in nums[:3]:
                 N = _q(n)
-                add(f"{t}:groupsum:{n}:{c}", [f"List each {c} with its total {n}, highest first.", f"Show total {n} per {c}, sorted from highest to lowest."], f"SELECT {C}, SUM({N}) AS total FROM {T} GROUP BY {C} ORDER BY total DESC")
-                add(f"{t}:top:{n}:{c}", [f"Which {c} has the highest total {n}?"], f"SELECT {C} FROM {T} GROUP BY {C} ORDER BY SUM({N}) DESC LIMIT 1")
+                add(f"{t}:groupsum:{n}:{c}", [f"List each {c} with its {_total(n)}, highest first.", f"Show {_total(n)} per {c}, sorted from highest to lowest."], f"SELECT {C}, SUM({N}) AS total FROM {T} GROUP BY {C} ORDER BY total DESC")
+                add(f"{t}:top:{n}:{c}", [f"Which {c} has the highest {_total(n)}?"], f"SELECT {C} FROM {T} GROUP BY {C} ORDER BY SUM({N}) DESC LIMIT 1")
                 add(f"{t}:groupavg:{n}:{c}", [f"What is the average {n} for each {c}?"], f"SELECT {C}, AVG({N}) FROM {T} GROUP BY {C}")
             if budget <= 0:
                 break
         for n in nums[:4]:
             N = _q(n)
             add(f"{t}:avg:{n}", [f"What is the average {n} in {t}?"], f"SELECT AVG({N}) FROM {T}")
-            add(f"{t}:sum:{n}", [f"What is the total {n} across all {t}?"], f"SELECT SUM({N}) FROM {T}")
+            add(f"{t}:sum:{n}", [f"What is the {_total(n)} across all {t}?"], f"SELECT SUM({N}) FROM {T}")
             add(f"{t}:top3:{n}", [f"Show the 3 {t} rows with the highest {n}."], f"SELECT * FROM {T} ORDER BY {N} DESC LIMIT 3")
             vals = sorted(r[n] for r in rows if isinstance(r.get(n), (int, float)))
             if vals:
@@ -330,7 +330,7 @@ def sql_questions(schema: dict[str, list[tuple[str, str]]], tables: dict[str, li
             b_cats = [c for c, ty in schema[b] if ty == "TEXT" and c not in shared]
             for n in a_nums[:2]:
                 for c in b_cats[:2]:
-                    add(f"join:{a}:{b}:{n}:{c}", [f"What is the total {n} from {a} for each {c} in {b}?"], f"SELECT {_q(b)}.{_q(c)}, SUM({_q(a)}.{_q(n)}) FROM {_q(a)} JOIN {_q(b)} ON {_q(a)}.{_q(k)} = {_q(b)}.{_q(k)} GROUP BY {_q(b)}.{_q(c)}")
+                    add(f"join:{a}:{b}:{n}:{c}", [f"What is the {_total(n)} from {a} for each {c} in {b}?"], f"SELECT {_q(b)}.{_q(c)}, SUM({_q(a)}.{_q(n)}) FROM {_q(a)} JOIN {_q(b)} ON {_q(a)}.{_q(k)} = {_q(b)}.{_q(k)} GROUP BY {_q(b)}.{_q(c)}")
     return out
 
 
@@ -359,6 +359,11 @@ def doctest_items(code_files: list[dict]) -> list[dict]:
             body = "\n".join(lines[node.lineno - 1 : node.end_lineno])
             out.append({"prompt": prompt, "reference": f"```python\n{body}\n```", "tests": tests, "entry": node.name, "source": f"{cf['path']}:{node.lineno}"})
     return out
+
+
+def _total(column: str) -> str:
+    """"total quantity", but a column that is itself called "total" is not "total total"."""
+    return column if re.search(r"(?:^|[\s_])(?:total|sum)(?:$|[\s_])", column, re.I) else f"total {column}"
 
 
 def build_code_sql(src: Sources, paths: ProjectPaths, rule_texts: list[str]) -> tuple[list[dict], list[dict], dict]:
@@ -433,6 +438,9 @@ _SPAN_PATTERNS = [
 ]
 
 
+_HEADING = re.compile(r"^\s{0,3}#{1,6}\s+\S")
+
+
 def chunk_document(text: str, target: int = 700) -> list[str]:
     """Excerpts of roughly `target` characters, made of whole paragraphs or whole sentences.
 
@@ -440,33 +448,50 @@ def chunk_document(text: str, target: int = 700) -> list[str]:
     ends in a single newline), so a "paragraph" can be the entire document. Long paragraphs are
     therefore packed sentence by sentence; without that, a 20-page contract became one excerpt
     with six questions.
+
+    Paragraphs and headings each keep their own line inside an excerpt. Run together, a heading
+    reads as the start of the sentence after it ("1. Parties This lease is made on ...").
     """
     chunks: list[str] = []
     cur = ""
 
-    def push(piece: str) -> None:
+    def push(piece: str, sep: str = "\n") -> None:
         nonlocal cur
-        if len(cur) + len(piece) + 1 > target and cur:
+        if cur and (len(cur) + len(piece) + 1 > target or (_HEADING.match(piece) and len(cur) > target * 0.6)):
             chunks.append(cur)
             cur = piece
         else:
-            cur = (cur + " " + piece).strip()
+            cur = (cur + sep + piece) if cur else piece
 
-    for para in re.split(r"\n\s*\n", text):
+    def push_paragraph(para: str) -> None:
         para = re.sub(r"\s+", " ", para).strip()
         if not para:
-            continue
+            return
         if len(para) <= target:
             push(para)
-            continue
+            return
+        sep = "\n"
         for sent in _SENT.split(para):
             while len(sent) > target:  # no sentence punctuation (lists, tables): cut at a space
                 cut = sent.rfind(" ", 0, target)
                 cut = cut if cut > target // 2 else target
-                push(sent[:cut].strip())
+                push(sent[:cut].strip(), sep)
+                sep = " "
                 sent = sent[cut:].strip()
             if sent:
-                push(sent)
+                push(sent, sep)
+                sep = " "
+
+    for block in re.split(r"\n\s*\n", text):
+        lines: list[str] = []
+        for line in block.split("\n"):
+            if _HEADING.match(line):
+                push_paragraph(" ".join(lines))
+                lines = []
+                push(re.sub(r"\s+", " ", line).strip())
+            else:
+                lines.append(line)
+        push_paragraph(" ".join(lines))
     if cur:
         chunks.append(cur)
     return chunks
@@ -476,7 +501,7 @@ def cloze_items(doc: dict, max_per_chunk: int = 6) -> list[dict]:
     out = []
     for ci, chunk in enumerate(chunk_document(doc["text"])):
         made = 0
-        for sent in _SENT.split(chunk):
+        for sent in (x for line in chunk.split("\n") if not _HEADING.match(line) for x in _SENT.split(line)):
             if made >= max_per_chunk:
                 break
             if not (30 <= len(sent) <= 320):
@@ -886,6 +911,21 @@ def readiness_blocker(counts: dict, unique: int, template: str) -> Optional[str]
     return f"Only {unique} different example{' was' if one else 's were'} found. Inkport needs at least 30 to set aside a fair final exam (100 or more gives a result you can trust). Add more examples and build the exam again."
 
 
+def _card_question(prompt: str, meta: dict) -> str:
+    """The part of a practice question worth showing on a small card. A document question starts
+    with a long excerpt; the question itself is the last line."""
+    if meta.get("origin") == "doc_extract" and '"""\n\n' in prompt:
+        return prompt.rsplit('"""\n\n', 1)[1]
+    return prompt
+
+
+def _card_source(source: str) -> str:
+    """Where a question came from, as a person would say it: the file, without internal markers."""
+    if source == "generated from your tables":
+        return "your tables"
+    return re.sub(r"(?:#chunk\d+|:\d+)$", "", source)
+
+
 def preview(root: Path, limit: int = 12) -> dict:
     """Sample practice questions for the UI. Test items are never revealed, only counted."""
     paths = ProjectPaths(root)
@@ -895,7 +935,7 @@ def preview(root: Path, limit: int = 12) -> dict:
             if len(out) >= limit:
                 break
             user = next(m["content"] for m in it["messages"] if m["role"] == "user")
-            out.append({"item_id": it["item_id"], "split": split, "prompt": user, "reference": it["reference"], "source": it["meta"].get("source", "")})
+            out.append({"item_id": it["item_id"], "split": split, "prompt": user, "question": _card_question(user, it["meta"]), "reference": it["reference"], "source": _card_source(it["meta"].get("source", ""))})
     counts = {s: len(read_jsonl(paths.split(s))) for s in ("train", "dev", "test")}
     manifest = json.loads(paths.manifest.read_text()) if paths.manifest.is_file() else {}
     return {

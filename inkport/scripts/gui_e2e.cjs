@@ -11,6 +11,8 @@
 //   --phase=first    create a project, build the exam, train, use it   (default)
 //   --phase=smoke    the same up to "training is running", then Stop (minutes instead of a full run)
 //   --phase=reopen   after restarting the app: the project is still there and opens on "Use it"
+//   --phase=goals    every goal that ships sample data: "Try the sample data" + every suggested rule
+//                    must give an exam that can be trained on (no training; about a minute)
 //   --train-timeout=SECONDS   how long training may take (default 900)
 //   --expect=promote|any      "promote": the run must save a version (default); "any": a verdict is enough
 //
@@ -64,6 +66,7 @@ const HELPERS = `
       return 'ok';
     },
     scrollTop: () => { const m = document.querySelector('main'); if (m) m.scrollTop = 0; return true; },
+    scrollToHeading: (text) => { const h = [...document.querySelectorAll('main h1, main h2, main h3')].find((e) => norm(e.textContent).includes(text)); if (h) h.scrollIntoView({ block: 'start' }); return !!h; },
     fonts: () => document.fonts ? [...document.fonts].filter((f) => f.status === 'loaded').map((f) => f.family).filter((v, i, a) => a.indexOf(v) === i).join(',') : '',
     ua: () => navigator.userAgent,
   };
@@ -196,6 +199,47 @@ async function openPlaywright() {
       check('the trained model answers again after the restart', !chat.includes('The model did not answer'), chat.slice(chat.indexOf('Try it here'), chat.indexOf('Try it here') + 200));
       await click('Stop local API', 'main');
       await waitFor('the local API to stop', async () => (await text()).includes('Stopped'), 60000);
+    } else if (PHASE === 'goals') {
+      // ------------------------------------------------------------ every goal's first steps
+      // What a new user does first: pick a goal, press "Try the sample data", add the suggested
+      // rules, build. Every goal that ships sample data has to end with an exam that can be trained on.
+      const templates = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'contracts', 'templates.json'), 'utf8')).templates;
+      let n = 0;
+      for (const id of ['business_rules', 'code_sql', 'docs_legal']) {
+        const t = templates.find((x) => x.id === id);
+        n += 1;
+        if (n > 1) await nav('Choose a goal');
+        await waitText('What do you want your AI to master?');
+        await click(t.title, 'main');
+        await d.evaluate(`api.fill("", ${q(`Goal check ${n}`)})`);
+        await click('Create project', 'main');
+        await waitText('Your material and your rules');
+        await click('Try the sample data', 'main');
+        for (const rule of t.example_rules) await click(rule, 'main');
+        if (id === 'business_rules') {
+          // Reads fine, but the sample has no such column: the build must say so next to the rule.
+          await d.evaluate('api.fill("New rule", "price must be positive")');
+          await click('Add', 'main');
+        }
+        await waitFor('the rules to be checked', () => d.evaluate('api.enabled("Build practice exam", "main")'), 120000);
+        await click('Build practice exam', 'main');
+        await waitFor('the practice exam', async () => { const x = await text(); return x.includes('Your practice exam') || x.includes('could not be built'); }, 300000, 1000);
+        await sleep(1500);
+        const page = await text();
+        await shot(`3${n}-goal-${id}`);
+        await d.evaluate('api.scrollToHeading("Your practice exam")');
+        await sleep(300);
+        await d.screenshot(path.join(OUT, `3${n}-goal-${id}-exam.png`));
+        const from = page.indexOf('Your practice exam');
+        check(`${t.title}: sample data + suggested rules give an exam that can be trained on`, page.includes('hidden final-exam questions') && !page.includes('Not enough examples') && !page.includes('could not be built') && (await d.evaluate('api.enabled("Continue to training", "main")')), page.slice(from, from + 200));
+        const setAside = (page.match(/This rule (?:is not being|will not be) used/g) || []).length;
+        if (id === 'business_rules') check(`${t.title}: only the rule about a missing column is set aside, and the reason is shown`, setAside === 1 && page.includes('There is no column called “price”'), `${setAside} rule(s) set aside`);
+        else check(`${t.title}: every suggested rule is in use`, setAside === 0, `${setAside} rule(s) set aside`);
+      }
+      await nav('Choose a goal');
+      await waitText('Continue a project');
+      const all = await text();
+      check('all three projects are listed with their exams built', ['Goal check 1', 'Goal check 2', 'Goal check 3'].every((x) => all.includes(x)) && (all.match(/practice exam built/g) || []).length >= 3, all.slice(0, 200));
     } else {
       // ------------------------------------------------------------ step 2: choose a goal
       await waitText('What do you want your AI to master?');
