@@ -152,13 +152,15 @@ def format_check(f_ref: Optional[float], f_cand: Optional[float], ref_items: Opt
 
 
 def general_limit(n: int) -> int:
-    """How many of ``n`` general questions a model may lose (net) and still be a version to keep.
+    """From how many of ``n`` general questions lost (net) a version is no longer one to keep.
 
     The final exam refuses a model that loses more than 5 points on 60 general questions when that
-    loss is beyond chance, which works out at 5 questions of 60. The same share here, and never
-    fewer than 2: one question changing hands is noise.
+    loss is beyond chance, which works out at 5 questions of 60. The exam asks other questions
+    than the ones watched here, so a version that lost 4 of these could well lose 5 of those: the
+    line is drawn at 3 of 60, which leaves room for the luck of the draw. Never below 2: one
+    question changing hands is noise.
     """
-    return max(2, math.ceil(n / 12))  # 5 of the 60 that are watched
+    return max(2, math.ceil(n / 20))  # 3 of the 60 that are watched
 
 
 def gone_wrong(base_pass: list, base_format: Optional[float], res: dict, drift: float, drift_limit: float) -> Optional[str]:
@@ -508,7 +510,7 @@ class Trainer:
                     extra = min(ga, max(1, math.ceil(ga / 2)) * general_trips) if replay_train else 0
                     if general_trips <= 2:
                         lr_mult *= 0.5
-                    events.log(f"It no longer answers {general_lost} of the {len(watch)} general questions it is checked on (the final exam accepts {general_limit(len(watch)) - 1}): rehearsing them more from here on, and learning more gently.", "warn")
+                    events.log(f"It no longer answers {general_lost} of the {len(watch)} general questions it is checked on (more than {general_limit(len(watch)) - 1} is too close to what the final exam refuses): rehearsing them more from here on, and learning more gently.", "warn")
                     events.stage("sft" if stage == "sft" else "rft", "started", "Rehearsing general skills more while it learns your task")
                     if last_dev > spare + 1e-9 or (abs(last_dev - spare) <= 1e-9 and kept_now > spare_general):
                         spare, spare_general = last_dev, kept_now

@@ -285,9 +285,9 @@ def test_of_two_equally_good_versions_the_one_that_kept_more_general_questions_i
     first of them was kept, and that was the one that had lost most general questions."""
     from engine.suites import general
 
-    slow_to_return = {it["messages"][0]["content"] for it in general.replay_prompts(132)[:3]}
+    slow_to_return = {it["messages"][0]["content"] for it in general.replay_prompts(132)[:2]}
 
-    class Quick(Stand):  # knows the task after a few steps; three general questions come back late
+    class Quick(Stand):  # knows the task after a few steps; two general questions come back late
         def optimizer_step(self, lr, max_grad_norm):
             norm = super().optimizer_step(lr, max_grad_norm)
             self.w = 1.0
@@ -306,8 +306,8 @@ def test_of_two_equally_good_versions_the_one_that_kept_more_general_questions_i
         result, text, report = trained()
     finally:
         module.make_backend = original
-    assert _has(text, "general questions 57/60") and _has(text, "general questions 60/60"), text
-    assert not _has(text, "It no longer answers")  # three of sixty is within what the exam accepts
+    assert _has(text, "general questions 58/60") and _has(text, "general questions 60/60"), text
+    assert not _has(text, "It no longer answers")  # two of sixty is within the limit
     assert report["training"]["general_answered"] == 60 and report["training"]["general_watched"] == 60
     assert result["decision"] == "PROMOTE", (result, text)
 
@@ -331,7 +331,7 @@ def test_a_model_that_cannot_keep_them_still_gets_its_exam_and_an_honest_verdict
 
 
 def test_how_many_general_questions_may_be_lost():
-    assert [tg.general_limit(n) for n in (8, 16, 24, 36, 60)] == [2, 2, 2, 3, 5]
+    assert [tg.general_limit(n) for n in (8, 16, 24, 40, 60, 100)] == [2, 2, 2, 2, 3, 5]
 
 
 def test_the_signs_of_a_broken_model():
