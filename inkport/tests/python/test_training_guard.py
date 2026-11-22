@@ -326,6 +326,52 @@ def test_refinement_runs_at_half_the_rate_of_the_first_stage(project):
     assert plan["stage2"]["lr"] == plan["sft"]["lr"] / 2 == 5e-5
 
 
+def test_when_time_runs_out_what_was_learned_since_the_last_check_is_checked_not_thrown_away(trained, monkeypatch):
+    """Seen on a Windows build machine without a graphics card: the run was cut by its time limit
+    at step 38 of 60, two steps before the second check. The version from step 20 went to the final
+    exam, with the general questions it had lost; the 18 steps since, spent rehearsing them, were
+    never looked at."""
+    monkeypatch.setattr(tg.Trainer, "over_budget", lambda self, frac=1.0: self.backend.steps >= 30)
+    result, text, report = trained(forgets_above=1e-9)
+    assert _has(text, "general questions 0/60") and _has(text, "rehearsing them more from here on"), text  # step 20
+    assert _has(text, "Time budget reached: checking where training stands"), text
+    assert _has(text, "sft step 30/40") and _has(text, "general questions 60/60"), text  # the check at step 30
+    assert not _has(text, "sft step 40/40")
+    assert report["training"]["stopped"] == "budget" and report["training"]["steps"] == 30
+    assert report["training"]["kept_general"] is True and report["general"]["drop_pts"] == 0
+    assert result["decision"] == "PROMOTE", (result, text)
+
+
+def test_time_running_out_before_the_first_check_still_gets_one(trained, monkeypatch):
+    monkeypatch.setattr(tg.Trainer, "over_budget", lambda self, frac=1.0: self.backend.steps >= 10)
+    result, text, report = trained()
+    assert _has(text, "sft step 10/40: dev pass "), text
+    assert report["training"]["stopped"] == "budget" and report["training"]["steps"] == 10 and report["training"]["best_dev"] > 0.6
+    assert result["decision"] == "PROMOTE", (result, text)
+
+
+def test_general_questions_lost_at_the_check_made_when_time_is_up(trained, monkeypatch):
+    # Nothing can be rehearsed any more: the version is set aside like any other that lost them,
+    # and the log does not promise rehearsal.
+    monkeypatch.setattr(tg.Trainer, "over_budget", lambda self, frac=1.0: self.backend.steps >= 10)
+    result, text, report = trained(forgets_above=1e-9)
+    assert _has(text, "and no time is left to rehearse them"), text
+    assert not _has(text, "rehearsing them more from here on")
+    assert report["training"]["rehearsed_more"] == 0 and report["training"]["kept_general"] is False
+    assert result["decision"] == "REJECT" and "general skills dropped" in result["explanation"], result
+
+
+def test_a_model_found_broken_when_time_is_up_is_not_called_tried_three_times(trained, monkeypatch):
+    monkeypatch.setattr(tg.Trainer, "over_budget", lambda self, frac=1.0: self.backend.steps >= 10)
+    result, text, report = trained(breaks_above=1e-9)
+    assert sum("Training went wrong" in line for line in text) == 1, text
+    assert result["decision"] == "REJECT" and result["active_version"] is None
+    assert report["checks"]["training"] is False
+    assert "did not hold steady" in result["explanation"] and "the time set for this run was up" in result["explanation"], result["explanation"]
+    assert "three times" not in result["explanation"]
+    assert report["test"]["candidate_pass_rate"] == report["test"]["baseline_pass_rate"]
+
+
 def test_a_version_that_lost_them_is_never_chosen_while_one_that_kept_them_exists(trained):
     # Fine at the first check; from then on it learns faster but loses the general questions
     # whatever is rehearsed. The first version is the one that goes to the exam.

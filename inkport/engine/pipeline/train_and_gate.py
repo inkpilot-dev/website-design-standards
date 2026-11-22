@@ -492,7 +492,17 @@ class Trainer:
             now = time.monotonic()
             tok_s = tokens / max(1e-6, now - t_last)
             metrics = {"loss": round(mean_loss, 4), "loss_ema": round(loss_ema, 4), "lr": cur_lr, "grad_norm": gnorm, "tok_s": round(tok_s, 1), "dev_pass": last_dev, "replay_dnll": last_dnll, "mem_gb": b.memory_gb()}
-            if step % eval_every == 0 or step == total:
+            # Out of time: this step is the last one. What was learned since the last check is
+            # checked now instead of being thrown away with it. (Seen on a Windows build machine
+            # without a graphics card: 80 seconds a step, the 90-minute run was cut at step 38 of
+            # 60, two steps before its second check; the version that went to the final exam was
+            # the one from step 20, which had lost general questions the 18 steps since, spent
+            # rehearsing them, were never asked about.)
+            out_of_time = step < total and self.over_budget(0.75 if stage == "sft" else 0.9)
+            if out_of_time:
+                events.log("Time budget reached: checking where training stands, then finishing with the best result", "warn")
+                stopped = "budget"
+            if step % eval_every == 0 or step == total or out_of_time:
                 dev_res = self._dev_eval(baseline, step)
                 last_dev = dev_res["passed"] / max(dev_res["n"], 1)
                 last_dnll = b.nll(holdout) - base_nll
@@ -529,6 +539,13 @@ class Trainer:
                         stopped = "unstable"
                         events.log("Stopping this stage here" + ("." if good is None else ", with the best version so far." if best_dir.is_dir() else ", with the model as it was before the stage."), "warn")
                         break
+                    if out_of_time:
+                        # No time to try again more gently: the last good state is what there is,
+                        # and if that is the model as it was before the stage, nothing was trained.
+                        if not best_dir.is_dir():
+                            stopped = "unstable"
+                        events.log("Stopping this stage here" + (", with the best version so far." if best_dir.is_dir() else ", with the model as it was before the stage."), "warn")
+                        break
                     lr_mult *= 0.5
                     if good == init_dir:
                         b.reset_optimizer()
@@ -547,9 +564,12 @@ class Trainer:
                     # Nothing is thrown away: from here on every step also rehearses general
                     # questions (more of them each time this happens), and this version is not one
                     # of those the final choice is made from.
-                    general_trips += 1
+                    if out_of_time:
+                        events.log(f"It no longer answers {general_lost} of the {len(watch)} general questions it is checked on, and no time is left to rehearse them: this version is not one the final choice is made from.", "warn")
+                    else:
+                        general_trips += 1
                     was_max = extra >= ga or not replay_train  # rehearsal cannot be raised any further
-                    if not was_max:
+                    if not was_max and not out_of_time:
                         extra = min(ga, extra + max(1, math.ceil(ga / 2)))
                     # Moving more gently as well costs nothing once the task is learned. A model
                     # that is still learning it keeps its pace and only rehearses more, until
@@ -558,12 +578,13 @@ class Trainer:
                     # questions, it ended with 26% of the hidden exam and 56 of 60 general questions
                     # where the original answers 45; a run of the same goal that was not slowed
                     # had reached 56% of the exam with 44 of 60.)
-                    gentler = general_slowed < 2 and (last_dev >= LEARNED or was_max)
+                    gentler = not out_of_time and general_slowed < 2 and (last_dev >= LEARNED or was_max)
                     if gentler:
                         lr_mult *= 0.5
                         general_slowed += 1
-                    events.log(f"It no longer answers {general_lost} of the {len(watch)} general questions it is checked on (more than {general_limit(len(watch)) - 1} is too close to what the final exam refuses): {'rehearsal is already as high as it goes' if was_max else 'rehearsing them more from here on'}{', and learning more gently' if gentler else ''}.", "warn")
-                    events.stage("sft" if stage == "sft" else "rft", "started", "Rehearsing general skills more while it learns your task")
+                    if not out_of_time:
+                        events.log(f"It no longer answers {general_lost} of the {len(watch)} general questions it is checked on (more than {general_limit(len(watch)) - 1} is too close to what the final exam refuses): {'rehearsal is already as high as it goes' if was_max else 'rehearsing them more from here on'}{', and learning more gently' if gentler else ''}.", "warn")
+                        events.stage("sft" if stage == "sft" else "rft", "started", "Rehearsing general skills more while it learns your task")
                     if last_dev > spare + 1e-9 or (abs(last_dev - spare) <= 1e-9 and kept_now > spare_general):
                         spare, spare_general = last_dev, kept_now
                         b.save_checkpoint(spare_dir)
@@ -577,17 +598,15 @@ class Trainer:
                     else:
                         patience += 1
                         if patience >= int(cfg["early_stop_patience"]):
-                            stopped = "early_stop"
+                            stopped = "budget" if out_of_time else "early_stop"
                             prog.update(total, metrics, force=True)
                             break
-            if step % ckpt_every == 0 or step == total:
+            if step % ckpt_every == 0 or step == total or out_of_time:
                 b.save_checkpoint(ckpt)
                 st.update(step=step, best_dev=best, spare_dev=spare, best_general=best_general, spare_general=spare_general, patience=patience, lr_mult=lr_mult, guard_trips=guard_trips, general_trips=general_trips, general_slowed=general_slowed, extra_rehearsal=extra, last_dev=last_dev)
                 self.state.save()
             prog.update(step, metrics)
-            if self.over_budget(0.75 if stage == "sft" else 0.9):
-                events.log("Time budget reached; finishing with the best result so far", "warn")
-                stopped = "budget"
+            if out_of_time:
                 break
         kept_general = True
         if best_dir.is_dir():
@@ -781,7 +800,11 @@ class Trainer:
         elif nothing_trained:
             kept = "Your current version stays active." if ref_name != "base" else "Nothing was saved, and the original model is unchanged."
             why_last = (self.training_info or {}).get("why")
-            lines = [f"Training did not hold steady on this computer: it was tried three times, each time more gently, and each time the model got worse instead of better{f' (the last time: {why_last})' if why_last else ''}. So there is no trained model to judge (the model as it was before training passes {cand_rate:.0%} of the {n} hidden test questions). {kept}"]
+            if int((self.training_info or {}).get("went_wrong") or 0) >= 3:
+                how = f"it was tried three times, each time more gently, and each time the model got worse instead of better{f' (the last time: {why_last})' if why_last else ''}"
+            else:  # it went wrong at the check made when the time for the run was up
+                how = f"the model got worse instead of better{f' ({why_last})' if why_last else ''}, and the time set for this run was up before it could be tried again more gently"
+            lines = [f"Training did not hold steady on this computer: {how}. So there is no trained model to judge (the model as it was before training passes {cand_rate:.0%} of the {n} hidden test questions). {kept}"]
         else:
             why = []
             hint = ""
