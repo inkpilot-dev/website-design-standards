@@ -22,6 +22,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 import urllib.request
 from pathlib import Path
 
@@ -82,6 +83,42 @@ def convert_gguf(py: Path, llama: Path, tools: Path, hf_dir: Path, out_file: Pat
     f16.unlink()
 
 
+# The same conversion with the processor chosen before anything is computed.
+_MLX_ON_CPU = (
+    "import sys\n"
+    "import mlx.core as mx\n"
+    "try:\n"
+    "    mx.set_default_device(mx.cpu)\n"
+    "except Exception as exc:\n"
+    "    print('[inkport-build] could not select the processor for MLX:', exc)\n"
+    "from mlx_lm import cli\n"
+    "sys.argv = ['mlx_lm'] + sys.argv[1:]\n"
+    "cli.main()\n"
+)
+
+
+def convert_mlx(args: list, target: Path, attempts: int = 3) -> None:
+    """Quantise the model for MLX, trying again when the build machine's graphics card gives up.
+
+    Hosted macOS build machines have a virtual GPU that now and then times out in the middle of
+    the conversion ("[METAL] Command buffer execution failed: Caused GPU Timeout Error"). The
+    conversion itself is deterministic, so it is simply run again; the last attempt runs on the
+    processor, which is slower but cannot time out that way."""
+    cmd = [str(a) for a in args]
+    for attempt in range(1, attempts + 1):
+        rmtree(target)
+        last = attempt == attempts and attempts > 1
+        run_cmd = [cmd[0], "-c", _MLX_ON_CPU, *cmd[3:]] if last else cmd
+        log("$ " + " ".join(cmd) + ("   (on the processor)" if last else ""))
+        proc = subprocess.run(run_cmd, env={**os.environ})
+        if proc.returncode == 0 and (target / "config.json").is_file():
+            return
+        if attempt < attempts:
+            log(f"model conversion failed (attempt {attempt} of {attempts}, exit code {proc.returncode}); trying again in 30 s")
+            time.sleep(30)
+    die(f"model conversion failed {attempts} times: {' '.join(cmd)}")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--platform", default=host_platform())
@@ -114,7 +151,7 @@ def main() -> None:
         args = [py, "-m", "mlx_lm", "convert", "--hf-path", hf_dir, "--mlx-path", out / "mlx", "-q", "--q-bits", str(spec["mlx_q_bits"]), "--q-group-size", str(spec["mlx_q_group_size"])]
         rmtree(out / "mlx")
         out.rmdir()
-        run(args)
+        convert_mlx(args, out / "mlx")
         shutil.move(str(out / "mlx"), str(out.with_name("starter-mlx")))
         rmtree(out)
         shutil.move(str(out.with_name("starter-mlx")), str(out))
