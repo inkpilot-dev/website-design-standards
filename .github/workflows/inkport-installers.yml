@@ -23,8 +23,10 @@ on:
     branches: [claude/busy-goodall-wyjcg6]
     paths: ["inkport/**", ".github/workflows/inkport-installers.yml"]
 
+# A second run of the same kind for the same commit replaces the first; a run that measures a
+# recipe ("probe") and a build of the installers for the same commit do not cancel each other.
 concurrency:
-  group: inkport-installers-${{ github.ref }}-${{ github.sha }}
+  group: inkport-installers-${{ github.ref }}-${{ github.sha }}-${{ inputs.probe != '' && 'probe' || 'build' }}
   cancel-in-progress: true
 
 defaults:

@@ -32,14 +32,16 @@ def known(question: str) -> float:
 class Stand(Backend):
     """Answers from a table. Knows `base` of the answers before training and more after each
     step, unless a step is taken with a learning rate above `breaks_above`: then it only
-    produces garbage, the way a model whose weights went bad does."""
+    produces garbage, the way a model whose weights went bad does. Learning rates are counted
+    as a share of the run's own (1.0 = the rate the plan starts from), so that these tests say
+    the same thing whatever the default rate is."""
 
     name = "torch"
     answers: dict = {}
     general: dict = {}  # stock general questions -> their right answers (the original knows them all)
     base = 0.6
-    breaks_above = 1.0  # a learning rate; 1.0 = never
-    forgets_above = 1.0  # a learning rate above which it learns the task but loses the general questions...
+    breaks_above = 9.0  # a share of the plan's learning rate; 9.0 = never
+    forgets_above = 9.0  # a share above which it learns the task but loses the general questions...
     rehearsal_cures = 1  # ...unless a step also holds this many micro-batches of nothing but general questions
     broken_drift = 0.0  # what the measure of forgetting reads once broken (may be nan)
     always_drifts = 0.0  # drift added per step even when healthy
@@ -98,14 +100,15 @@ class Stand(Backend):
 
     def optimizer_step(self, lr, max_grad_norm):
         self.steps += 1
-        if lr > self.breaks_above:
+        share = lr / float(self.plan["sft"]["lr"])
+        if share > self.breaks_above:
             self.broken = True
         if self.rehearsal >= self.rehearsal_cures:
             self.forgot = False
-        elif lr > self.forgets_above:
+        elif share > self.forgets_above:
             self.forgot = True
         self.rehearsal = 0
-        self.w += 150 * lr
+        self.w += 0.03 * share
         return 0.5
 
     def nll(self, examples):
@@ -152,7 +155,7 @@ def trained(project, tmp_path, monkeypatch):
 
     def run(plan=None, **settings):
         Stand.answers, Stand.general, Stand.log, Stand.scales = answers, stock, [], []
-        Stand.base, Stand.breaks_above, Stand.forgets_above, Stand.rehearsal_cures, Stand.broken_drift, Stand.always_drifts = 0.6, 1.0, 1.0, 1, 0.0, 0.0
+        Stand.base, Stand.breaks_above, Stand.forgets_above, Stand.rehearsal_cures, Stand.broken_drift, Stand.always_drifts = 0.6, 9.0, 9.0, 1, 0.0, 0.0
         for key, value in settings.items():
             setattr(Stand, key, value)
         del lines[:]
@@ -180,8 +183,8 @@ def test_a_healthy_run_is_left_alone(trained):
 
 
 def test_a_run_that_breaks_starts_again_more_gently_and_succeeds(trained):
-    # The full learning rate (2e-4) breaks this model; half of it does not.
-    result, text, report = trained(breaks_above=1.5e-4)
+    # The full learning rate breaks this model; half of it does not.
+    result, text, report = trained(breaks_above=0.75)
     assert _has(text, "Training went wrong at step 20"), text
     assert _has(text, "Starting this stage again, more gently")
     assert result["decision"] == "PROMOTE", (result, text)
@@ -193,14 +196,14 @@ def test_a_run_that_breaks_starts_again_more_gently_and_succeeds(trained):
 def test_broken_numbers_count_as_broken(trained):
     # Garbage answers and a measure of forgetting that is not a number: the practice score
     # alone would not catch this when the original passes few practice questions.
-    result, text, _ = trained(breaks_above=1.5e-4, broken_drift=math.nan, base=0.1)
+    result, text, _ = trained(breaks_above=0.75, broken_drift=math.nan, base=0.1)
     assert _has(text, "its numbers stopped being numbers"), text
     assert result["decision"] == "PROMOTE", (result, text)
 
 
 def test_forgetting_at_the_first_check_no_longer_ships_the_drifted_model(trained):
     # Drift over the limit at step 20 used to end the stage and offer that very model.
-    result, text, report = trained(breaks_above=1.5e-4, broken_drift=0.4)
+    result, text, report = trained(breaks_above=0.75, broken_drift=0.4)
     assert _has(text, "it is forgetting general skills"), text
     assert result["decision"] == "PROMOTE", (result, text)
     assert report["training"]["went_wrong"] == 1
@@ -355,6 +358,53 @@ def test_a_model_that_cannot_keep_them_still_gets_its_exam_and_an_honest_verdict
     assert report["training"]["rehearsed_more"] == 2
     assert result["decision"] == "REJECT" and "general skills dropped" in result["explanation"], result["explanation"]
     assert "did not hold steady" not in result["explanation"]
+
+
+def test_a_model_that_was_already_good_is_told_that_and_not_that_training_failed(trained):
+    """Seen with the bundled model on the documents and SQL samples: the original passes 29 to 32
+    of the 32 to 35 hidden questions, the trained one all of them, and the verdict said "the
+    improvement is too small or not statistically reliable yet", as if more training could help."""
+    result, text, report = trained(base=0.97)
+    missed = round(report["test"]["n"] * (1 - report["test"]["baseline_pass_rate"]))
+    assert 0 < missed < 6, report["test"]
+    assert report["test"]["candidate_pass_rate"] == 1.0
+    assert result["decision"] == "REJECT"
+    assert f"the base already answers {report['test']['n'] - missed} of the {report['test']['n']} hidden questions correctly" in result["explanation"], result["explanation"]
+    assert "too few for an improvement to be told from chance" in result["explanation"]
+    assert "add rules that say what is missing" in result["explanation"]
+    assert "improvement is too small" not in result["explanation"]
+
+
+def test_when_there_is_no_room_to_improve():
+    # Fewer than 100 hidden questions: six won back with none lost is the least that counts.
+    assert tg.no_room_to_improve(32, 35) and tg.no_room_to_improve(30, 35)
+    assert not tg.no_room_to_improve(29, 35) and not tg.no_room_to_improve(0, 39)
+    assert tg.no_room_to_improve(35, 35)
+    # 100 or more: four are enough for a range above zero, but they must also be two points.
+    assert tg.no_room_to_improve(117, 120, verified=True) and not tg.no_room_to_improve(116, 120, verified=True)
+    assert tg.no_room_to_improve(396, 400, verified=True)  # four of 400 is one point
+
+
+def test_few_examples_get_more_passes_instead_of_a_higher_learning_rate():
+    cfg = {"min_steps": 60, "small_set_passes": 12, "max_steps": None}
+    assert tg.planned_steps(213, 8, 3, cfg) == (27, 81)  # the expenses sample: three passes, as before
+    assert tg.planned_steps(87, 8, 3, cfg) == (11, 60)  # the customer-replies sample: 33 steps before
+    assert tg.planned_steps(10, 8, 3, cfg) == (2, 24)  # a handful of examples: a dozen passes, not thirty
+    assert tg.planned_steps(87, 8, 1, cfg, first_stage=False) == (11, 11)  # refinement rounds stay short
+    assert tg.planned_steps(87, 8, 3, {**cfg, "max_steps": 40}) == (11, 40)
+    assert tg.planned_steps(87, 8, 3, {}) == (11, 33)  # a plan written before this existed
+
+
+def test_the_recipe_a_user_gets(project):
+    report = {"gpus": [], "ram_gb": 16, "apple_silicon": False}
+    report["recommendation"] = select_tier(report)
+    meta = json.loads((project / "project.json").read_text())
+    sft = make_plan(meta, report, preset="fast")["sft"]
+    # Twice this rate cost the bundled model most of its general skills by the first practice check.
+    assert sft["lr"] == 1e-4 and sft["min_steps"] == 60 and sft["small_set_passes"] == 12
+    assert sft.get("general_guard", True) is True
+    tiny = make_plan(meta, report, preset="smoke")["sft"]
+    assert tiny["min_steps"] == 0 and tiny["general_guard"] is False
 
 
 def test_how_many_general_questions_may_be_lost():

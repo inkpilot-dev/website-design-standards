@@ -81,6 +81,22 @@ def lr_at(step: int, total: int, peak: float, warmup_frac: float, min_ratio: flo
     return peak * (min_ratio + (1 - min_ratio) * 0.5 * (1 + math.cos(math.pi * min(1.0, progress))))
 
 
+def planned_steps(n_examples: int, per_step: int, epochs: float, cfg: dict, first_stage: bool = True) -> tuple[int, int]:
+    """(steps in one pass over the examples, steps in all).
+
+    With few examples the usual number of passes is too few steps to learn much at a learning rate
+    that is gentle enough to keep general skills, so the first stage makes more passes: up to
+    `min_steps` steps, but never more than `small_set_passes` passes (a handful of examples
+    repeated dozens of times is learned by heart). `max_steps` caps everything."""
+    per_epoch = max(1, math.ceil(n_examples / max(1, per_step)))
+    total = max(1, math.ceil(epochs * per_epoch))
+    if first_stage and cfg.get("min_steps"):
+        total = max(total, min(int(cfg["min_steps"]), int(cfg.get("small_set_passes") or 12) * per_epoch))
+    if cfg.get("max_steps"):
+        total = min(total, int(cfg["max_steps"]))
+    return per_epoch, total
+
+
 def evaluate(backend: Backend, items: list[dict], vset: dict, ctx: Context, max_new_tokens: int, use_adapter: bool = True, progress: Optional[events.Progress] = None, offset: int = 0) -> dict:
     """Greedy generation + verifiers. Returns {"outputs", "results", "pass", "n", "passed"}."""
     outputs: list[str] = []
@@ -189,6 +205,19 @@ def gone_wrong(base_pass: list, base_format: Optional[float], res: dict, drift: 
     if base_format is not None and now_format is not None and base_format >= 0.8 and now_format <= 0.5:
         return f"only {now_format:.0%} of its practice answers are well-formed (the original: {base_format:.0%})"
     return None
+
+
+def no_room_to_improve(ref_passed: int, n: int, verified: bool = False, min_delta_pts: float = 2.0) -> bool:
+    """True if the reference fails so few hidden questions that winning every one of them back,
+    with none lost, would still not pass the exam: fewer points than it asks for, or not "more than
+    chance" by its own test (exact McNemar p < 0.05 needs six; with 100+ questions, a bootstrap
+    range above zero needs four)."""
+    room = n - ref_passed
+    if n <= 0 or 100.0 * room / n < min_delta_pts:
+        return True
+    if verified:
+        return (1 - room / n) ** n > 0.025  # how often a resample holds none of the questions won
+    return mcnemar_exact(room, 0) >= 0.05
 
 
 def training_failed(info: Optional[dict]) -> bool:
@@ -362,10 +391,7 @@ class Trainer:
         data = examples + replay_train[:n_replay]
         mb, ga = int(cfg["micro_batch"]), int(cfg["grad_accum"])
         per_step = mb * ga
-        steps_per_epoch = max(1, math.ceil(len(data) / per_step))
-        total = max(1, math.ceil(epochs * steps_per_epoch))
-        if cfg.get("max_steps"):
-            total = min(total, int(cfg["max_steps"]))
+        steps_per_epoch, total = planned_steps(len(data), per_step, epochs, cfg, first_stage=stage == "sft")
         eval_every = int(cfg["eval_every"]) or max(20, total // 10)
         ckpt_every = int(cfg["checkpoint_every"])
         st = self.state.data.setdefault(stage, {})
@@ -724,8 +750,17 @@ class Trainer:
             lines = [f"Training did not hold steady on this computer: it was tried three times, each time more gently, and each time the model got worse instead of better{f' (the last time: {why_last})' if why_last else ''}. So there is no trained model to judge (the model as it was before training passes {cand_rate:.0%} of the {n} hidden test questions). {kept}"]
         else:
             why = []
+            hint = ""
             if not task_ok:
-                why.append(f"it did worse than the {ref_name} on the hidden questions" if (delta < 0 and p_val < 0.05) else "the improvement is too small or not statistically reliable yet")
+                if delta < 0 and p_val < 0.05:
+                    why.append(f"it did worse than the {ref_name} on the hidden questions")
+                elif delta >= 0 and no_room_to_improve(ref["passed"], n, verified, float(self.gate_cfg["min_delta_pts"])):
+                    # Not a failed training: the reference fails so few of the hidden questions that
+                    # even answering every one of them could not count as more than chance.
+                    why.append(f"the {ref_name} already answers {ref['passed']} of the {n} hidden questions correctly, which leaves too few for an improvement to be told from chance")
+                    hint = " If its answers are not yet what you want, add rules that say what is missing, or more examples."
+                else:
+                    why.append("the improvement is too small or not statistically reliable yet")
             if not general_ok:
                 why.append(f"general skills dropped {g_drop:.1f} points")
             if not format_ok:
@@ -733,7 +768,7 @@ class Trainer:
             if not audit_ok:
                 why.append("some correct-looking answers fail on scrambled data (likely memorized)")
             kept = "Your current version stays active." if ref_name != "base" else "Nothing was saved, and the original model is unchanged."
-            lines.append("Not promoted because " + "; ".join(why) + ". " + kept)
+            lines.append("Not promoted because " + "; ".join(why) + ". " + kept + hint)
 
         report = {
             "version": 1,

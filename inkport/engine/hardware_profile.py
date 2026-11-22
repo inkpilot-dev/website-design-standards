@@ -320,8 +320,15 @@ def make_plan(project: dict, report: dict, preset: str = "standard", overrides: 
         "quant": quant,
         "lora": {"r": r, "alpha": 2 * r, "dropout": 0.0, "dora": False, "targets": LORA_TARGETS},
         "sft": {
-            "lr": 2e-4,
+            # Half of what is usual for LoRA. Measured with the bundled model on the samples: at 2e-4
+            # a model that learns an answer format quickly (JSON) answers 9 to 27 of 60 general
+            # questions at its first practice check (the original: 45) and is refused by the final
+            # exam for it; at 1e-4 it answers 45 to 54 with the task learned just as well.
+            "lr": 1e-4,
             "epochs": 3,
+            # Few examples: more passes over them (up to small_set_passes) instead of a higher rate.
+            "min_steps": 60,
+            "small_set_passes": 12,
             "micro_batch": fitted["micro_batch"],
             "grad_accum": fitted["grad_accum"],
             "max_seq": fitted["max_seq"],
@@ -363,7 +370,7 @@ def make_plan(project: dict, report: dict, preset: str = "standard", overrides: 
         plan["lora"].update({"r": 64, "alpha": 128})
         # (general_guard off: the tiny model's general skills are a few memorised patterns that come
         # and go while it trains; watching them would only slow down a model that barely learns.)
-        plan["sft"].update({"lr": 1.5e-3, "epochs": 40, "micro_batch": 16, "grad_accum": 1, "max_seq": 256, "warmup_frac": 0.05, "eval_every": 60, "early_stop_patience": 4, "checkpoint_every": 60, "replay_frac": 0.2, "gradient_checkpointing": False, "dnll_limit": 5.0, "general_guard": False})
+        plan["sft"].update({"lr": 1.5e-3, "epochs": 40, "micro_batch": 16, "grad_accum": 1, "max_seq": 256, "warmup_frac": 0.05, "eval_every": 60, "early_stop_patience": 4, "checkpoint_every": 60, "replay_frac": 0.2, "gradient_checkpointing": False, "dnll_limit": 5.0, "general_guard": False, "min_steps": 0})
         plan["stage2"].update({"mode": "rft", "k": 2, "rounds": 1, "lr": 1e-3})
         plan["gate"].update({"max_new_tokens": 40, "general_suite_n": 20, "min_test_items": 30})
         plan["dev_eval_n"] = 16
