@@ -86,8 +86,8 @@ S=$("$CLI" samples 2>>"$WORK/cli.log" | json | field samples)
 "$CLI" create-project --name "Clean Check" --template business_rules 2>>"$WORK/cli.log" | json | grep -q '"slug":"clean-check"' || fail "create project"
 # The three rules the app suggests for this goal (contracts/templates.json): what a new user clicks.
 RULES='["category must be one of fuel, meals, software, office_supplies, travel","amount must be positive","if the description mentions Uber then category must be travel"]'
-# The rules are also written into the model's instructions. The tiny model of a test build only
-# copes with the kinds of sentence it was built on, so it gets the two plain rules.
+# The tiny model of a test build barely learns this exam (it passes 4 to 12% after training), so it
+# is spared anything that makes its instructions longer: it gets the two plain rules.
 if [ "$MODEL" = "smoke-tiny" ]; then RULES='["category must be one of fuel, meals, software, office_supplies, travel","amount must be positive"]'; fi
 I=$("$CLI" ingest --project clean-check --inputs "$S/expenses.csv" "$S/policy.md" --rules "$RULES" 2>>"$WORK/cli.log" | json) || fail "ingest crashed"
 echo "$I" | grep -q '"leakage_free":true' || fail "ingest: $I"

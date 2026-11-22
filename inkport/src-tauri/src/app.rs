@@ -92,6 +92,10 @@ pub struct ApiStatus {
     pub info: Option<ApiInfo>,
 }
 
+/// How long a new job waits for the previous engine process to be gone after it has reported its
+/// result (it may still be unloading a model). Long enough for that, short enough not to be felt.
+const SETTLE: std::time::Duration = std::time::Duration::from_secs(20);
+
 fn busy(message: &str) -> AppError {
     AppError { code: "BUSY".into(), message: message.into(), retryable: true }
 }
@@ -303,6 +307,7 @@ impl App {
         if self.sup.busy(&[JobKind::Ingest], Some(project_id)) {
             return Err(busy("The practice exam is already being built."));
         }
+        self.sup.settle(SETTLE).await;
         let mut args = vec!["ingest".into(), "--project".into(), self.dir(project_id)?, "--inputs".into()];
         args.extend(paths);
         args.extend(["--rules".into(), serde_json::to_string(&rules).unwrap()]);
@@ -342,6 +347,7 @@ impl App {
         if self.sup.busy(&[JobKind::Ingest], Some(&req.project_id)) {
             return Err(busy("The practice exam is still being built. Start training when it is ready."));
         }
+        self.sup.settle(SETTLE).await;
         if self.hardware.lock().await.is_none() {
             self.detect_hardware().await?;
         }
@@ -389,6 +395,7 @@ impl App {
         if self.sup.busy(&[JobKind::Train, JobKind::Import], None) {
             return Err(busy("Training is running. You can compare the two models when it has finished."));
         }
+        self.sup.settle(SETTLE).await;
         let mut args = vec!["arena".into(), "--project".into(), self.dir(project_id)?, "--n".into(), n.to_string()];
         if let Some(p) = prompt.filter(|p| !p.trim().is_empty()) {
             args.extend(["--prompt".into(), p]);
@@ -418,6 +425,7 @@ impl App {
 
     async fn start_local_api_inner(&self, project_id: &str, port: Option<u16>) -> AppResult<ApiInfo> {
         self.stop_worker().await;
+        self.sup.settle(SETTLE).await;
         let info = self.get_project(project_id)?;
         let worker_token = format!("wk_{}", uuid::Uuid::new_v4().simple());
         let model = format!("inkport/{}", info.slug);
@@ -562,6 +570,9 @@ impl App {
         cmd.creation_flags(0x0800_0000);
         let mut child = cmd.spawn().with_context_msg("could not start the bundled llama-server")?;
         crate::procguard::adopt_tokio(&child);
+        if let Some(pid) = child.id() {
+            crate::procguard::end_with_app(pid);
+        }
         let client = reqwest::Client::builder().no_proxy().build()?;
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(180);
         loop {
@@ -618,6 +629,7 @@ impl App {
         if self.sup.busy(&[JobKind::Train, JobKind::Import], None) {
             return Err(busy("Training is running. Import the adapter when it has finished."));
         }
+        self.sup.settle(SETTLE).await;
         let mut args = vec!["import".into(), "--project".into(), self.dir(project_id)?, "--file".into(), file.into()];
         if trust {
             args.push("--trust".into());

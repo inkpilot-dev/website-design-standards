@@ -58,5 +58,11 @@ def test_format_check_needs_a_real_drop():
     assert format_check(1.0, 85 / 88, ref, [True] * 85 + [False] * 3)  # 3.4 points, p = 0.25: noise
     assert not format_check(1.0, 80 / 88, ref, [True] * 80 + [False] * 8)  # 9 points, p = 0.008: real
     assert format_check(1.0, 0.99, ref, [True] * 88)  # within the 2-point tolerance
+    # A malformed answer is already a wrong answer in the task score: a model that gets many more
+    # questions right is not refused for the few it left malformed (95% against 58% once was).
+    ref96 = [True] * 96
+    assert format_check(1.0, 91 / 96, ref96, [True] * 91 + [False] * 5, task_gain=35)
+    assert not format_check(1.0, 91 / 96, ref96, [True] * 91 + [False] * 5, task_gain=6)  # gains little, breaks more
+    assert not format_check(1.0, 91 / 96, ref96, [True] * 91 + [False] * 5)  # gain unknown: the plain rule
     assert format_check(None, 0.5, None, [])  # nothing to compare
     assert not format_check(1.0, 0.9, None, [True] * 88)  # old cached baseline: plain threshold

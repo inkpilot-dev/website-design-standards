@@ -72,9 +72,11 @@ jobs:
           [ -f "$INKPORT_HOME/hardware.json" ] || { echo "FAIL: the window never asked for the hardware report"; kill $PID; exit 1; }
           kill -0 $PID || { echo "FAIL: the app did not stay open"; cat window-check/app.log; exit 1; }
           echo "PASS the window opened, ran its start-up check from a folder with spaces and non-Latin characters, and stayed open"
-          kill $PID; sleep 3
-          ! pgrep -f "llama-server|python.* -m engine" || { echo "FAIL: helper processes left behind"; exit 1; }
-          echo "PASS closing the app left no helper process behind"
+          # Ended the way logging out or shutting down ends an app. Everything it started must go too.
+          kill $PID
+          for i in $(seq 1 20); do pgrep -f "llama-server|python.* -m engine" >/dev/null || break; sleep 1; done
+          if pgrep -fl "llama-server|python.* -m engine"; then echo "FAIL: helper processes were left behind after the app was ended"; exit 1; fi
+          echo "PASS ending the app left no helper process behind"
       - name: Clean-machine check (offline)
         if: ${{ !cancelled() && steps.build.outcome == 'success' && (github.event_name == 'push' || inputs.long_checks) }}
         run: scripts/clean_machine_check.sh build/installers/macos-aarch64-mlx/*.dmg
@@ -200,7 +202,7 @@ jobs:
           $f = @(Get-ChildItem build/installers/windows-x86_64-cpu/* -Include *.exe, *.zip) | Sort-Object { $_.Extension -ne ".exe" } | Select-Object -First 1
           Write-Host "### checking $($f.Name)"
           # A short run: this proves training, the gate and adapter serving work on Windows; it is not a quality benchmark.
-          ./scripts/clean_machine_check.ps1 -Installer $f.FullName -TrainOverrides '{"sft":{"max_steps":12,"eval_every":12,"checkpoint_every":12},"stage2":{"mode":"none"},"gate":{"general_suite_n":8,"max_new_tokens":96,"max_general_drop_pts":100},"dev_eval_n":8}'
+          ./scripts/clean_machine_check.ps1 -Installer $f.FullName -TrainOverrides '{"sft":{"max_steps":20,"eval_every":20,"checkpoint_every":20},"stage2":{"mode":"none"},"gate":{"general_suite_n":8,"max_new_tokens":96,"max_general_drop_pts":100},"dev_eval_n":8}'
           if ($LASTEXITCODE -ne 0) { exit 1 }
       - name: The .exe installer must exist (the portable zip alone is not a complete release)
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}

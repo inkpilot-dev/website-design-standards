@@ -202,6 +202,23 @@ pub fn run() {
             match App::new(home.clone(), resource_dir, Arc::new(TauriSink(handle))) {
                 Ok(core) => {
                     app.manage(AppState(core));
+                    // Logging out, shutting the computer down or `kill` ask the app to end with a
+                    // signal. Leave the way the window's close button does, so that training and
+                    // the answer engine are stopped instead of being left behind.
+                    #[cfg(unix)]
+                    {
+                        let handle = app.handle().clone();
+                        tauri::async_runtime::spawn(async move {
+                            use tokio::signal::unix::{signal, SignalKind};
+                            let (Ok(mut term), Ok(mut int), Ok(mut hup)) = (signal(SignalKind::terminate()), signal(SignalKind::interrupt()), signal(SignalKind::hangup())) else { return };
+                            tokio::select! {
+                                _ = term.recv() => {}
+                                _ = int.recv() => {}
+                                _ = hup.recv() => {}
+                            }
+                            handle.exit(0);
+                        });
+                    }
                 }
                 Err(e) => {
                     // Without its data folder the app cannot do anything; say why instead of

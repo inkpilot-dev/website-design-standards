@@ -7,11 +7,12 @@ from pathlib import Path
 
 import pytest
 
-# Two of the three rules the app suggests for this goal. The rules are also written into the
-# model's instructions, and the 1.4M-parameter test model only copes with sentences of the kinds
-# it was built on; with the third ("if the description mentions Uber then ...") its score drops
-# to a few percent although every correct answer still passes the exam. Real models are not
-# affected: the installers' clean-machine check trains the starter model with all three.
+# Two of the three rules the app suggests for this goal. The 1.4M-parameter test model barely
+# learns this exam: it passes 4 to 12% of the hidden questions after training (0% before), and
+# needs about 6% for the gain to count as statistically solid, so promotion is not far from a coin
+# toss and the model is spared anything that makes its instructions longer. Real models are not
+# in that position: the installers' clean-machine check trains the starter model with all three
+# rules (49% -> 78%, 56% -> 71%, 58% -> 95% in the builds so far).
 SUGGESTED_RULES = [r for r in next(t for t in json.loads((Path(__file__).resolve().parents[2] / "contracts" / "templates.json").read_text(encoding="utf-8"))["templates"] if t["id"] == "business_rules")["example_rules"] if not r.startswith("if ")]
 
 ROOT = Path(__file__).resolve().parents[2]

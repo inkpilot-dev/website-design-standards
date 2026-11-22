@@ -125,12 +125,19 @@ def format_pass(res: dict) -> list[Optional[bool]]:
     return out
 
 
-def format_check(f_ref: Optional[float], f_cand: Optional[float], ref_items: Optional[list], cand_items: list) -> bool:
-    """False only when the candidate formats answers worse than the reference beyond noise.
+def format_check(f_ref: Optional[float], f_cand: Optional[float], ref_items: Optional[list], cand_items: list, task_gain: Optional[int] = None) -> bool:
+    """False only when the candidate formats answers worse than the reference, beyond noise, and
+    that loss is not clearly outweighed by what it gained on the task.
 
-    A drop of more than 2 points must also be statistically visible on the paired items (exact
-    McNemar, p <= 0.10), like the general-skills check: on ~90 questions two malformed answers are
-    already 2.3 points, which used to veto models that were far better on the task itself.
+    A drop of more than 2 points must be statistically visible on the paired items (exact McNemar,
+    p <= 0.10), like the general-skills check: on ~90 questions two malformed answers are already
+    2.3 points.
+
+    And a malformed answer already counts as a wrong answer in the task score. A model that gets
+    35 more of 96 questions right and leaves 5 answers malformed is simply the better model; that
+    case (95% against 58%) was once refused "because it formats answers correctly less often".
+    So the loss in well-formed answers only blocks a model whose net gain in correct answers
+    (``task_gain``) is less than twice that loss.
     """
     if f_ref is None or f_cand is None or f_cand >= f_ref - 0.02:
         return True
@@ -138,7 +145,9 @@ def format_check(f_ref: Optional[float], f_cand: Optional[float], ref_items: Opt
         return False  # no per-item data (older cached baseline): keep the plain threshold
     pairs = [(bool(x), bool(y)) for x, y in zip(ref_items, cand_items) if x is not None and y is not None]
     gained, lost = discordant([x for x, _ in pairs], [y for _, y in pairs])
-    return mcnemar_exact(gained, lost) > 0.10
+    if mcnemar_exact(gained, lost) > 0.10:
+        return True
+    return task_gain is not None and task_gain >= 2 * (lost - gained)
 
 
 def audit_rate(res: dict) -> Optional[float]:
@@ -513,7 +522,7 @@ class Trainer:
         verified = n >= int(self.gate_cfg["verified_min_items"])
         task_ok = delta >= float(self.gate_cfg["min_delta_pts"]) and ((lo > 0) if verified else (p_val < 0.05))
         general_ok = not (g_drop > float(self.gate_cfg["max_general_drop_pts"]) and g_p <= 0.10)
-        format_ok = format_check(f_ref, f_cand, ref.get("format_pass"), format_pass(cand))
+        format_ok = format_check(f_ref, f_cand, ref.get("format_pass"), format_pass(cand), task_gain=cand["passed"] - ref["passed"])
         audit_ok = True if aud is None else aud >= 0.9
         checks = {"task": task_ok, "general": general_ok, "format": format_ok, "audit": audit_ok, "leakage": True}
         if decision != "INSUFFICIENT_DATA":
@@ -524,6 +533,8 @@ class Trainer:
         if decision == "PROMOTE":
             lines.append("That difference is statistically solid" + (f" (p = {p_val:.2g})." if not verified else f" (95% range {lo:+.1f} to {hi:+.1f} points)."))
             lines.append("General skills: no meaningful drop." if g_drop <= 1 else f"General skills dipped {g_drop:.1f} points, within the allowed limit.")
+            if f_ref is not None and f_cand is not None and f_cand < f_ref - 0.02:
+                lines.append(f"About {round(100 * (1 - f_cand))}% of its answers were not well-formed (the {ref_name}: {round(100 * (1 - f_ref))}%); those count as wrong in the score above.")
             if label == "PRELIMINARY":
                 lines.append(f"Marked preliminary: add more examples to reach {self.gate_cfg['verified_min_items']}+ hidden questions for a verified result.")
         elif decision == "INSUFFICIENT_DATA":

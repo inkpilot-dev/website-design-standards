@@ -52,6 +52,9 @@ struct Running {
     /// The events a window needs to redraw this job's screen after it was away (stages, results,
     /// the latest progress and side-by-side answers). Bounded; kept only while the job runs.
     history: Vec<Value>,
+    /// The engine has reported its result; only its process is still shutting down (unloading a
+    /// model can take seconds). The job no longer counts as running for anyone asking.
+    finished: bool,
 }
 
 /// A running job as reported to the UI: enough to re-attach to it and replay what happened so far.
@@ -86,12 +89,30 @@ impl Supervisor {
 
     /// The running job of this kind, if any, with its replayable events.
     pub fn running_job(&self, kind: JobKind) -> Option<RunningJob> {
-        self.jobs.lock().unwrap().iter().find(|(_, v)| v.kind == kind).map(|(k, v)| RunningJob { job_id: k.clone(), kind: v.kind, project_id: v.project_id.clone(), events: v.history.clone() })
+        self.jobs.lock().unwrap().iter().find(|(_, v)| v.kind == kind && !v.finished).map(|(k, v)| RunningJob { job_id: k.clone(), kind: v.kind, project_id: v.project_id.clone(), events: v.history.clone() })
     }
 
     /// Is a job of one of these kinds running for this project (or for any project if `None`)?
+    /// A job that has already reported its result does not count: the window shows the verdict
+    /// the moment it arrives, and pressing "Compare" a second later must not be answered with
+    /// "training is running" because the engine process is still unloading the model.
     pub fn busy(&self, kinds: &[JobKind], project_id: Option<&str>) -> bool {
-        self.jobs.lock().unwrap().values().any(|v| kinds.contains(&v.kind) && (project_id.is_none() || v.project_id.as_deref() == project_id))
+        self.jobs.lock().unwrap().values().any(|v| !v.finished && kinds.contains(&v.kind) && (project_id.is_none() || v.project_id.as_deref() == project_id))
+    }
+
+    /// Wait (at most `limit`) for engine processes that have reported their result to be gone, so
+    /// that the next job does not start while the previous one still holds the model in memory.
+    pub async fn settle(&self, limit: Duration) {
+        let end = Instant::now() + limit;
+        while Instant::now() < end && self.jobs.lock().unwrap().values().any(|v| v.finished) {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+
+    fn mark_finished(&self, job_id: &str) {
+        if let Some(job) = self.jobs.lock().unwrap().get_mut(job_id) {
+            job.finished = true;
+        }
     }
 
     fn remember(&self, job_id: &str, v: &Value) {
@@ -159,7 +180,7 @@ impl Supervisor {
         let pid = child.id();
         let (cancel_tx, cancel_rx) = watch::channel(false);
         crate::procguard::adopt_tokio(&child);
-        self.jobs.lock().unwrap().insert(job_id.clone(), Running { pid, cancel: cancel_tx, kind: spec.kind, project_id: spec.project_id.clone(), history: vec![] });
+        self.jobs.lock().unwrap().insert(job_id.clone(), Running { pid, cancel: cancel_tx, kind: spec.kind, project_id: spec.project_id.clone(), history: vec![], finished: false });
         let (ready_tx, ready_rx) = oneshot::channel();
         let me = Arc::clone(self);
         let jid = job_id.clone();
@@ -215,6 +236,8 @@ impl Supervisor {
         let stall = Duration::from_secs(self.cfg.stall_secs);
         let mut stdout_open = true;
         let mut stderr_open = true;
+        let mut done_at: Option<Instant> = None;
+        let mut lingering = false; // reported its result but would not exit
         let cancelled = loop {
             if !stdout_open && !stderr_open {
                 break false;
@@ -229,7 +252,11 @@ impl Supervisor {
                             Ok(v) => {
                                 match serde_json::from_value::<EngineEvent>(v.clone()) {
                                     Ok(EngineEvent::Ready { .. }) => { if let Some(tx) = ready_tx.take() { let _ = tx.send(v.clone()); } }
-                                    Ok(EngineEvent::Done { ok, result }) => done = Some((ok, result)),
+                                    Ok(EngineEvent::Done { ok, result }) => {
+                                        done = Some((ok, result));
+                                        done_at = Some(Instant::now());
+                                        self.mark_finished(job_id);
+                                    }
                                     Ok(EngineEvent::Error { code, message, retryable }) => {
                                         error = Some(EngineError { code, message, retryable });
                                         error_was_sent = true;
@@ -262,8 +289,16 @@ impl Supervisor {
                     }
                     _ => stderr_open = false,
                 },
-                _ = cancel.changed() => break true,
+                _ = cancel.changed() => {
+                    // A stop request that arrives after the result does not undo the result.
+                    if done.is_some() { lingering = true; break false; }
+                    break true
+                },
                 _ = tokio::time::sleep(Duration::from_secs(5)) => {
+                    if done_at.map(|t| t.elapsed() > Duration::from_secs(45)).unwrap_or(false) {
+                        lingering = true;
+                        break false;
+                    }
                     if last.elapsed() > stall && spec.kind != JobKind::Serve {
                         error = Some(EngineError { code: "ENGINE_STALLED".into(), message: format!("Inkport's engine stopped responding for {} minutes, so it was stopped. Try again; if it happens again, restart the computer first.", stall.as_secs() / 60), retryable: true });
                         error_was_sent = false;
@@ -272,6 +307,9 @@ impl Supervisor {
                 }
             }
         };
+        if lingering {
+            kill_tree(child).await;
+        }
         if cancelled {
             kill_tree(child).await;
             if error.is_none() || error_was_sent {
@@ -530,5 +568,61 @@ mod line_tests {
         assert!(got[1].0.ends_with("oops") && got[2].0 == "{\"b\":1}");
         assert_eq!(clip("abcdef", 3), "abc […]");
         assert_eq!(clip("abc", 3), "abc");
+    }
+}
+
+#[cfg(all(test, unix))]
+mod job_tests {
+    use super::*;
+    use crate::events::MemorySink;
+    use std::os::unix::fs::PermissionsExt;
+
+    /// A stand-in for the engine: a shell script that ignores its arguments.
+    fn supervisor(dir: &std::path::Path, script: &str) -> Arc<Supervisor> {
+        let exe = dir.join("engine.sh");
+        std::fs::write(&exe, format!("#!/bin/sh\n{script}\n")).unwrap();
+        std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let cfg = EngineConfig { python: exe, pythonpath: None, home: dir.to_path_buf(), stall_secs: 600, python_flags: vec![], env: vec![], env_remove: vec![] };
+        Arc::new(Supervisor::new(cfg, Arc::new(MemorySink::default())))
+    }
+
+    #[tokio::test]
+    async fn a_job_that_reported_its_result_is_not_busy_while_its_process_winds_down() {
+        let dir = tempfile::tempdir().unwrap();
+        // Reports the result at once, then takes two more seconds to exit (unloading a model).
+        let sup = supervisor(dir.path(), r#"echo '{"v":1,"type":"done","ts":0,"ok":true,"result":{"decision":"PROMOTE"}}'; sleep 2"#);
+        let job = sup.spawn(JobSpec { kind: JobKind::Train, args: vec![], project_id: Some("p".into()), env: vec![] }).unwrap();
+        assert!(sup.busy(&[JobKind::Train], None), "busy while it runs");
+        let started = Instant::now();
+        while sup.busy(&[JobKind::Train], None) {
+            assert!(started.elapsed() < Duration::from_millis(1500), "still counted as busy after reporting its result");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        // The window may ask for the next thing now; the process is still there.
+        assert!(sup.running_job(JobKind::Train).is_none());
+        assert_eq!(sup.running().len(), 1, "the process has not exited yet");
+        // Stop pressed a moment after the verdict does not turn the result into "stopped".
+        sup.cancel(&job.job_id).await.unwrap();
+        sup.settle(Duration::from_secs(10)).await;
+        assert!(sup.running().is_empty(), "settle waits for the process to be gone");
+        let outcome = job.finished.await.unwrap();
+        assert!(outcome.ok && outcome.error.is_none(), "{:?}", outcome.error.map(|e| e.code));
+        assert_eq!(outcome.result["decision"], "PROMOTE");
+    }
+
+    #[tokio::test]
+    async fn stopping_a_job_that_is_still_working_reports_it_as_stopped() {
+        let dir = tempfile::tempdir().unwrap();
+        let sup = supervisor(dir.path(), r#"echo '{"v":1,"type":"stage","ts":0,"stage":"sft","status":"started","detail":""}'; sleep 30"#);
+        let job = sup.spawn(JobSpec { kind: JobKind::Train, args: vec![], project_id: Some("p".into()), env: vec![] }).unwrap();
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(sup.busy(&[JobKind::Train], Some("p")) && sup.running_job(JobKind::Train).is_some());
+        let started = Instant::now();
+        sup.cancel(&job.job_id).await.unwrap();
+        let outcome = job.finished.await.unwrap();
+        assert!(started.elapsed() < Duration::from_secs(8), "stopping took {:?}", started.elapsed());
+        assert!(!outcome.ok);
+        assert_eq!(outcome.error.unwrap().code, "CANCELLED");
+        assert!(!sup.busy(&[JobKind::Train], None) && sup.running().is_empty());
     }
 }

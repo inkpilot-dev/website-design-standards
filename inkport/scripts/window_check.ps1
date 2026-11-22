@@ -17,7 +17,7 @@ param(
   [int]$CdpPort = 9222,
   [int]$TrainTimeoutSec = 3600,
   # A short run: this proves the window, training, the gate and answering work together; it is not a quality benchmark.
-  [string]$TrainOverrides = '{"sft":{"max_steps":12,"eval_every":12,"checkpoint_every":12},"stage2":{"mode":"none"},"gate":{"general_suite_n":8,"max_new_tokens":96,"max_general_drop_pts":100},"dev_eval_n":8}'
+  [string]$TrainOverrides = '{"sft":{"max_steps":20,"eval_every":20,"checkpoint_every":20},"stage2":{"mode":"none"},"gate":{"general_suite_n":8,"max_new_tokens":96,"max_general_drop_pts":100},"dev_eval_n":8}'
 )
 $ErrorActionPreference = "Stop"
 $Installer = (Resolve-Path $Installer).Path
@@ -149,8 +149,10 @@ $code = Drive "first"
 Screen "desktop-after-first-run"
 Stop-Job $awakeJob -ErrorAction SilentlyContinue
 Remove-Job $awakeJob -Force -ErrorAction SilentlyContinue
-if ($code -ne 0) { Die "the window test failed (see the lines above and the screenshots)" }
-Pass "the window works end to end with the real engine, from a path with spaces and non-Latin characters"
+# One failed check in the window is reported and counted, and the rest still runs: what the lines
+# above say is more useful together with the checks below than without them.
+if ($code -ne 0) { Bad "a check in the window failed (see the lines above and the screenshots)"; Diagnose }
+else { Pass "the window works end to end with the real engine, from a path with spaces and non-Latin characters" }
 if (Test-Path -LiteralPath $awakeFile) { Pass "Windows was asked to stay awake while training ran" }
 elseif (Test-Path -LiteralPath "$awakeFile.ok") { Bad "no stay-awake request from the engine was seen during training (powercfg /requests)" }
 else { Write-Host "    note: powercfg /requests is not usable here, so the stay-awake request could not be observed" -ForegroundColor Yellow }
@@ -192,8 +194,8 @@ $app = StartApp
 $code = Drive "reopen"
 Screen "desktop-after-reopen"
 $null = CloseApp $app
-if ($code -ne 0) { Die "the window test after a restart failed" }
-Pass "after a restart the project opens on 'Use it' and the trained model answers"
+if ($code -ne 0) { Bad "a check in the window after a restart failed" }
+else { Pass "after a restart the project opens on 'Use it' and the trained model answers" }
 
 Say "Every goal: its sample data with every suggested rule must give an exam that can be trained on"
 $app = StartApp
