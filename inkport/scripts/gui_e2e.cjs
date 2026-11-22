@@ -62,6 +62,7 @@ const HELPERS = `
     has: (text, scope) => !!findButton(text, scope),
     enabled: (text, scope) => { const b = findButton(text, scope); return !!b && !b.disabled; },
     click: (text, scope) => { const b = findButton(text, scope); if (!b) return 'missing'; if (b.disabled) return 'disabled'; b.scrollIntoView({ block: 'center' }); b.click(); return 'ok'; },
+    clickSoon: (text, scope) => { const b = findButton(text, scope); if (!b) return 'missing'; if (b.disabled) return 'disabled'; b.scrollIntoView({ block: 'center' }); setTimeout(() => b.click(), 200); return 'ok'; },
     fill: (label, value) => {
       const el = [...document.querySelectorAll('main input, main textarea')].filter(visible).find((i) => i.getAttribute('aria-label') === label || i.placeholder === label) || (label === '' ? [...document.querySelectorAll('main input')].filter(visible)[0] : null);
       if (!el) return 'missing';
@@ -85,7 +86,7 @@ const HELPERS = `
 const call = (expr) => `(function(){ ${HELPERS} return (${expr}); })()`;
 
 // ---- drivers ----
-function request(method, url, body) {
+function request(method, url, body, timeoutMs = 120000) {
   return new Promise((resolve, reject) => {
     const u = new URL(url);
     const data = body === undefined ? null : Buffer.from(JSON.stringify(body));
@@ -95,7 +96,7 @@ function request(method, url, body) {
       res.on('end', () => { const text = Buffer.concat(chunks).toString('utf8'); try { resolve(JSON.parse(text)); } catch { reject(new Error(`driver said: ${text.slice(0, 300)}`)); } });
     });
     req.on('error', reject);
-    req.setTimeout(120000, () => req.destroy(new Error('driver request timed out')));
+    req.setTimeout(timeoutMs, () => req.destroy(new Error('driver request timed out')));
     if (data) req.write(data);
     req.end();
   });
@@ -111,7 +112,7 @@ async function openWebDriver() {
   if (!id) throw new Error('could not start a session: ' + JSON.stringify(created).slice(0, 400));
   const s = `${base}/session/${id}`;
   return {
-    evaluate: async (expr) => { const r = await request('POST', `${s}/execute/sync`, { script: `return ${call(expr)};`, args: [] }); if (r.value && r.value.error) throw new Error(r.value.message || r.value.error); return r.value; },
+    evaluate: async (expr, timeoutMs) => { const r = await request('POST', `${s}/execute/sync`, { script: `return ${call(expr)};`, args: [] }, timeoutMs); if (r.value && r.value.error) throw new Error(r.value.message || r.value.error); return r.value; },
     screenshot: async (file) => { const r = await request('GET', `${s}/screenshot`); if (typeof r.value === 'string') fs.writeFileSync(file, Buffer.from(r.value, 'base64')); },
     close: async () => { await request('DELETE', s).catch(() => {}); },
   };
@@ -165,6 +166,56 @@ async function openPlaywright() {
     await sleep(300);
   };
   const nav = (label) => click(label, 'aside nav');
+  // Press "Stop training" and wait for the window to say the run was stopped.
+  //
+  // On one kind of machine (WebKitGTK from Ubuntu 22.04 inside the AppImage, driven by
+  // WebKitWebDriver) the driver never answers again after this click, although the app is fine:
+  // its main loop is idle, the engine has stopped, and the page has moved on. So the click is
+  // scheduled rather than awaited, each read of the page has a short time limit, and if the
+  // driver stays silent the screen itself is read (GUI_E2E_SCREEN_TEXT: a command that prints
+  // the text visible on the screen, set by scripts/window_check.sh).
+  const stopFromWindow = async (limitMs = 180000) => {
+    const r = await d.evaluate('api.clickSoon("Stop training", "main")', 20000);
+    if (r !== 'ok') throw new Error(`button "Stop training" is ${r}`);
+    const end = Date.now() + limitMs;
+    let silent = 0;
+    let lastNote = Date.now();
+    for (;;) {
+      await sleep(1500);
+      try {
+        if (process.env.GUI_E2E_PRETEND_DRIVER_LOST) throw new Error('pretending the driver is silent (to test reading the screen)');
+        const t = await d.evaluate('api.text()', 10000);
+        silent = 0;
+        if (t.includes('Training was stopped')) return { via: 'window', text: t };
+        if (Date.now() - lastNote > 15000) { lastNote = Date.now(); note('not stopped yet; the window shows: ' + t.slice(0, 230)); }
+      } catch (e) {
+        silent += 1;
+        note(`no answer from the window (${silent}): ${e.message}`);
+      }
+      if (silent >= 3 && process.env.GUI_E2E_SCREEN_TEXT) {
+        let seen = '';
+        for (let i = 0; i < 20 && !/Training\s+was\s+stopped/i.test(seen); i++) {
+          if (i) await sleep(3000);
+          try { seen = require('child_process').execSync(process.env.GUI_E2E_SCREEN_TEXT, { encoding: 'utf8', timeout: 120000, stdio: ['ignore', 'pipe', 'ignore'] }).replace(/\s+/g, ' ').trim(); } catch { seen = ''; }
+        }
+        return { via: 'screen', text: seen };
+      }
+      if (Date.now() > end) throw new Error('timed out waiting for: the run to stop');
+    }
+  };
+  // The verdict on a stopped run, from the page or (see above) from the screen. Returns false when
+  // the driver has lost the window, so the caller knows not to use it any further.
+  const checkStopped = async (stopped, screenshot) => {
+    if (stopped.via === 'window') {
+      await shot(screenshot);
+      check('Stop ends the run with a plain note and the start cards return', stopped.text.includes('Nothing was saved from that run') && (await d.evaluate('api.enabled("Quick run", "main")')) && !stopped.text.includes('Finished'));
+      return true;
+    }
+    note('the test driver stopped answering after the click, so the screen was read instead:');
+    note('  ' + (stopped.text || '(nothing could be read from the screen)').slice(0, 420));
+    check('Stop ends the run with a plain note and the start cards return (read from the screen)', /Training\s+was\s+stopped/i.test(stopped.text) && /Nothing\s+was\s+saved/i.test(stopped.text) && /Quick\s+run/i.test(stopped.text) && !/Stop\s+training/i.test(stopped.text), stopped.text ? '' : 'no text could be read from the screen');
+    return false;
+  };
   const waitText = (needle, timeout) => waitFor(`text "${needle}"`, async () => (await text()).includes(needle), timeout);
 
   try {
@@ -295,17 +346,14 @@ async function openPlaywright() {
       const still = (await d.evaluate('api.has("Stop training", "main")')) || /saved|Not better yet|Need more examples/.test(await text());
       check('coming back to "Train & prove" still shows the run', still);
       if (PHASE === 'smoke') {
-        await click('Stop training', 'main');
-        await waitFor('the run to stop', async () => (await text()).includes('Training was stopped'), 180000, 1000);
-        const stoppedEarly = await text();
-        await shot('06-stopped');
-        check('Stop ends the run with a plain note and the start cards return', stoppedEarly.includes('Nothing was saved from that run') && (await d.evaluate('api.enabled("Quick run", "main")')) && !stoppedEarly.includes('Finished'));
-        await nav('Choose a goal');
-        await waitText('Continue a project');
-        const projects = await text();
-        check('the project appears in the list with its state', projects.includes(PROJECT) && projects.includes('practice exam built'));
-        if (d.errors) check('no errors in the page console', d.errors.length === 0, d.errors.slice(0, 3).join(' | '));
-        await d.close();
+        if (await checkStopped(await stopFromWindow(), '06-stopped')) {
+          await nav('Choose a goal');
+          await waitText('Continue a project');
+          const projects = await text();
+          check('the project appears in the list with its state', projects.includes(PROJECT) && projects.includes('practice exam built'));
+          if (d.errors) check('no errors in the page console', d.errors.length === 0, d.errors.slice(0, 3).join(' | '));
+        }
+        await Promise.race([d.close(), sleep(20000)]);
         const bad = results.filter((r) => !r[0]);
         console.log(`\n${results.length - bad.length}/${results.length} window checks passed (${PHASE}, ${MODE})`);
         process.exit(bad.length ? 1 : 0);
@@ -361,11 +409,12 @@ async function openPlaywright() {
       await click('Best results', 'main');
       await waitFor('the second run to start', () => d.evaluate('api.has("Stop training", "main")'), 120000);
       await sleep(4000);
-      await click('Stop training', 'main');
-      await waitFor('the run to stop', async () => (await text()).includes('Training was stopped'), 120000, 1000);
-      const stopped = await text();
-      await shot('10-stopped');
-      check('Stop ends the run with a plain note and the start cards return', stopped.includes('Nothing was saved from that run') && (await d.evaluate('api.enabled("Quick run", "main")')) && !stopped.includes('Finished'));
+      if (!(await checkStopped(await stopFromWindow(), '10-stopped'))) {
+        await Promise.race([d.close(), sleep(20000)]);
+        const bad = results.filter((r) => !r[0]);
+        console.log(`\n${results.length - bad.length}/${results.length} window checks passed (${PHASE}, ${MODE})`);
+        process.exit(bad.length ? 1 : 0);
+      }
       // ---------------------------------------------------------- the project list
       await nav('Choose a goal');
       await waitText('Continue a project');

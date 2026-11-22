@@ -321,7 +321,9 @@ Both scripts run `scripts/gui_e2e.cjs`, which also works against the browser pre
 full flow with another goal and accepts a "not better yet" verdict. When a step fails or the window
 stops answering, the scripts print what the machine and Inkport's processes were doing at that
 moment (on Linux, with `gdb` installed, where each thread of the app is), and the app's own crash
-log, `logs/app-crash.log` in the data folder. Training in the window offers only the two real run types, which take hours
+log, `logs/app-crash.log` in the data folder. On Linux the driver (WebKitWebDriver) can lose the
+window after "Stop training" although the app is fine; the check then reads the screen itself
+(a screenshot of the virtual display through `tesseract`, if installed) to see what the window shows. Training in the window offers only the two real run types, which take hours
 with a real model; for tests, `INKPORT_TEST_PRESET` and `INKPORT_TEST_OVERRIDES` (read by the
 supervisor when a run starts) shorten it. macOS has no way to drive its webview from outside, so
 CI only checks there that the window opens, runs its start-up check and stays open.

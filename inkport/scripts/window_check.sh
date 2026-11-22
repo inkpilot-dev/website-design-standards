@@ -79,6 +79,18 @@ fi
 DIAG
 chmod +x "$WORK/diagnose.sh"
 export GUI_E2E_ON_FAILURE="$WORK/diagnose.sh" RUST_BACKTRACE=1
+# What is on the screen right now, as text (a screenshot of the virtual display, read back with
+# text recognition). Used when the test driver has lost the window but the window is still there.
+cat >"$WORK/screen_text.sh" <<SCREEN
+#!/usr/bin/env bash
+command -v import >/dev/null && command -v tesseract >/dev/null || exit 3
+shot="$OUT/screen-\$(date +%H%M%S).png"
+import -display ":$DISPLAY_NUM" -window root "\$shot" 2>/dev/null || exit 4
+convert "\$shot" -colorspace Gray -resize 220% "$WORK/screen-big.png" 2>/dev/null || cp "\$shot" "$WORK/screen-big.png"
+tesseract "$WORK/screen-big.png" - --psm 11 2>/dev/null
+SCREEN
+chmod +x "$WORK/screen_text.sh"
+export GUI_E2E_SCREEN_TEXT="$WORK/screen_text.sh"
 
 Xvfb ":$DISPLAY_NUM" -screen 0 1240x900x24 -nolisten tcp >/dev/null 2>&1 &
 XVFB_PID=$!
