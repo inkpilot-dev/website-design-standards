@@ -50,6 +50,76 @@ def expense_rows(n: int = 320, seed: int = 3) -> list[dict]:
     return rows
 
 
+# A sample document long enough to hold a fair hidden exam: every sentence states a fact (an amount,
+# a date, a length of time, a percentage or a name) that a quiz question can be made from.
+LEASE = """# Residential Lease Agreement
+
+## 1. Parties and premises
+
+This lease is made on February 12, 2026 between the landlord, Harborview Property Group, and the tenant, Maria Okafor. The premises are Apartment 4B at 218 Linden Street, on the fourth floor of the building known as Linden Court. The apartment has two bedrooms and may be occupied by no more than 4 people. The building manager is Daniel Reyes, who can be reached at the office between 9 hours and 17 hours on weekdays. The tenant received 3 keys and 2 entry fobs on the day the lease was signed.
+
+## 2. Term
+
+The lease term begins on March 1, 2026 and ends on February 28, 2027. The tenant may move in up to 2 days before the start date at no extra charge. If the tenant stays after the end date without a new lease, the tenancy continues month to month and the rent rises by 8%. Either party may end a month-to-month tenancy with 60 days of written notice. The tenant may not assign this lease during the first 6 months of the term.
+
+## 3. Rent
+
+The monthly rent is $1,450 and is due on the first day of each month. Rent for a partial first month is charged at $48 per day. The tenant may pay by bank transfer, or by card with a processing fee of 2.5%. Rent paid a full year in advance earns a discount of 3%. The landlord must give 90 days of notice before any rent increase. An increase may not be more than 5% in any twelve-month period.
+
+## 4. Late payment
+
+A late fee of $75 applies if rent is more than 5 days late. After 15 days, unpaid rent also accrues interest at 1.5% per month. A returned payment costs the tenant $35 each time. If rent is more than 30 days late, the landlord may begin eviction proceedings. Partial payments are applied first to fees and then to the oldest unpaid rent, as explained by the office of Harborview Property Group.
+
+## 5. Security deposit
+
+The security deposit is $2,000 and is held in a separate account at Lakeside Community Bank. The deposit earns interest of 1% per year, paid to the tenant when the lease ends. The deposit will be returned within 30 days after the tenant moves out. The landlord must send an itemized list of any deductions within 21 days. Normal wear, such as small nail holes, may not be deducted, and repainting may be charged only after fewer than 2 years of occupancy. A missing entry fob costs $45 to replace.
+
+## 6. Utilities
+
+The landlord pays for water and trash collection, and the tenant pays for electricity and internet. Heating is included from October 15 to April 30 each year. If the tenant's share of the water bill exceeds $60 in a month, the tenant pays the difference. The electricity account must be opened in the tenant's name within 7 days of moving in. The building's internet provider is Brightline Fiber, although the tenant may choose another company. Trash is collected every Tuesday and recycling every Friday, according to the notice from Daniel Reyes.
+
+## 7. Repairs and maintenance
+
+The tenant must report any leak or electrical fault within 24 hours of noticing it. The landlord will begin urgent repairs within 48 hours and other repairs within 10 days. The tenant pays for damage caused by the tenant or guests, up to the first $150 of each repair. Smoke detectors are tested by the landlord every 6 months, and the tenant must not remove their batteries. Air filters are replaced every 3 months at the landlord's expense. The emergency repair line is run by a contractor called Northgate Maintenance Services.
+
+## 8. Entry by the landlord
+
+The landlord must give 24 hours of notice before entering the apartment, except in an emergency. Visits to show the apartment to new tenants may take place only during the last 45 days of the lease. Routine inspections happen no more than 2 times per year and last less than 1 hour. The landlord may enter without notice if water is leaking into another apartment, as required by the rules of Linden Court.
+
+## 9. Pets
+
+Pets are allowed with a deposit of $300 per pet. No more than 2 pets may live in the apartment, and each must weigh under 25 kilograms. Monthly pet rent is $25 for a cat and $40 for a dog. Dogs must be kept on a lead in the shared areas, and the courtyard is closed to pets after 22 hours. The pet deposit is returned within 30 days if there is no pet damage, as confirmed by Harborview Property Group.
+
+## 10. Parking and storage
+
+One parking space, number 17, is included in the rent. A second parking space may be rented for $85 per month. A storage unit in the basement costs $30 per month and measures 4 square meters. Visitors may park in the marked bays for up to 12 hours. A vehicle left in a visitor bay for more than 3 days may be towed at the owner's expense. Bicycles are kept in the rack beside the entrance on Linden Street.
+
+## 11. Guests and subletting
+
+A guest may stay for up to 14 days in any six-month period without the landlord's approval. Subletting requires written consent, and the landlord will answer a request within 10 days. A sublet may last no longer than 6 months. Short-term rentals of under 30 days are not allowed in the building. The tenant remains responsible for the rent during any sublet, as stated by the landlord, Harborview Property Group.
+
+## 12. Noise and shared areas
+
+Quiet hours run from 22 hours to 7 hours on every day of the week. The laundry room is open for 14 hours each day, and a wash costs $2.50. The roof terrace may be reserved for private events for a fee of $50. A reservation must be made at least 5 days ahead with the building manager, Daniel Reyes. Smoking is not allowed within 8 meters of any door or window.
+
+## 13. Insurance
+
+The tenant must hold renter's insurance with liability cover of at least $100,000. Proof of insurance must be given to the landlord within 14 days of the start of the lease. The landlord's own policy, issued by Granite Mutual Insurance, covers the building but not the tenant's belongings. If the apartment cannot be lived in after a fire, rent stops until it is repaired, and either party may end the lease after 60 days.
+
+## 14. Renewal and ending the lease
+
+The landlord will offer a renewal at least 75 days before the lease ends. The tenant must accept or decline the offer within 30 days of receiving it. To end the lease early, the tenant must give 60 days of notice and pay a fee equal to 2 months of rent. The early-ending fee is waived if the tenant is called to military service or moves more than 80 kilometers away for work. A tenant who has lived in the apartment for more than 3 years receives a loyalty discount of 4% on renewal.
+
+## 15. Moving out
+
+The tenant must return all keys by 12 hours on the last day of the lease. A move-out inspection takes place within 3 days of the keys being returned. Professional carpet cleaning, if needed, is charged at $120. Items left behind are stored for 30 days and then disposed of. The lift may be reserved for moving for up to 4 hours, with a refundable booking deposit of $100.
+
+## 16. Notices and disputes
+
+Written notices to the landlord are sent to the office of Harborview Property Group at 40 Quay Road. A notice sent by post is treated as received 3 days after posting. Disputes are first referred to mediation at the Riverside Housing Mediation Service, and each party pays 50% of the cost. Mediation must begin within 20 days of a written request. This lease was signed on February 12, 2026 by both parties.
+"""
+
+
 def write_smoke_data(out: Path) -> dict:
     out.mkdir(parents=True, exist_ok=True)
     rows = expense_rows()
@@ -75,13 +145,7 @@ def write_smoke_data(out: Path) -> dict:
         'def initials(name):\n    """Return uppercase initials.\n\n    >>> initials("ada lovelace")\n    \'AL\'\n    >>> initials("Grace Brewster Hopper")\n    \'GBH\'\n    """\n    return "".join(p[0].upper() for p in name.split())\n',
         encoding="utf-8",
     )
-    (out / "lease.md").write_text(
-        "# Residential Lease\n\nThe monthly rent is $1,450 and is due on the first day of each month. "
-        "A late fee of $75 applies if rent is more than 5 days late.\n\nThe security deposit of $2,000 will be returned within 30 days after the Tenant moves out. "
-        "The lease term begins on March 1, 2026 and ends on February 28, 2027.\n\nThe Landlord must give 24 hours notice before entering the unit. "
-        "Pets are allowed with a deposit of $300 per pet.\n",
-        encoding="utf-8",
-    )
+    (out / "lease.md").write_text(LEASE, encoding="utf-8")
     return {"dir": str(out), "files": sorted(p.name for p in out.iterdir())}
 
 

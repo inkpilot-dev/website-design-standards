@@ -301,7 +301,7 @@ pnpm dev --host 127.0.0.1 &
 node scripts/ui_flows_test.cjs      # needs the playwright package with a Chromium
 ```
 
-33 checks against the browser preview, whose simulated engine follows the real backend's rules:
+35 checks against the browser preview, whose simulated engine follows the real backend's rules:
 leaving a step while training runs, Stop, a crash, a rejected run, too little data, an adapter
 from an unknown publisher, reopening a trained project, a second project. Other outcomes can be
 reviewed by hand with `?outcome=reject`, `?outcome=fail`, `?outcome=few` and `?untrusted=1`.

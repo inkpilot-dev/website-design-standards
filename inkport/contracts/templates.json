@@ -10,9 +10,9 @@
       "accepts": [".xlsx", ".csv", ".tsv", ".jsonl", ".json", ".md", ".txt", ".pdf", ".docx"],
       "needs": "A spreadsheet of past examples, Excel or CSV (for example with the columns: description, category, amount). Optional: a policy document.",
       "example_rules": [
-        "category must be one of fuel, meals, software, office_supplies",
+        "category must be one of fuel, meals, software, office_supplies, travel",
         "amount must be positive",
-        "total must equal the sum of the line items"
+        "if the description mentions Uber then category must be travel"
       ]
     },
     {

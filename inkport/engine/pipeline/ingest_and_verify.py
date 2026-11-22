@@ -610,23 +610,60 @@ def build_custom(src: Sources, rule_texts: list[str]) -> tuple[list[dict], list[
 # ------------------------------------------------------------------------------------------
 
 
-def compile_rules(rule_texts: list[str], items: list[dict]) -> tuple[list[dict], list[dict]]:
-    """Returns (verifier specs, per-rule reports). Rules are gates (must-pass)."""
+def _snippet(text: str, limit: int = 60) -> str:
+    one_line = " ".join(str(text).split())
+    return "“" + (one_line if len(one_line) <= limit else one_line[: limit - 1].rstrip() + "…") + "”"
+
+
+def compile_rules(rule_texts: list[str], items: list[dict], info: Optional[dict] = None) -> tuple[list[dict], list[dict], set[int]]:
+    """Returns (verifier specs, per-rule reports, positions of the examples to leave out).
+
+    A rule is a gate: an answer that breaks it fails, whatever else it gets right. So a rule that
+    the user's own examples do not follow cannot be kept as it is, or no answer could ever pass.
+    A rule that names a column the examples do not have, or that most examples break, is not
+    used (and the report says why); when only a few examples break it, those examples are left
+    out instead, with a warning naming them."""
     from engine.verify.core import parse_json_output  # noqa: WPS433
 
-    refs = [(it.get("reference_json") if it.get("reference_json") is not None else parse_json_output(it.get("reference") or ""), it.get("reference") or "") for it in items[:200]]
-    specs, reports = [], []
+    refs = []
+    for it in items:
+        parsed = it.get("reference_json") if it.get("reference_json") is not None else parse_json_output(it.get("reference") or "")
+        question = next((m["content"] for m in reversed(it.get("messages", [])) if m["role"] == "user"), "")
+        refs.append((parsed, it.get("reference") or "", question))
+    names = list(dict.fromkeys(k for parsed, _, _ in refs if isinstance(parsed, dict) for k in parsed))
+    columns = {rules_mod.field_key(k) for k in names}
+    input_field = rules_mod.field_key((info or {}).get("input_field") or "") or None
+    specs, reports, left_out = [], [], set()
     for i, text in enumerate(t for t in rule_texts if t.strip()):
-        compiled = rules_mod.compile_rule(text)
+        compiled = rules_mod.compile_rule(text, columns if refs else None, input_field)
         report = compiled.to_dict()
-        if compiled.ok:
-            st = rules_mod.self_test(compiled.expr, refs) if refs else None
-            report["self_test"] = st
-            if st and st["references"] and st["accepted"] < st["references"]:
-                report["warning"] = f"{st['references'] - st['accepted']} of your own examples break this rule. Check the rule or those examples."
-            specs.append(_vj(f"rule:{i + 1}", "rule", "gate", 1.0, compiled.explanation, expr=compiled.expr, text=text))
         reports.append(report)
-    return specs, reports
+        if not compiled.ok:
+            continue
+        if refs:
+            problem = None
+            unknown = [f for f in rules_mod.fields_used(compiled.expr) if f not in columns]
+            if unknown and not columns:
+                problem = f"This rule is about “{unknown[0].replace('_', ' ')}”, but the answers in your examples are plain text without separate columns. Rules about the whole answer work here, for example “no more than 50 words” or “must not mention X”."
+            elif unknown:
+                problem = f"There is no column called “{unknown[0].replace('_', ' ')}” in your examples. The columns your AI fills in are: {', '.join(names[:12])}."
+            else:
+                broken = rules_mod.breaking(compiled.expr, refs)
+                shown = ", ".join(_snippet(refs[b][2] or refs[b][1]) for b in broken[:2])
+                if broken and len(broken) == len(refs):
+                    problem = f"None of your {len(refs)} examples follow this rule (it was read as: {compiled.explanation}). Reword the rule, or check your examples."
+                elif len(broken) > max(2, len(refs) // 20):
+                    problem = f"{len(broken)} of your {len(refs)} examples break this rule (it was read as: {compiled.explanation}), for instance {shown}. Change the rule, or correct those examples."
+                elif broken:
+                    report["warning"] = f"{len(broken)} of your {len(refs)} examples {'breaks' if len(broken) == 1 else 'break'} this rule and {'was' if len(broken) == 1 else 'were'} left out: {shown}."
+                    left_out.update(broken)
+            if problem:
+                # Not a problem with the wording: the same rule may be fine once the files change.
+                report.update(ok=False, error=problem, depends_on_data=True)
+                continue
+            report["self_test"] = rules_mod.self_test(compiled.expr, refs[:200])
+        specs.append(_vj(f"rule:{i + 1}", "rule", "gate", 1.0, compiled.explanation, expr=compiled.expr, text=text))
+    return specs, reports, left_out
 
 
 # ------------------------------------------------------------------------------------------
@@ -780,12 +817,19 @@ def run_ingest(root: Path, inputs: list[str], rule_texts: list[str]) -> dict:
     events.stage("build_items", "completed", f"{len(items)} questions drafted")
 
     events.stage("rules", "started", f"Checking {len(rule_texts)} rule(s)")
-    rule_specs, rule_reports = compile_rules(rule_texts, items)
+    rule_specs, rule_reports, left_out = compile_rules(rule_texts, items, info)
+    if left_out:
+        items = [it for i, it in enumerate(items) if i not in left_out]
     for it in items:
         it["verifiers"] = it["verifiers"] + [s["id"] for s in rule_specs]
     verifiers += rule_specs
+    rule_warnings = []
     for rep in rule_reports:
-        events.log(("Rule ok: " + rep["explanation"]) if rep["ok"] else ("Rule not understood: " + rep["text"] + " - " + rep["error"]), "info" if rep["ok"] else "warn")
+        events.log(("Rule ok: " + rep["explanation"]) if rep["ok"] else ("Rule not used: " + rep["text"] + " - " + rep["error"]), "info" if rep["ok"] else "warn")
+        if not rep["ok"]:
+            rule_warnings.append(f"The rule “{rep['text']}” was not used. {rep['error']}")
+        elif rep.get("warning"):
+            rule_warnings.append(f"Rule “{rep['text']}”: {rep['warning']}")
     events.stage("rules", "completed")
 
     events.stage("split", "started", "Locking away a hidden final exam")
@@ -800,7 +844,7 @@ def run_ingest(root: Path, inputs: list[str], rule_texts: list[str]) -> dict:
     events.stage("split", "completed")
 
     counts = {k: len(v) for k, v in splits.items()}
-    warnings = list(src.warnings)
+    warnings = list(src.warnings) + rule_warnings
     blocker = readiness_blocker(counts, split_stats["unique"], template)
     if blocker is None:
         if counts["test"] < 30:
@@ -872,6 +916,16 @@ def preview(root: Path, limit: int = 12) -> dict:
 
 
 def rules_preview(root: Optional[Path], texts: list[str]) -> dict:
-    items = read_jsonl(ProjectPaths(root).split("train")) if root else []
-    _, reports = compile_rules(texts, items)
+    """Check rules as they are typed. Before an exam exists only the wording can be checked; after,
+    the rules are also tried on the practice examples (the hidden exam is never read here)."""
+    items, info = [], {}
+    if root:
+        paths = ProjectPaths(root)
+        items = read_jsonl(paths.split("train")) + read_jsonl(paths.split("dev"))
+        if paths.manifest.is_file():
+            try:
+                info = json.loads(paths.manifest.read_text(encoding="utf-8")).get("template_info", {})
+            except (OSError, ValueError):
+                info = {}
+    _, reports, _ = compile_rules(texts, items, info)
     return {"rules": reports}

@@ -62,6 +62,24 @@ const check = (name, ok, detail = '') => { results.push([ok, name, detail]); con
   await btn(page, 'Rebuild practice exam').click();
   await page.waitForFunction(() => { const b = [...document.querySelectorAll('main button')].find(x => x.textContent.includes('Continue to training')); return b && !b.disabled; }, null, { timeout: 20000 });
   check('A6 rebuilding clears the stale mark', !(await text(page)).includes('Rebuild the practice exam to use the changes'));
+  // a rule that reads fine but does not fit the files: the build says so, next to the rule
+  await page.getByLabel('New rule').fill('price must be positive');
+  await btn(page, 'Add').click();
+  await page.waitForTimeout(400);
+  const beforeBuild = await text(page);
+  await btn(page, 'Rebuild practice exam').click();
+  await page.waitForFunction(() => { const b = [...document.querySelectorAll('main button')].find(x => x.textContent.includes('Continue to training')); return b && !b.disabled; }, null, { timeout: 20000 });
+  const afterBuild = await text(page);
+  check('A6b a rule that does not fit the files is explained after the build', !beforeBuild.includes('There is no column called') && afterBuild.includes('There is no column called “price”') && afterBuild.includes('This rule is not being used.'));
+  await main(page).locator('button', { hasText: 'mentions Uber' }).first().click();
+  await page.waitForTimeout(300);
+  await btn(page, 'Rebuild practice exam').click();
+  await page.waitForFunction(() => { const b = [...document.querySelectorAll('main button')].find(x => x.textContent.includes('Continue to training')); return b && !b.disabled; }, null, { timeout: 20000 });
+  check('A6c such a rule is tried again on the next build (the files may have changed)', (await page.evaluate(() => window.__lastRulesSent || [])).includes('price must be positive'));
+  await main(page).locator('li', { hasText: 'price must be positive' }).getByRole('button', { name: 'Remove rule' }).click();
+  await main(page).locator('li', { hasText: 'mentions Uber' }).getByRole('button', { name: 'Remove rule' }).click();
+  await btn(page, 'Rebuild practice exam').click();
+  await page.waitForFunction(() => { const b = [...document.querySelectorAll('main button')].find(x => x.textContent.includes('Continue to training')); return b && !b.disabled; }, null, { timeout: 20000 });
   // leave and come back: files and rules are still there
   await nav(page, 'Choose a goal').click(); await page.waitForTimeout(200); await nav(page, 'Data & rules').click();
   const t1 = await text(page);

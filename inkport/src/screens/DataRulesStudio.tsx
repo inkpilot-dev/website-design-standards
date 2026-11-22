@@ -94,9 +94,13 @@ export function DataRulesStudio({ project, template, draft, onDraft, trainingRun
     setError(null);
     try {
       const cur = latest.current;
-      const good = cur.rules.filter((r) => cur.checks[r]?.ok !== false);
+      // A rule whose wording was not understood is never sent; one that did not fit the files is
+      // sent again, because the files may have changed since.
+      const good = cur.rules.filter((r) => cur.checks[r]?.ok !== false || cur.checks[r]?.depends_on_data);
       const summary = await api.ingestDataset(project.id, cur.files, good);
-      update({ summary, stale: false, preview: null });
+      // Building the exam is when the rules meet the examples: show what came of each rule.
+      const verdicts = Object.fromEntries((summary.rules ?? []).map((r) => [r.text, r]));
+      update((c) => ({ summary, stale: false, preview: null, checks: { ...c.checks, ...verdicts } }));
       await onBuilt();
       const preview = await api.previewItems(project.id, 8).catch(() => null);
       update({ preview });
@@ -189,7 +193,7 @@ export function DataRulesStudio({ project, template, draft, onDraft, trainingRun
                       </span>
                       <button className="mt-1 text-faint transition-colors hover:text-bad" onClick={() => update((cur) => ({ rules: cur.rules.filter((x) => x !== r), stale: !!cur.summary }))} aria-label="Remove rule"><Icon icon={X} /></button>
                     </div>
-                    {c && !c.ok && <div className="mt-1.5 pl-[26px] text-sm text-bad">{c.error} This rule will not be used.</div>}
+                    {c && !c.ok && <div className="mt-1.5 pl-[26px] text-sm text-bad">{c.error} {c.depends_on_data ? "This rule is not being used." : "This rule will not be used."}</div>}
                     {c?.warning && <div className="mt-1.5 flex items-start gap-2 pl-[26px] text-sm"><Icon icon={TriangleAlert} size={14} className="mt-0.5 text-warn" /> {c.warning}</div>}
                     {c?.ok && advanced && <code className="mt-1.5 block pl-[26px] font-mono text-xs text-muted">{c.expr}</code>}
                   </li>

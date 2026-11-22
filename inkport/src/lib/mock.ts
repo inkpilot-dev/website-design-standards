@@ -39,7 +39,7 @@ const hardware = {
 };
 
 const templates = [
-  { id: "business_rules", title: "Small Business & Finance Rules", tagline: "Sort expenses, read invoices, and fill in fields the way your business does.", proof: "exact", proof_label: "Checked exactly against your own past records", accepts: [".xlsx", ".csv", ".tsv", ".jsonl", ".json", ".md", ".txt", ".pdf", ".docx"], needs: "A spreadsheet of past examples, Excel or CSV (for example with the columns: description, category, amount). Optional: a policy document.", example_rules: ["category must be one of fuel, meals, software, office_supplies", "amount must be positive", "total must equal the sum of the line items"] },
+  { id: "business_rules", title: "Small Business & Finance Rules", tagline: "Sort expenses, read invoices, and fill in fields the way your business does.", proof: "exact", proof_label: "Checked exactly against your own past records", accepts: [".xlsx", ".csv", ".tsv", ".jsonl", ".json", ".md", ".txt", ".pdf", ".docx"], needs: "A spreadsheet of past examples, Excel or CSV (for example with the columns: description, category, amount). Optional: a policy document.", example_rules: ["category must be one of fuel, meals, software, office_supplies, travel", "amount must be positive", "if the description mentions Uber then category must be travel"] },
   { id: "code_sql", title: "Code & SQL Specialist", tagline: "Answer questions about your spreadsheets with SQL, or write functions that pass your tests.", proof: "exact", proof_label: "Every answer is run and its result compared", accepts: [".xlsx", ".csv", ".tsv", ".py", ".jsonl", ".json"], needs: "One or more spreadsheets (Excel or CSV), or Python files with examples in their docstrings.", example_rules: ["must not mention DROP", "no more than 120 words"] },
   { id: "docs_legal", title: "Personal Docs & Legal Prep", tagline: "Answer questions from your leases, contracts, and paperwork, quoting the exact passage.", proof: "citation", proof_label: "Every answer must quote your document word for word", accepts: [".pdf", ".docx", ".md", ".txt"], needs: "The documents you want it to know (PDF, Word, Markdown or text).", example_rules: ["must include a quote", "no more than 80 words"] },
   { id: "custom", title: "Custom Skill", tagline: "Teach any skill from examples of questions and the answers you expect.", proof: "rules", proof_label: "Checked against your expected answers and your rules", accepts: [".xlsx", ".csv", ".tsv", ".jsonl", ".json"], needs: "A spreadsheet (Excel or CSV) of examples with a question column and an answer column.", example_rules: ["no more than 50 words", 'must mention "thank you"'] },
@@ -238,7 +238,13 @@ export async function mockInvoke<T>(cmd: string, args: Record<string, unknown> =
       const few = OUTCOME === "few";
       p.counts = few ? { train: 7, dev: 0, test: 5 } : { train: 286, dev: 40, test: 120 };
       p.inputs = (args.paths as string[]) ?? [];
-      p.rules = ((args.rules as string[]) ?? []).map((t) => ({ ok: true, text: t, expr: "…", explanation: t, error: "" }));
+      // The sample has no "price" column: such a rule reads fine but cannot be used with these files.
+      p.rules = ((args.rules as string[]) ?? []).map((t) =>
+        /\bprice\b/i.test(t)
+          ? { ok: false, text: t, expr: "", explanation: "", error: "There is no column called “price” in your examples. The columns your AI fills in are: category, amount.", depends_on_data: true }
+          : { ok: true, text: t, expr: "…", explanation: t, error: "" },
+      );
+      (window as unknown as { __lastRulesSent?: string[] }).__lastRulesSent = (args.rules as string[]) ?? [];
       const blocker = few ? "Only 12 different examples were found. Inkport needs at least 30 to set aside a fair final exam (100 or more gives a result you can trust). Add more examples and build the exam again." : null;
       return { counts: p.counts, leakage_free: true, duplicates_removed: few ? 0 : 7, warnings: [], rules: p.rules, verifiers, seconds: 1.3, ready: !few, blocker } as T;
     }

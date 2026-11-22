@@ -176,6 +176,8 @@ export interface RuleReport {
   explanation: string;
   error: string;
   warning?: string;
+  /** Not used because of the examples (a missing column, examples that break it), not the wording. */
+  depends_on_data?: boolean;
   self_test?: { references: number; accepted: number; mutants: number; caught: number; discrimination: number | null; ok: boolean } | null;
 }
 

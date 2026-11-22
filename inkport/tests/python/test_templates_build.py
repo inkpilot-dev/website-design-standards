@@ -1,9 +1,15 @@
 import json
+from pathlib import Path
+
+import pytest
 
 from engine.contract import read_jsonl
 from engine.pipeline.ingest_and_verify import run_ingest
 from engine.smoke import write_smoke_data
 from engine.verify.core import Context, load_verifier_set, score_item
+
+
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def _retemplate(project, template):
@@ -39,3 +45,25 @@ def test_docs_reference_answers_pass_citation_check(project, tmp_path):
             assert score_item(it, it["reference"], vset, ctx)["pass"]
             fake = json.dumps({"answer": it["meta"]["answer"], "quote": "This sentence is not in the lease."})
             assert not score_item(it, fake, vset, ctx)["pass"]
+
+
+SAMPLE_FILES = {"business_rules": ["expenses.csv", "policy.md"], "code_sql": ["orders.csv", "customers.csv", "helpers.py"], "docs_legal": ["lease.md"]}
+
+
+@pytest.mark.parametrize("template", sorted(SAMPLE_FILES))
+def test_try_the_sample_data_gives_a_trainable_exam_with_every_suggested_rule(project, tmp_path, template):
+    """The first thing a new user does: pick a goal, press "Try the sample data", add the suggested
+    rules and build. That path has to end in an exam that can be trained on, with every suggested
+    rule in use (two suggestions once contradicted the sample they were shown next to, and the
+    sample lease was too short to hold an exam at all)."""
+    _retemplate(project, template)
+    data = tmp_path / "samples"
+    write_smoke_data(data)
+    suggested = next(t for t in json.loads((ROOT / "contracts" / "templates.json").read_text(encoding="utf-8"))["templates"] if t["id"] == template)["example_rules"]
+    assert suggested
+    summary = run_ingest(project, [str(data / name) for name in SAMPLE_FILES[template]], suggested)
+    assert summary["ready"] and summary["blocker"] is None, summary
+    assert summary["counts"]["test"] >= 30, summary["counts"]
+    assert [r["ok"] for r in summary["rules"]] == [True] * len(suggested), summary["rules"]
+    assert not any(r.get("warning") for r in summary["rules"]), summary["rules"]
+    assert not summary["warnings"], summary["warnings"]
