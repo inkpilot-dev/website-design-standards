@@ -5,8 +5,8 @@
 #   scripts/window_check.sh build/installers/linux-x86_64-cpu/Inkport_0.1.0_amd64.AppImage [out-dir]
 #   scripts/window_check.sh target/debug/inkport out-dir        # a bare binary; set INKPORT_BUNDLE_DIR
 #
-#   WINDOW_PHASES="smoke goals"    start a run, see progress, stop it; then every goal's sample data
-#                                  with every suggested rule (a few minutes; the default)
+#   WINDOW_PHASES="goals smoke"    every goal's sample data with every suggested rule; then start a
+#                                  run, see progress, stop it (a few minutes; the default)
 #   WINDOW_PHASES="first reopen"   a full run to a verdict, then restart the app and check it is all still there
 #   INKPORT_TEST_PRESET / INKPORT_TEST_OVERRIDES keep training short (see src-tauri/src/app.rs)
 #   WINDOW_GOAL=docs_legal WINDOW_EXPECT=any   run the first/smoke phases with another goal; "any" accepts
@@ -17,7 +17,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ART="${1:?pass an AppImage or the inkport binary}"
 OUT="${2:-window-check}"
-PHASES="${WINDOW_PHASES:-smoke goals}"
+PHASES="${WINDOW_PHASES:-goals smoke}"
 PORT="${WINDOW_DRIVER_PORT:-4455}"
 DISPLAY_NUM="${WINDOW_DISPLAY:-95}"
 for tool in Xvfb WebKitWebDriver dbus-run-session node; do
@@ -60,12 +60,19 @@ echo "--- Inkport's processes (state, cpu, memory, running time) ---"
 ps -eo pid,ppid,stat,pcpu,pmem,etime,args | grep -E "inkport|WebKit|python.* -m engine|llama-server" | grep -v -E "grep|gui_e2e|window_check|diagnose" | cut -c1-220
 for f in "$DATA/logs/app-crash.log" "$DATA/logs/last-engine-error.log"; do [ -f "\$f" ] && { echo "--- \$(basename "\$f") ---"; tail -30 "\$f"; }; done
 echo "--- the app's own output (last lines) ---"; tail -25 "$OUT/webdriver.log" | cut -c1-300
+if command -v xwininfo >/dev/null; then
+  echo "--- windows on the screen (a dialog in front of the app would be listed here) ---"
+  xwininfo -root -tree 2>/dev/null | grep '"' | cut -c1-170 | head -20
+fi
+echo "--- every process of this user that is not part of the test tools ---"
+ps -u "\$(id -u)" -o pid,ppid,stat,etime,args | grep -v -E "ps -u|grep|gui_e2e|diagnose|Xvfb|bash|sleep|runsvc|Runner|provjobd|node " | cut -c1-200 | tail -25
 if command -v gdb >/dev/null; then
-  for pid in \$(pgrep -f "bin/inkport\$|/inkport\$|AppRun" | head -2) \$(pgrep -f WebKitWebProcess | head -1); do
-    echo "--- where process \$pid (\$(cat /proc/\$pid/comm 2>/dev/null)) is, thread by thread ---"
-    # The main thread first and in full (a frozen window means it is stuck somewhere), then the top of every thread.
-    G=(-p "\$pid" -batch -ex "echo == main thread ==\\n" -ex "thread 1" -ex "bt 28" -ex "echo == every thread, top frames ==\\n" -ex "thread apply all bt 4")
-    (sudo -n gdb "\${G[@]}" 2>/dev/null || gdb "\${G[@]}" 2>/dev/null) | grep -E "^==|^Thread|^#" | sed -E 's/ \\([^)]*\\) / /' | cut -c1-150 | head -130
+  # The app itself first: a window that does not answer means its main thread is stuck somewhere.
+  for pid in \$(pgrep -x inkport | head -1) \$(pgrep -f WebKitWebProcess | head -1); do
+    name="\$(cat /proc/\$pid/comm 2>/dev/null)"
+    echo "--- where process \$pid (\$name) is, thread by thread ---"
+    G=(-p "\$pid" -batch -ex "echo == main thread ==\\n" -ex "thread 1" -ex "bt 45" -ex "echo == every thread, top frames ==\\n" -ex "thread apply all bt 9")
+    (sudo -n gdb "\${G[@]}" 2>/dev/null || gdb "\${G[@]}" 2>/dev/null) | grep -E "^==|^Thread|^#" | sed -E 's/ \\([^)]*\\) / /' | cut -c1-170 | head -\$([ "\$name" = inkport ] && echo 330 || echo 60)
   done
 fi
 (dmesg 2>/dev/null || sudo -n dmesg 2>/dev/null || true) | grep -iE "out of memory|killed process|oom-kill" | tail -5
