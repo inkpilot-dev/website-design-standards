@@ -1,6 +1,6 @@
 """Data ingestion and auto-verifier studio.
 
-raw files (PDF, CSV, Markdown, TXT, JSON/JSONL, Python, DOCX)
+raw files (CSV/TSV, Excel, PDF, Word, Markdown, TXT, JSON/JSONL, Python; see engine/readers.py)
   -> parsed sources (records, tables, documents, code)
   -> template-specific items (prompt + reference + verifier ids)
   -> exact dedup (SHA-256 of normalized prompt) + near-duplicate grouping (MinHash LSH)
@@ -29,7 +29,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
-from engine import events
+from engine import events, readers
 from engine.contract import ProjectPaths, atomic_write_json, iter_files, load_project, read_jsonl, save_project, sha256_file, write_jsonl
 from engine.templates import CODE_SYSTEM, CUSTOM_SYSTEM, DOCS_SYSTEM, SQL_SYSTEM, business_system
 from engine.textnorm import near_duplicate_groups, normalize, prompt_hash, split_fraction, word_count
@@ -40,6 +40,12 @@ MAX_FILE_BYTES = 50 * 1024 * 1024
 INPUT_KEYS = ["text", "message", "description", "input", "prompt", "question", "email", "memo", "details", "transaction", "note", "query"]
 OUTPUT_KEYS = ["answer", "output", "response", "completion", "reply", "target", "label"]
 ID_KEYS = {"id", "row_id", "index", "idx", "uuid", "#"}
+# Question/answer column names people use in example files (the Custom Skill template only).
+QUESTION_KEYS = INPUT_KEYS + ["q", "instruction", "request", "user", "ask", "input_text"]
+ANSWER_KEYS = OUTPUT_KEYS + ["a", "assistant", "expected", "expected_answer", "expected_output", "result", "ground_truth", "gold", "output_text"]
+# The gate cannot decide anything on fewer hidden questions than this (see Trainer.gate).
+MIN_TEST_ITEMS = 15
+MIN_TRAIN_ITEMS = 8
 
 # ------------------------------------------------------------------------------------------
 # Parsing
@@ -56,25 +62,6 @@ class Sources:
     warnings: list[str] = field(default_factory=list)
 
 
-def coerce(value: Any) -> Any:
-    if not isinstance(value, str):
-        return value
-    s = value.strip()
-    if s == "":
-        return None
-    t = s.replace(",", "")
-    if t.startswith("$"):
-        t = t[1:]
-    if re.fullmatch(r"-?\d+", t) and not (len(t) > 1 and t.startswith("0") and not t.startswith("0.")):
-        try:
-            return int(t)
-        except ValueError:
-            return s
-    if re.fullmatch(r"-?\d*\.\d+", t):
-        return float(t)
-    return s
-
-
 def _table_name(path: Path, taken: set[str]) -> str:
     base = re.sub(r"[^a-z0-9_]", "_", path.stem.lower()).strip("_") or "table"
     if base[0].isdigit():
@@ -85,23 +72,25 @@ def _table_name(path: Path, taken: set[str]) -> str:
     return name
 
 
-def _read_pdf(path: Path) -> list[str]:
-    from pypdf import PdfReader  # noqa: WPS433
-
-    reader = PdfReader(str(path))
-    return [(page.extract_text() or "") for page in reader.pages]
-
-
-def _read_docx(path: Path) -> str:
-    try:
-        import docx  # type: ignore  # noqa: WPS433
-    except ImportError as exc:
-        raise RuntimeError("Word files need the optional 'python-docx' package") from exc
-    return "\n".join(p.text for p in docx.Document(str(path)).paragraphs)
+def _json_rows(obj: Any) -> list:
+    """Records inside a .json file: a list, or a list stored under a key such as "examples" or "rows"."""
+    if isinstance(obj, list):
+        return obj
+    if isinstance(obj, dict):
+        for key in ("examples", "data", "rows", "items", "records", "entries"):
+            if isinstance(obj.get(key), list):
+                return obj[key]
+        for value in obj.values():
+            if isinstance(value, list) and value and all(isinstance(v, dict) for v in value):
+                return value
+    return []
 
 
 def parse_sources(paths: list[str], template: str) -> Sources:
     src = Sources()
+    for raw in paths:
+        if not Path(raw).expanduser().exists():
+            src.warnings.append(f"{Path(raw).name} was not found. It may have been moved, renamed or deleted after you added it.")
     files = list(iter_files(paths))
     prog = events.Progress("parse", max(len(files), 1), 2, 40)
     for i, path in enumerate(files):
@@ -109,53 +98,78 @@ def parse_sources(paths: list[str], template: str) -> Sources:
         try:
             size = path.stat().st_size
             if size > MAX_FILE_BYTES:
-                src.warnings.append(f"{path.name}: skipped (larger than 50 MB)")
+                src.warnings.append(f"{path.name} was skipped because it is larger than 50 MB.")
+                continue
+            if size == 0:
+                src.warnings.append(f"{path.name} is empty.")
                 continue
             digest = sha256_file(path)
             kind = "other"
-            if ext in (".csv", ".tsv"):
-                text = path.read_text(encoding="utf-8-sig", errors="replace")
-                dialect = csv.excel_tab if ext == ".tsv" else csv.excel
-                rows = [{(k or "").strip(): coerce(v) for k, v in r.items() if k} for r in csv.DictReader(io.StringIO(text), dialect=dialect)]
+            if ext in (".csv", ".tsv", ".tab", ".xlsx", ".xlsm"):
+                rows, warns = readers.read_table(path)
+                src.warnings += [f"{path.name}: {w}" for w in warns]
+                if not rows:
+                    src.warnings.append(f"{path.name} has no rows of data (only a header row, or an empty sheet).")
                 if template == "code_sql":
-                    src.tables[_table_name(path, set(src.tables))] = rows
+                    if rows:
+                        src.tables[_table_name(path, set(src.tables))] = rows
                     kind = "table"
                 else:
                     src.records += [(f"{path.name}:{n + 2}", r) for n, r in enumerate(rows)]
                     kind = "records"
             elif ext in (".jsonl", ".ndjson"):
-                for n, line in enumerate(path.read_text(encoding="utf-8").splitlines()):
-                    if line.strip():
+                bad = 0
+                for n, line in enumerate(readers.read_text(path).splitlines()):
+                    if not line.strip():
+                        continue
+                    try:
                         obj = json.loads(line)
-                        if isinstance(obj, dict):
-                            src.records.append((f"{path.name}:{n + 1}", obj))
+                    except ValueError:
+                        bad += 1
+                        continue
+                    if isinstance(obj, dict):
+                        src.records.append((f"{path.name}:{n + 1}", obj))
+                    else:
+                        bad += 1
+                if bad:
+                    src.warnings.append(f"{path.name}: {bad} line(s) are not valid JSON objects and were skipped.")
                 kind = "records"
             elif ext == ".json":
-                obj = json.loads(path.read_text(encoding="utf-8"))
-                rows = obj if isinstance(obj, list) else obj.get("examples", obj.get("data", [])) if isinstance(obj, dict) else []
+                try:
+                    obj = json.loads(readers.read_text(path))
+                except ValueError as exc:
+                    raise readers.UnreadableFile(f"is not valid JSON ({exc}).") from exc
+                rows = _json_rows(obj)
+                if not any(isinstance(r, dict) for r in rows):
+                    src.warnings.append(f"{path.name} does not contain a list of examples.")
                 src.records += [(f"{path.name}:{n + 1}", r) for n, r in enumerate(rows) if isinstance(r, dict)]
                 kind = "records"
             elif ext == ".pdf":
-                pages = _read_pdf(path)
+                pages = readers.read_pdf(path)
                 src.documents.append({"path": path.name, "text": "\n".join(pages), "pages": len(pages)})
                 kind = "document"
                 if sum(len(p) for p in pages) < 50 * max(len(pages), 1):
-                    src.warnings.append(f"{path.name}: very little text found; it may be a scanned image (OCR is not bundled yet)")
+                    src.warnings.append(f"{path.name} has almost no text that can be selected; it looks like a scan (pictures of pages). Inkport cannot read scans yet. If you have the original document, add that instead.")
             elif ext == ".docx":
-                src.documents.append({"path": path.name, "text": _read_docx(path), "pages": None})
+                src.documents.append({"path": path.name, "text": readers.read_docx(path), "pages": None})
                 kind = "document"
             elif ext in (".md", ".markdown", ".txt", ".rst"):
-                src.documents.append({"path": path.name, "text": path.read_text(encoding="utf-8", errors="replace"), "pages": None})
+                src.documents.append({"path": path.name, "text": readers.read_text(path), "pages": None})
                 kind = "document"
             elif ext == ".py":
-                src.code.append({"path": path.name, "source": path.read_text(encoding="utf-8", errors="replace")})
+                src.code.append({"path": path.name, "source": readers.read_text(path)})
                 kind = "code"
+            elif ext in readers.LEGACY_HINTS:
+                src.warnings.append(f"{path.name} {readers.LEGACY_HINTS[ext]}")
+                continue
             else:
-                src.warnings.append(f"{path.name}: unsupported file type '{ext}', skipped")
+                src.warnings.append(f"{path.name} was skipped: Inkport cannot read '{ext or 'this kind of'}' files.")
                 continue
             src.files.append({"path": str(path), "name": path.name, "sha256": digest, "bytes": size, "kind": kind})
+        except readers.UnreadableFile as exc:
+            src.warnings.append(f"{path.name} {exc}")
         except Exception as exc:  # noqa: BLE001 - one bad file must not stop ingestion
-            src.warnings.append(f"{path.name}: could not be read ({type(exc).__name__}: {exc})")
+            src.warnings.append(f"{path.name} could not be read ({type(exc).__name__}: {exc}).")
         prog.update(i + 1, {"files": float(i + 1)})
     return src
 
@@ -180,7 +194,7 @@ def _pick_key(keys: list[str], preferred: list[str]) -> Optional[str]:
 
 def build_business(src: Sources, rule_texts: list[str]) -> tuple[list[dict], list[dict], dict]:
     if not src.records:
-        raise ValueError("Add a spreadsheet (CSV) or JSONL file of past examples, e.g. columns: description, category, amount.")
+        raise ValueError("No examples were found. Add a spreadsheet of past examples (Excel or CSV) with a header row, for example: description, category, amount.")
     keys = list(dict.fromkeys(k for _, r in src.records for k in r.keys()))
     input_key = _pick_key(keys, INPUT_KEYS)
     if input_key is None:
@@ -216,6 +230,8 @@ def build_business(src: Sources, rule_texts: list[str]) -> tuple[list[dict], lis
     items = []
     for source, r in src.records:
         text = r.get(input_key)
+        if isinstance(text, (int, float)) and not isinstance(text, bool):
+            text = str(text)  # a description that happens to be a number is still a description
         if not isinstance(text, str) or not text.strip():
             continue
         ref = {f: r.get(f) for f in fields}
@@ -228,6 +244,8 @@ def build_business(src: Sources, rule_texts: list[str]) -> tuple[list[dict], lis
                 "meta": {"source": source, "origin": "user_examples"},
             }
         )
+    if not items:
+        raise ValueError(f"None of the rows has text in the '{input_key}' column, so there is nothing to learn from.")
     return items, verifiers, {"input_field": input_key, "fields": fields, "numeric_fields": sorted(numeric), "choices": enums}
 
 
@@ -396,7 +414,7 @@ def build_code_sql(src: Sources, paths: ProjectPaths, rule_texts: list[str]) -> 
                 }
             )
     if not items:
-        raise ValueError("Add at least one CSV spreadsheet, or Python files whose docstrings contain >>> examples.")
+        raise ValueError("No practice questions could be made. Add at least one spreadsheet (Excel or CSV) with a header row and some rows of data, or Python files whose docstrings contain >>> examples.")
     return items, verifiers, info
 
 
@@ -404,7 +422,8 @@ def build_code_sql(src: Sources, paths: ProjectPaths, rule_texts: list[str]) -> 
 
 _SENT = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9\"“(])")
 _SPAN_PATTERNS = [
-    re.compile(r"\$\s?\d[\d,]*(?:\.\d+)?"),
+    re.compile(r"[$€£]\s?\d[\d,.]*\d|[$€£]\s?\d"),
+    re.compile(r"\b\d[\d.,]*\s?(?:€|EUR|USD|GBP|£)"),
     re.compile(r"\b\d+(?:\.\d+)?\s?%"),
     re.compile(r"\b\d+\s+(?:business\s+)?(?:days?|weeks?|months?|years?|hours?)\b", re.I),
     re.compile(r"\b(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2}(?:,\s*\d{4})?\b"),
@@ -415,15 +434,39 @@ _SPAN_PATTERNS = [
 
 
 def chunk_document(text: str, target: int = 700) -> list[str]:
-    paras = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
-    chunks, cur = [], ""
-    for p in paras:
-        p = re.sub(r"\s+", " ", p)
-        if len(cur) + len(p) + 1 > target and cur:
+    """Excerpts of roughly `target` characters, made of whole paragraphs or whole sentences.
+
+    Text taken from PDFs and Word files usually has no blank lines at all (every line or paragraph
+    ends in a single newline), so a "paragraph" can be the entire document. Long paragraphs are
+    therefore packed sentence by sentence; without that, a 20-page contract became one excerpt
+    with six questions.
+    """
+    chunks: list[str] = []
+    cur = ""
+
+    def push(piece: str) -> None:
+        nonlocal cur
+        if len(cur) + len(piece) + 1 > target and cur:
             chunks.append(cur)
-            cur = p
+            cur = piece
         else:
-            cur = (cur + " " + p).strip()
+            cur = (cur + " " + piece).strip()
+
+    for para in re.split(r"\n\s*\n", text):
+        para = re.sub(r"\s+", " ", para).strip()
+        if not para:
+            continue
+        if len(para) <= target:
+            push(para)
+            continue
+        for sent in _SENT.split(para):
+            while len(sent) > target:  # no sentence punctuation (lists, tables): cut at a space
+                cut = sent.rfind(" ", 0, target)
+                cut = cut if cut > target // 2 else target
+                push(sent[:cut].strip())
+                sent = sent[cut:].strip()
+            if sent:
+                push(sent)
     if cur:
         chunks.append(cur)
     return chunks
@@ -466,10 +509,10 @@ def cloze_items(doc: dict, max_per_chunk: int = 6) -> list[dict]:
 
 def build_docs(src: Sources, rule_texts: list[str]) -> tuple[list[dict], list[dict], dict]:
     if not src.documents:
-        raise ValueError("Add the documents you want your AI to know (PDF, Word, Markdown or text).")
+        raise ValueError("No readable documents were found. Add the documents you want your AI to know (PDF, Word, Markdown or text).")
     items = [it for d in src.documents for it in cloze_items(d)]
     if not items:
-        raise ValueError("I couldn't find facts to quiz on (dates, amounts, durations, names). Try longer documents.")
+        raise ValueError("No facts to quiz on were found in the documents. The practice questions are made from dates, amounts of money, percentages, durations and names written in English; add longer documents that contain such details.")
     verifiers = [
         _vj("json_valid", "json_valid", "gate", description="Reply is a JSON object with answer and quote"),
         _vj("citation", "citation", "reward", 1.0, "Quotes the document word for word and gives the right answer"),
@@ -480,16 +523,58 @@ def build_docs(src: Sources, rule_texts: list[str]) -> tuple[list[dict], list[di
 # --- custom ----------------------------------------------------------------------------------
 
 
+def _chat_pair(messages: Any) -> Optional[tuple[str, Any]]:
+    """(last user turn, last assistant turn) of an OpenAI-style chat example."""
+
+    def text(content: Any) -> str:
+        if isinstance(content, list):  # [{"type": "text", "text": "..."}]
+            return "".join(str(p.get("text", "")) for p in content if isinstance(p, dict))
+        return "" if content is None else str(content)
+
+    if not isinstance(messages, list):
+        return None
+    user = next((text(m.get("content")) for m in reversed(messages) if isinstance(m, dict) and m.get("role") == "user"), "")
+    reply = next((text(m.get("content")) for m in reversed(messages) if isinstance(m, dict) and m.get("role") == "assistant"), "")
+    return (user, reply) if user.strip() and reply.strip() else None
+
+
+def _json_object(answer: Any) -> Optional[dict]:
+    if isinstance(answer, dict):
+        return answer
+    if isinstance(answer, str) and answer.strip().startswith("{"):
+        try:
+            value = json.loads(answer)
+        except ValueError:
+            return None
+        return value if isinstance(value, dict) else None
+    return None
+
+
 def build_custom(src: Sources, rule_texts: list[str]) -> tuple[list[dict], list[dict], dict]:
     pairs = []
     for source, r in src.records:
-        qk = _pick_key(list(r), INPUT_KEYS)
-        ak = _pick_key(list(r), OUTPUT_KEYS)
+        chat = _chat_pair(r.get("messages"))
+        if chat:
+            pairs.append((source, chat[0], chat[1]))
+            continue
+        qk = _pick_key(list(r), QUESTION_KEYS)
+        ak = _pick_key([k for k in r if k != qk], ANSWER_KEYS)
         if qk and ak and r.get(qk) is not None and r.get(ak) is not None:
             pairs.append((source, str(r[qk]), r[ak]))
+    if not pairs and src.records:
+        # A two-column table without recognisable names: question first, answer second.
+        columns = list(dict.fromkeys(k for _, r in src.records for k in r))
+        if len(columns) == 2:
+            qk, ak = columns
+            pairs = [(source, str(r[qk]), r[ak]) for source, r in src.records if r.get(qk) is not None and r.get(ak) is not None]
+            if pairs:
+                src.warnings.append(f"The columns were not named, so '{qk}' was used as the question and '{ak}' as the expected answer.")
     if not pairs:
-        raise ValueError("Your examples need a question column (prompt/question/input) and an answer column (answer/output/response).")
-    json_answers = all(isinstance(a, dict) or (isinstance(a, str) and a.strip().startswith("{")) for _, _, a in pairs)
+        if not src.records:
+            raise ValueError("No examples were found. Add a file with one example per row: a question column and an answer column.")
+        raise ValueError("Your examples need a question column and an answer column. Name them, for example, 'question' and 'answer' (also understood: prompt/input/instruction and output/response/completion).")
+    parsed = [_json_object(a) for _, _, a in pairs]
+    json_answers = all(p is not None for p in parsed)
     avg_words = sum(word_count(str(a)) for _, _, a in pairs) / len(pairs)
     verifiers: list[dict]
     if json_answers:
@@ -502,8 +587,11 @@ def build_custom(src: Sources, rule_texts: list[str]) -> tuple[list[dict], list[
             _vj("judge", "pairwise_judge", "eval_only", 0.0, "A local judge model prefers it over the original model"),
         ]
     items = []
-    for source, q, a in pairs:
-        ref_json = a if isinstance(a, dict) else (json.loads(a) if json_answers else None)
+    for (source, q, a), ref_json in zip(pairs, parsed):
+        if not json_answers:
+            ref_json = None
+        if not q.strip():
+            continue
         ref = json.dumps(ref_json, ensure_ascii=False) if ref_json is not None else str(a)
         items.append(
             {
@@ -589,20 +677,47 @@ def split_items(items: list[dict], salt: str, template: str) -> tuple[dict[str, 
         union("lsh:" + str(c), it["item_id"])
         if it.get("group_hint"):
             union("hint:" + it["group_hint"], it["item_id"])
-    for it, c in zip(unique, clusters):
-        it["group"] = "g:" + hashlib.sha256(find(it["item_id"]).encode()).hexdigest()[:16]
-    n_groups = len({it["group"] for it in unique})
-    # 3) split fractions: keep at least min(30, n/2) test items whenever possible
+    families: dict[str, list[dict]] = defaultdict(list)
+    for it in unique:
+        families[find(it["item_id"])].append(it)
     n = len(unique)
+    # A "near-duplicate group" that swallows a large share of the data is not a set of duplicates:
+    # it is the shape of the task (templated questions, records that all read alike). Kept whole it
+    # would land in a single split, leaving nothing to train on or nothing to test. Such families go
+    # back to their hinted sub-groups (paraphrases of one question stay together) or single items.
+    family_limit = max(4, n // 10)
+    for root_id, members in families.items():
+        for it in members:
+            if len(members) > family_limit:
+                key = ("hint:" + it["group_hint"]) if it.get("group_hint") else it["item_id"]
+            else:
+                key = root_id
+            it["group"] = "g:" + hashlib.sha256(key.encode()).hexdigest()[:16]
+    groups: dict[str, list[dict]] = defaultdict(list)
+    for it in unique:
+        groups[it["group"]].append(it)
+    n_groups = len(groups)
+    # 3) split: groups in a fixed pseudo-random order (HMAC of the project salt, so the order does
+    # not change when files are added later) fill the hidden test set, then dev, the rest trains.
+    # Keep at least min(30, n/2) test items whenever possible.
     test_frac = 0.3 if n * 0.3 >= 30 else min(0.5, 30 / max(n, 1))
     dev_frac = 0.1
+    targets = {"test": round(n * test_frac), "dev": round(n * dev_frac) if n >= 20 else 0}
     splits: dict[str, list[dict]] = {"train": [], "dev": [], "test": []}
-    for it in unique:
-        u = split_fraction(salt, it["group"])
-        split = "test" if u < test_frac else ("dev" if u < test_frac + dev_frac else "train")
-        it["split"] = split
-        it["task"] = template
-        splits[split].append(it)
+    for g in sorted(groups, key=lambda name: split_fraction(salt, name)):
+        members = groups[g]
+        split = "train"
+        for name in ("test", "dev"):
+            short = targets[name] - len(splits[name])
+            # Take the group if the split is still short and taking it brings it closer to its
+            # target (a big group may overshoot a little, never wildly).
+            if short > 0 and len(members) - short < short:
+                split = name
+                break
+        for it in members:
+            it["split"] = split
+            it["task"] = template
+            splits[split].append(it)
     # 4) leakage proof
     ids = {s: {it["item_id"] for it in rows} for s, rows in splits.items()}
     groups = {s: {it["group"] for it in rows} for s, rows in splits.items()}
@@ -649,16 +764,18 @@ def run_ingest(root: Path, inputs: list[str], rule_texts: list[str]) -> dict:
     events.stage("parse", "completed", f"{len(src.files)} file(s) read")
 
     events.stage("build_items", "started", "Writing practice questions from your material")
-    if template == "business_rules":
-        items, verifiers, info = build_business(src, rule_texts)
-    elif template == "code_sql":
-        items, verifiers, info = build_code_sql(src, paths, rule_texts)
-    elif template == "docs_legal":
-        items, verifiers, info = build_docs(src, rule_texts)
-    elif template == "custom":
-        items, verifiers, info = build_custom(src, rule_texts)
-    else:
+    builders = {"business_rules": lambda: build_business(src, rule_texts), "code_sql": lambda: build_code_sql(src, paths, rule_texts), "docs_legal": lambda: build_docs(src, rule_texts), "custom": lambda: build_custom(src, rule_texts)}
+    if template not in builders:
         raise ValueError(f"unknown template {template}")
+    try:
+        items, verifiers, info = builders[template]()
+        if not items:
+            raise ValueError("No practice questions could be made from these files.")
+    except ValueError as exc:
+        # The reason is usually in the files themselves; say what was wrong with each.
+        if src.warnings:
+            raise ValueError(f"{exc} " + " ".join(src.warnings[:6])) from exc
+        raise
     events.Progress("build_items", 1, 40, 70).update(1, {"items": float(len(items))}, force=True)
     events.stage("build_items", "completed", f"{len(items)} questions drafted")
 
@@ -684,15 +801,21 @@ def run_ingest(root: Path, inputs: list[str], rule_texts: list[str]) -> dict:
 
     counts = {k: len(v) for k, v in splits.items()}
     warnings = list(src.warnings)
-    if counts["test"] < 30:
-        warnings.append(f"Only {counts['test']} hidden test questions. Add more examples so the before-and-after comparison is trustworthy (aim for 100+).")
-    if counts["train"] < 20:
-        warnings.append("Very few training examples; results may be weak.")
+    blocker = readiness_blocker(counts, split_stats["unique"], template)
+    if blocker is None:
+        if counts["test"] < 30:
+            warnings.append(f"Only {counts['test']} hidden final-exam questions. That is enough to train, but the result will be marked preliminary; add more examples (aim for 100 or more in the exam) for a result you can trust.")
+        if counts["train"] < 20:
+            warnings.append("Very few training examples; results may be weak.")
     manifest = {
         "version": 1,
         "template": template,
         "created_at": time.time(),
         "sources": src.files,
+        "inputs": [str(p) for p in inputs],
+        "rule_texts": list(rule_texts),
+        "ready": blocker is None,
+        "blocker": blocker,
         "counts": counts,
         "split": split_stats,
         "test_merkle_root": merkle_root(test_hashes),
@@ -703,8 +826,20 @@ def run_ingest(root: Path, inputs: list[str], rule_texts: list[str]) -> dict:
     }
     atomic_write_json(paths.manifest, manifest)
     events.emit("artifact", kind="dataset", path=str(paths.data), sha256=hashlib.sha256(json.dumps(counts, sort_keys=True).encode() + merkle_root(test_hashes).encode()).hexdigest())
-    summary = {"counts": counts, "leakage_free": True, "duplicates_removed": split_stats["duplicates_removed"], "warnings": warnings, "rules": rule_reports, "template_info": info, "seconds": round(time.monotonic() - t0, 2), "verifiers": manifest["verifiers"]}
+    summary = {"counts": counts, "leakage_free": True, "duplicates_removed": split_stats["duplicates_removed"], "warnings": warnings, "rules": rule_reports, "template_info": info, "seconds": round(time.monotonic() - t0, 2), "verifiers": manifest["verifiers"], "ready": blocker is None, "blocker": blocker}
     return summary
+
+
+def readiness_blocker(counts: dict, unique: int, template: str) -> Optional[str]:
+    """Why training cannot give a verdict with this exam (None when it can)."""
+    if counts["test"] >= MIN_TEST_ITEMS and counts["train"] >= MIN_TRAIN_ITEMS:
+        return None
+    one = unique == 1
+    if template == "docs_legal":
+        return f"Only {unique} quiz question{'' if one else 's'} could be written from your documents (they are made from facts such as dates, amounts, durations and names). Inkport needs about 30 to hold a fair final exam; add longer or more documents and build the exam again."
+    if template == "code_sql":
+        return f"Only {unique} practice question{'' if one else 's'} could be made from these files. Inkport needs about 30 to hold a fair final exam; add bigger tables or more functions with examples and build the exam again."
+    return f"Only {unique} different example{' was' if one else 's were'} found. Inkport needs at least 30 to set aside a fair final exam (100 or more gives a result you can trust). Add more examples and build the exam again."
 
 
 def preview(root: Path, limit: int = 12) -> dict:
@@ -719,7 +854,21 @@ def preview(root: Path, limit: int = 12) -> dict:
             out.append({"item_id": it["item_id"], "split": split, "prompt": user, "reference": it["reference"], "source": it["meta"].get("source", "")})
     counts = {s: len(read_jsonl(paths.split(s))) for s in ("train", "dev", "test")}
     manifest = json.loads(paths.manifest.read_text()) if paths.manifest.is_file() else {}
-    return {"items": out, "counts": counts, "test_locked": True, "verifiers": manifest.get("verifiers", []), "warnings": manifest.get("warnings", [])}
+    return {
+        "items": out,
+        "counts": counts,
+        "test_locked": True,
+        "verifiers": manifest.get("verifiers", []),
+        "warnings": manifest.get("warnings", []),
+        # What the exam was built from, so the screen can be restored when a project is reopened.
+        "inputs": manifest.get("inputs") or [f.get("path", "") for f in manifest.get("sources", [])],
+        "rules": manifest.get("rules", []),
+        "duplicates_removed": manifest.get("split", {}).get("duplicates_removed", 0),
+        "leakage_free": bool(manifest.get("split", {}).get("leakage_free", True)),
+        "ready": manifest.get("ready", counts["test"] >= MIN_TEST_ITEMS and counts["train"] >= MIN_TRAIN_ITEMS),
+        "blocker": manifest.get("blocker"),
+        "template_info": manifest.get("template_info", {}),
+    }
 
 
 def rules_preview(root: Optional[Path], texts: list[str]) -> dict:

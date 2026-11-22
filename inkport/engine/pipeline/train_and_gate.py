@@ -212,10 +212,14 @@ class Trainer:
             bad = [it["item_id"] for it in rows if it["item_id"] in test_ids or it["group"] in test_groups]
             if bad:
                 raise LeakageError(f"{len(bad)} {split} item(s) overlap the hidden test set; refusing to train")
-        if len(self.test) < int(self.gate_cfg["min_test_items"]):
-            events.log(f"Only {len(self.test)} hidden test questions; the result will be marked preliminary or insufficient.", "warn")
         if not self.train:
-            raise ValueError("No training examples with answers were found.")
+            raise ValueError("There are no training examples. Add more examples in “Data & rules” and build the practice exam again.")
+        # Below this the gate can only answer "not enough data" (see gate()); say so before hours of training, not after.
+        need = max(10, int(self.gate_cfg["min_test_items"]) // 2)
+        if len(self.test) < need:
+            raise ValueError(f"The hidden final exam has only {len(self.test)} question(s); at least {need} are needed to judge fairly. Add more examples in “Data & rules” and build the practice exam again.")
+        if len(self.test) < int(self.gate_cfg["min_test_items"]):
+            events.log(f"Only {len(self.test)} hidden test questions; the result will be marked preliminary.", "warn")
         events.log(f"Data verified: {len(self.train)} train, {len(self.dev)} dev, {len(self.test)} hidden test; zero overlap; test root {manifest['merkle_root'][:12]}", "info")
 
     def _cache_key(self, model_tag: str) -> Path:
@@ -706,7 +710,7 @@ def run_train(root: Path, plan: dict, resume: bool = False) -> dict:
     else:
         active = active_version(root)
         result["active_version"] = active["version"] if active else None
-        events.log("Kept the current version active (automatic rollback).", "info")
+        events.log("Kept the current version active (automatic rollback)." if active else "Nothing was saved; the original model is unchanged.", "info")
     events.Progress("done", 1, 100, 100).update(1, force=True)
     st.complete("gate", decision=gate["decision"])
     return result
