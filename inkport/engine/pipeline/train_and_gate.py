@@ -869,8 +869,9 @@ def run_train(root: Path, plan: dict, resume: bool = False) -> dict:
     chosen = best_dir
     s2 = plan["stage2"]
     placebo_result = None
-    # A first stage that never produced a usable model leaves nothing to refine.
-    if s2["mode"] != "none" and not training_failed(sft_info) and _stage(st, "stage2", "Practicing with automatic grading"):
+    # A first stage that never produced a usable model leaves nothing to refine, and one whose
+    # best version already lost too many general questions would only lose more by practicing.
+    if s2["mode"] != "none" and not training_failed(sft_info) and (sft_info or {}).get("kept_general", True) and _stage(st, "stage2", "Practicing with automatic grading"):
         if not tr.backend.has_adapter:
             tr.load(best_dir, trainable=True)
             tr.backend.prepare_training()

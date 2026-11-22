@@ -6,6 +6,7 @@ gave, the next time, one passing 0% (the original: 58%). The run ended in a reje
 checkpoints, final exam) on a stand-in for the model that can be made to break on purpose.
 """
 
+import hashlib
 import json
 import math
 from pathlib import Path
@@ -20,6 +21,12 @@ from engine.pipeline import train_and_gate as tg
 from engine.pipeline.ingest_and_verify import run_ingest
 
 GARBAGE = "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+
+
+def known(question: str) -> float:
+    """Where a question sits between 0 and 1: the stand-in answers those below its skill. (A real
+    hash: the questions differ in a few characters, and a sum of bytes put them in clumps.)"""
+    return int(hashlib.sha256(question.encode()).hexdigest()[:8], 16) / 0xFFFFFFFF
 
 
 class Stand(Backend):
@@ -69,7 +76,7 @@ class Stand(Backend):
         if trained and self.broken:
             return GARBAGE
         skill = self.base + (min(0.35, self.w) if trained else 0.0)
-        rank = (sum(question.encode()) % 100) / 100.0
+        rank = known(question)
         return right if rank < skill else json.dumps({"category": "none", "amount": 1})
 
     def generate(self, convs, max_new_tokens, temperature=0.0, top_p=1.0, n=1, seed=0, use_adapter=True):
@@ -98,7 +105,7 @@ class Stand(Backend):
         elif lr > self.forgets_above:
             self.forgot = True
         self.rehearsal = 0
-        self.w += 60 * lr
+        self.w += 150 * lr
         return 0.5
 
     def nll(self, examples):
@@ -122,6 +129,10 @@ def trained(project, tmp_path, monkeypatch):
     """Returns run(**settings) -> (result, log lines, report): a whole training run on the samples."""
     data = tmp_path / "data"
     smoke.write_smoke_data(data)
+    # The same split every time (a project normally draws its own): these tests are about the
+    # loop, and their numbers should not depend on which questions happen to land in the exam.
+    meta = json.loads((project / "project.json").read_text())
+    (project / "project.json").write_text(json.dumps({**meta, "split_salt": "7" * 32}))
     summary = run_ingest(project, [str(data / "expenses.csv"), str(data / "policy.md")], ["amount must be positive"])
     assert summary["ready"], summary
     answers = {}
@@ -220,7 +231,7 @@ def test_a_model_that_ends_up_worse_is_told_so(trained, monkeypatch):
     class Worse(Stand):
         def _answer(self, conv, use_adapter):
             if use_adapter and self.adapter and self.w > 0.05 and conv[-1]["content"] in self.answers:
-                rank = (sum(conv[-1]["content"].encode()) % 100) / 100.0
+                rank = known(conv[-1]["content"])
                 return self.answers[conv[-1]["content"]] if rank < 0.35 else json.dumps({"category": "none", "amount": 1})
             return super()._answer(conv, use_adapter)
 
