@@ -11,3 +11,4 @@ src-tauri/resources/bin/uv*
 build/
 ui-flows/
 window-check/
+ui-monkey-fail-*.png
