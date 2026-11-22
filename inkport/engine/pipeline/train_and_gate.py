@@ -621,9 +621,34 @@ def _stage(state: RunState, name: str, detail: str) -> bool:
     return True
 
 
+HEAVY_RUN_DIRS = ("ckpt-", "best-", "pre-", "candidate")
+
+
+def prune_run_dirs(runs: Path, keep: Optional[str] = None) -> int:
+    """Delete checkpoints of earlier runs; their small records (plan, state, report) stay.
+
+    Every run writes several copies of the adapter (checkpoints, the best so far, the candidate).
+    Without this, each training run, finished or abandoned, left hundreds of megabytes behind.
+    """
+    freed = 0
+    if not runs.is_dir():
+        return 0
+    for run in runs.iterdir():
+        if not run.is_dir() or run.name == keep:
+            continue
+        for child in run.iterdir():
+            if child.is_dir() and child.name.startswith(HEAVY_RUN_DIRS):
+                freed += sum(f.stat().st_size for f in child.rglob("*") if f.is_file())
+                shutil.rmtree(child, ignore_errors=True)
+    return freed
+
+
 def run_train(root: Path, plan: dict, resume: bool = False) -> dict:
     tr = Trainer(root, plan)
     st = tr.state
+    freed = prune_run_dirs(tr.paths.runs, keep=plan["run_id"])
+    if freed > 1e6:
+        events.log(f"Removed {freed / 1e6:.0f} MB of checkpoints left by earlier runs", "info")
     events.stage("verify_data", "started", "Checking that no hidden test question leaked into training")
     tr.verify_data()
     events.stage("verify_data", "completed")
@@ -713,6 +738,12 @@ def run_train(root: Path, plan: dict, resume: bool = False) -> dict:
         events.log("Kept the current version active (automatic rollback)." if active else "Nothing was saved; the original model is unchanged.", "info")
     events.Progress("done", 1, 100, 100).update(1, force=True)
     st.complete("gate", decision=gate["decision"])
+    # The run is over: its checkpoints are of no further use (a promoted adapter lives in versions/).
+    if tr.backend is not None:
+        tr.backend.unload()
+    for child in tr.run_dir.iterdir():
+        if child.is_dir() and child.name.startswith(HEAVY_RUN_DIRS):
+            shutil.rmtree(child, ignore_errors=True)
     return result
 
 

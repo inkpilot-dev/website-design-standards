@@ -2,7 +2,7 @@
 // listens to Tauri events; in a plain browser (`pnpm dev`) it falls back to a realistic
 // simulation (./mock.ts) so the UI can be developed and reviewed without Python or a GPU.
 
-import type { ApiInfo, AppError, BaseModel, Channel, HardwareReport, IngestSummary, PackState, PreflightReport, Preview, ProjectInfo, RuleReport, RuntimeStatus, Template } from "./contract";
+import type { ApiInfo, ApiStatus, AppError, BaseModel, Channel, HardwareReport, IngestSummary, PackState, PreflightReport, Preview, ProjectInfo, RuleReport, RunningJob, RuntimeStatus, Template } from "./contract";
 
 export const inTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
@@ -69,12 +69,51 @@ export const api = {
   compileRules: (texts: string[], projectId?: string) => call<{ rules: RuleReport[] }>("compile_rules", { projectId, texts }),
   startTrainingJob: (projectId: string, preset: "standard" | "fast" | "smoke") => call<string>("start_training_job", { request: { project_id: projectId, preset } }),
   cancelTrainingJob: (jobId: string) => call<void>("cancel_training_job", { jobId }),
+  trainingStatus: () => call<RunningJob | null>("training_status"),
   runBenchmarkArena: (projectId: string, prompt?: string, n = 4) => call<{ cases: number; wins: Record<string, number> }>("run_benchmark_arena", { projectId, prompt, n }),
   startLocalApi: (projectId: string) => call<ApiInfo>("start_local_api", { projectId }),
   stopLocalApi: () => call<void>("stop_local_api"),
+  apiStatus: () => call<ApiStatus>("api_status"),
+  chatLocalApi: (messages: { role: string; content: string }[], useBase = false) => call<string>("chat_local_api", { messages, useBase }),
   exportAdapter: (projectId: string, dest: string) => call<{ path: string; sha256: string; version: string; publisher: string }>("export_adapter", { projectId, dest }),
   importAdapter: (projectId: string, file: string, trust = false) => call<{ import: { signature_verified: boolean; sha256_verified: boolean; publisher: string; checks: { tensors: number; rank: number } }; gate?: { decision: string; explanation: string; version?: string } }>("import_adapter", { projectId, file, trust }),
 };
+
+/** Windows needs different copy-paste examples (PowerShell instead of a POSIX shell). */
+export const isWindows = typeof navigator !== "undefined" && /windows/i.test(navigator.userAgent);
+
+/** A yes/no question in a native dialog. (In the desktop app `window.confirm` is asynchronous:
+ * it returns a Promise, so using it in an `if` treats every answer as "yes".) */
+export async function confirmDialog(message: string, title = "Inkport"): Promise<boolean> {
+  if (inTauri) {
+    const { confirm } = await import("@tauri-apps/plugin-dialog");
+    return await confirm(message, { title, kind: "warning" });
+  }
+  return window.confirm(message);
+}
+
+/** Copy text; falls back to the legacy command where the clipboard API is refused. */
+export async function copyText(text: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    try {
+      const area = document.createElement("textarea");
+      area.value = text;
+      area.setAttribute("readonly", "");
+      area.style.position = "fixed";
+      area.style.opacity = "0";
+      document.body.appendChild(area);
+      area.select();
+      const ok = document.execCommand("copy");
+      document.body.removeChild(area);
+      return ok;
+    } catch {
+      return false;
+    }
+  }
+}
 
 /** Native file pickers (desktop) with a graceful browser fallback. */
 export async function pickFiles(extensions: string[]): Promise<string[]> {

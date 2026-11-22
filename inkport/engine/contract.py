@@ -6,6 +6,7 @@ wheel as engine/_contracts, so the same files drive Rust, Python and the UI.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -160,6 +161,53 @@ class ProjectPaths:
 
     def run_dir(self, run_id: str) -> Path:
         return self.runs / run_id
+
+
+class ProjectBusy(RuntimeError):
+    """Another job (possibly in another copy of the app) is changing this project right now."""
+
+
+@contextlib.contextmanager
+def project_lock(root: Path, doing: str = "being changed"):
+    """Let one job at a time rebuild, train or import into a project.
+
+    An operating-system file lock, so it also holds between two copies of Inkport and is released
+    by the system if the process is killed. If the folder cannot be locked at all (some network
+    drives), the job runs without a lock rather than being refused.
+    """
+    handle = None
+    try:
+        handle = open(Path(root) / ".inkport.lock", "a+b")  # noqa: SIM115 - held for the whole job
+        handle.seek(0)
+        if os.name == "nt":
+            import msvcrt  # noqa: WPS433
+
+            try:
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            except OSError as exc:
+                if exc.errno in (13, 36):  # EACCES / EDEADLOCK: someone else holds it
+                    raise ProjectBusy(f"This project is {doing} by another Inkport job right now. Wait for it to finish (or stop it) and try again.") from exc
+        else:
+            import fcntl  # noqa: WPS433
+
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as exc:
+                raise ProjectBusy(f"This project is {doing} by another Inkport job right now. Wait for it to finish (or stop it) and try again.") from exc
+            except OSError:
+                pass  # locking not supported here
+    except ProjectBusy:
+        if handle is not None:
+            handle.close()
+        raise
+    except OSError:
+        handle = None  # cannot create the lock file: carry on unlocked
+    try:
+        yield
+    finally:
+        if handle is not None:
+            with contextlib.suppress(OSError):
+                handle.close()  # closing releases the lock on every platform
 
 
 def load_project(root: Path) -> dict:

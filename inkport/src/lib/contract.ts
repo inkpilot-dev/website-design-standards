@@ -187,6 +187,9 @@ export interface IngestSummary {
   rules: RuleReport[];
   verifiers: { id: string; kind: string; role: string; description: string }[];
   seconds: number;
+  /** false when there are too few examples for a fair final exam; `blocker` says what to do. */
+  ready?: boolean;
+  blocker?: string | null;
 }
 
 export interface PreviewItem {
@@ -202,6 +205,14 @@ export interface Preview {
   counts: { train: number; dev: number; test: number };
   test_locked: boolean;
   warnings: string[];
+  verifiers?: { id: string; kind: string; role: string; description: string }[];
+  /** What the exam was built from (to restore the screen when a project is reopened). */
+  inputs?: string[];
+  rules?: RuleReport[];
+  duplicates_removed?: number;
+  leakage_free?: boolean;
+  ready?: boolean;
+  blocker?: string | null;
 }
 
 export interface GateReport {
@@ -209,7 +220,23 @@ export interface GateReport {
   label: "VERIFIED" | "PRELIMINARY" | null;
   explanation: string;
   promoted_version?: string;
+  compared_against?: string;
   test?: { n: number; baseline_pass_rate: number; candidate_pass_rate: number; delta_pts: number };
+}
+
+/** The local API as the window should show it. */
+export interface ApiStatus {
+  running: boolean;
+  project_id: string | null;
+  info: ApiInfo | null;
+}
+
+/** A job in progress, with the events needed to redraw its screen. */
+export interface RunningJob {
+  job_id: string;
+  kind: string;
+  project_id: string | null;
+  events: EngineEvent[];
 }
 
 // ---------------------------------------------------------------- engine events

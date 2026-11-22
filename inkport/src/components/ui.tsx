@@ -1,5 +1,6 @@
-import type { ReactNode } from "react";
-import { ChevronRight, type LucideIcon } from "lucide-react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
+import { Check, ChevronRight, Clipboard, type LucideIcon } from "lucide-react";
+import { copyText } from "../lib/ipc";
 
 /** Line icon at the size and weight used throughout the app. */
 export function Icon({ icon: I, size = 16, className = "" }: { icon: LucideIcon; size?: number; className?: string }) {
@@ -74,8 +75,48 @@ export function Code({ children, className = "" }: { children: ReactNode; classN
   return <code className={`rounded-md bg-canvas px-1.5 py-0.5 font-mono text-[0.9em] ${className}`}>{children}</code>;
 }
 
-export function TextInput({ value, onChange, onEnter, placeholder, label }: { value: string; onChange: (v: string) => void; onEnter?: () => void; placeholder?: string; label?: string }) {
-  return <input value={value} aria-label={label} onChange={(e) => onChange(e.target.value)} onKeyDown={(e) => e.key === "Enter" && onEnter?.()} placeholder={placeholder} className="w-full min-w-0 flex-1 rounded-xl border border-line bg-panel px-3.5 py-2.5 text-[15px] outline-none transition-colors placeholder:text-faint focus:border-ink" />;
+export function TextInput({ value, onChange, onEnter, placeholder, label, disabled }: { value: string; onChange: (v: string) => void; onEnter?: () => void; placeholder?: string; label?: string; disabled?: boolean }) {
+  return (
+    <input
+      value={value}
+      aria-label={label}
+      disabled={disabled}
+      onChange={(e) => onChange(e.target.value)}
+      onKeyDown={(e) => {
+        // The Enter that confirms a Japanese/Chinese/Korean input-method candidate is not "submit".
+        if (e.key === "Enter" && !e.nativeEvent.isComposing && e.keyCode !== 229) onEnter?.();
+      }}
+      placeholder={placeholder}
+      className="w-full min-w-0 flex-1 rounded-xl border border-line bg-panel px-3.5 py-2.5 text-[15px] outline-none transition-colors placeholder:text-faint focus:border-ink disabled:opacity-60"
+    />
+  );
+}
+
+/** "Copy" that only says "Copied" when it worked. */
+export function CopyButton({ text, label = "Copy" }: { text: string; label?: string }) {
+  const [state, setState] = useState<"idle" | "copied" | "failed">("idle");
+  const timer = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(timer.current), []);
+  const copy = async () => {
+    setState((await copyText(text)) ? "copied" : "failed");
+    window.clearTimeout(timer.current);
+    timer.current = window.setTimeout(() => setState("idle"), 1800);
+  };
+  return (
+    <button className="inline-flex flex-none items-center gap-1.5 rounded-lg border border-line bg-panel px-2.5 py-1.5 text-[13px] font-medium transition-colors hover:border-ink" onClick={copy}>
+      <Icon icon={state === "copied" ? Check : Clipboard} size={14} /> {state === "copied" ? "Copied" : state === "failed" ? "Could not copy" : label}
+    </button>
+  );
+}
+
+/** A short status or explanation inside the page (not an error). */
+export function Note({ children, tone = "neutral", icon }: { children: ReactNode; tone?: "neutral" | "warn"; icon?: LucideIcon }) {
+  return (
+    <div className={`flex items-start gap-3 rounded-2xl border px-5 py-4 text-[15px] leading-relaxed ${tone === "warn" ? "border-warn/30 bg-warn-soft" : "border-line bg-canvas"}`}>
+      {icon && <Icon icon={icon} size={18} className={`mt-0.5 ${tone === "warn" ? "text-warn" : "text-muted"}`} />}
+      <div className="min-w-0 flex-1">{children}</div>
+    </div>
+  );
 }
 
 export function ProgressBar({ value, label }: { value: number; label?: string }) {
@@ -87,12 +128,18 @@ export function ProgressBar({ value, label }: { value: number; label?: string })
   );
 }
 
-export function ErrorNote({ error, onRetry }: { error: { code: string; message: string } | null; onRetry?: () => void }) {
+export function ErrorNote({ error, onRetry, title = "Something went wrong" }: { error: { code: string; message: string } | null; onRetry?: () => void; title?: string }) {
+  const box = useRef<HTMLDivElement>(null);
+  const message = error?.message;
+  useEffect(() => {
+    // Errors appear next to what caused them, which may be below or above what is on screen.
+    if (message) box.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, [message]);
   if (!error) return null;
   return (
-    <div className="rounded-2xl border border-bad/30 bg-bad-soft p-5 text-[15px]" role="alert">
-      <div className="font-semibold text-bad">Something went wrong</div>
-      <div className="mt-1 whitespace-pre-wrap leading-relaxed">{error.message}</div>
+    <div ref={box} className="rounded-2xl border border-bad/30 bg-bad-soft p-5 text-[15px]" role="alert">
+      <div className="font-semibold text-bad">{title}</div>
+      <div className="mt-1 whitespace-pre-wrap break-words leading-relaxed">{error.message}</div>
       {onRetry && (
         <button className="mt-3 text-[15px] font-medium text-bad underline underline-offset-4" onClick={onRetry}>
           Try again

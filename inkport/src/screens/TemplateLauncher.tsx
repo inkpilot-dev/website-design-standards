@@ -7,7 +7,7 @@ import { Button, Card, ChoiceCard, ErrorNote, Icon, PageHeader, SectionTitle, Te
 const ICON: Record<Template["id"], LucideIcon> = { business_rules: Receipt, code_sql: Table2, docs_legal: BookOpen, custom: Puzzle };
 const DEFAULT_NAME: Record<Template["id"], string> = { business_rules: "Expense sorter", code_sql: "Spreadsheet SQL helper", docs_legal: "Lease and contracts helper", custom: "My custom skill" };
 
-export function TemplateLauncher({ onCreated }: { onCreated: (p: ProjectInfo, t: Template) => void }) {
+export function TemplateLauncher({ currentId, onOpen }: { currentId: string | null; onOpen: (p: ProjectInfo, t: Template) => void }) {
   const [templates, setTemplates] = useState<Template[]>([]);
   const [projects, setProjects] = useState<ProjectInfo[]>([]);
   const [chosen, setChosen] = useState<Template | null>(null);
@@ -27,11 +27,11 @@ export function TemplateLauncher({ onCreated }: { onCreated: (p: ProjectInfo, t:
   }, []);
 
   const create = async () => {
-    if (!chosen || !name.trim()) return;
+    if (!chosen || !name.trim() || busy) return;
     setBusy(true);
     setError(null);
     try {
-      onCreated(await api.createProject(name.trim(), chosen.id, modelId || undefined), chosen);
+      onOpen(await api.createProject(name.trim(), chosen.id, modelId || undefined), chosen);
     } catch (e) {
       setError(toAppError(e));
     } finally {
@@ -39,28 +39,57 @@ export function TemplateLauncher({ onCreated }: { onCreated: (p: ProjectInfo, t:
     }
   };
 
+  const openExisting = (p: ProjectInfo) => {
+    const t = templates.find((t) => t.id === p.template);
+    if (t) onOpen(p, t);
+  };
+
   return (
     <div className="space-y-10">
-      <PageHeader eyebrow="New project" title="What do you want your AI to master?" lead="Pick a starting point. Every template comes with an automatic exam, so you can see proof it got better." />
-      <ErrorNote error={error} />
-      <div className="grid gap-5 sm:grid-cols-2">
-        {templates.map((t) => (
-          <ChoiceCard
-            key={t.id}
-            icon={ICON[t.id]}
-            title={t.title}
-            selected={chosen?.id === t.id}
-            onClick={() => {
-              setChosen(t);
-              setName(DEFAULT_NAME[t.id]);
-            }}
-          >
-            {t.tagline}
-            <span className="mt-4 flex items-start gap-2 text-sm text-ink"><Icon icon={Check} className="mt-0.5 text-good" /> {t.proof_label}</span>
-            <span className="mt-2 block text-sm">You’ll need: {t.needs}</span>
-          </ChoiceCard>
-        ))}
-      </div>
+      <PageHeader eyebrow={projects.length ? "Your projects" : "New project"} title="What do you want your AI to master?" lead="Pick a starting point. Every template comes with an automatic exam, so you can see proof it got better." />
+      {projects.length > 0 && (
+        <section className="space-y-5">
+          <SectionTitle title="Continue a project" />
+          <ul className="divide-y divide-line border-y border-line">
+            {projects.map((p) => (
+              <li key={p.id} className="flex items-center justify-between gap-4 py-4">
+                <div className="min-w-0">
+                  <div className="truncate text-[16px] font-semibold">
+                    {p.name}
+                    {p.id === currentId && <span className="ml-2 text-sm font-normal text-muted">open now</span>}
+                  </div>
+                  <div className="mt-0.5 text-sm text-muted">
+                    {templates.find((t) => t.id === p.template)?.title} · {p.active_version ? `trained, version ${p.active_version}` : p.counts ? "practice exam built, not trained yet" : "no data added yet"}
+                  </div>
+                </div>
+                <Button variant="secondary" onClick={() => openExisting(p)}>Open</Button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+      <section className="space-y-5">
+        {projects.length > 0 && <SectionTitle title="Start a new project" />}
+        <div className="grid gap-5 sm:grid-cols-2">
+          {templates.map((t) => (
+            <ChoiceCard
+              key={t.id}
+              icon={ICON[t.id]}
+              title={t.title}
+              selected={chosen?.id === t.id}
+              onClick={() => {
+                setChosen(t);
+                setName(DEFAULT_NAME[t.id]);
+                setError(null);
+              }}
+            >
+              {t.tagline}
+              <span className="mt-4 flex items-start gap-2 text-sm text-ink"><Icon icon={Check} className="mt-0.5 text-good" /> {t.proof_label}</span>
+              <span className="mt-2 block text-sm">You’ll need: {t.needs}</span>
+            </ChoiceCard>
+          ))}
+        </div>
+      </section>
       {chosen && (
         <Card className="flex flex-wrap items-end gap-4">
           <label className="min-w-[240px] flex-1">
@@ -82,22 +111,7 @@ export function TemplateLauncher({ onCreated }: { onCreated: (p: ProjectInfo, t:
           </Button>
         </Card>
       )}
-      {projects.length > 0 && (
-        <section className="space-y-5 pt-4">
-          <SectionTitle title="Continue a project" />
-          <ul className="divide-y divide-line border-y border-line">
-            {projects.map((p) => (
-              <li key={p.id} className="flex items-center justify-between gap-4 py-4">
-                <div className="min-w-0">
-                  <div className="truncate text-[16px] font-semibold">{p.name}</div>
-                  <div className="mt-0.5 text-sm text-muted">{templates.find((t) => t.id === p.template)?.title} · {p.active_version ? `trained version ${p.active_version}` : "not trained yet"}</div>
-                </div>
-                <Button variant="secondary" onClick={() => { const t = templates.find((t) => t.id === p.template); if (t) onCreated(p, t); }}>Open</Button>
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
+      <ErrorNote error={error} title="The project could not be created" />
     </div>
   );
 }

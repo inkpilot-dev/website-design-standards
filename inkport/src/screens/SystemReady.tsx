@@ -6,7 +6,7 @@ import { Badge, Button, Card, Drawer, ErrorNote, Icon, PageHeader, ProgressBar, 
 
 const gb = (bytes: number) => `${(bytes / 1e9).toFixed(1)} GB`;
 
-export function SystemReady({ onReady }: { onReady: (hw: HardwareReport) => void }) {
+export function SystemReady({ onReady, onContinue }: { onReady: () => void; onContinue: () => void }) {
   const [hw, setHw] = useState<HardwareReport | null>(null);
   const [report, setReport] = useState<PreflightReport | null>(null);
   const [checking, setChecking] = useState(true);
@@ -44,7 +44,7 @@ export function SystemReady({ onReady }: { onReady: (hw: HardwareReport) => void
     setDevBusy(true);
     try {
       await api.bootstrapRuntime(true);
-      await check();
+      await check(true);
     } catch (e) {
       setError(toAppError(e));
     } finally {
@@ -54,6 +54,10 @@ export function SystemReady({ onReady }: { onReady: (hw: HardwareReport) => void
 
   const ready = report?.ok ?? false;
   const starter = report?.starter_model;
+
+  useEffect(() => {
+    if (ready && hw) onReady();
+  }, [ready, hw]);
 
   return (
     <div className="space-y-10">
@@ -89,7 +93,7 @@ export function SystemReady({ onReady }: { onReady: (hw: HardwareReport) => void
               ))}
             </dl>
             <div className="flex flex-wrap gap-3">
-              <Button onClick={() => hw && onReady(hw)}>Start a project</Button>
+              <Button onClick={onContinue}>Continue</Button>
             </div>
           </>
         ) : report && !report.bundled ? (
@@ -100,6 +104,11 @@ export function SystemReady({ onReady }: { onReady: (hw: HardwareReport) => void
               <div key={s.step} className="flex items-center gap-2 text-[15px]">{s.status === "completed" ? <Icon icon={Check} /> : <Spinner />} {s.label} <span className="text-muted">{s.detail}</span></div>
             ))}
             <Button onClick={devSetup} busy={devBusy}>Set up developer runtime (downloads)</Button>
+          </div>
+        ) : !report ? (
+          <div className="space-y-3">
+            <p className="text-[15px] leading-relaxed">Inkport could not finish checking this computer. The details are above.</p>
+            <Button variant="secondary" onClick={() => check()}>Check again</Button>
           </div>
         ) : (
           <div className="space-y-3">

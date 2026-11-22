@@ -118,8 +118,11 @@ def cmd_plan(a: argparse.Namespace) -> dict:
 def cmd_ingest(a: argparse.Namespace) -> dict:
     from engine.pipeline.ingest_and_verify import run_ingest  # noqa: WPS433
 
+    from engine.contract import project_lock  # noqa: WPS433
+
     rules = json.loads(a.rules) if a.rules else []
-    return run_ingest(Path(a.project), a.inputs, rules)
+    with project_lock(Path(a.project), "being trained or rebuilt"):
+        return run_ingest(Path(a.project), a.inputs, rules)
 
 
 def cmd_preview(a: argparse.Namespace) -> dict:
@@ -145,8 +148,11 @@ def cmd_train(a: argparse.Namespace) -> dict:
         plan = json.loads(Path(a.plan).read_text())
     else:
         plan = _make_plan(a)
+    from engine.contract import project_lock  # noqa: WPS433
+
     events.log(f"Run {plan['run_id']}: {plan['base_model']['id']} on {plan['backend']} ({plan['quant']}), LoRA r={plan['lora']['r']}", "info")
-    return run_train(root, plan, resume=bool(a.resume))
+    with project_lock(root, "being trained"):
+        return run_train(root, plan, resume=bool(a.resume))
 
 
 def cmd_gate(a: argparse.Namespace) -> dict:
@@ -178,12 +184,21 @@ def cmd_import(a: argparse.Namespace) -> dict:
     from engine.adapters import import_inkpatch  # noqa: WPS433
     from engine.pipeline.train_and_gate import run_gate_only  # noqa: WPS433
 
-    events.stage("import", "started", "Checking signature, SHA-256 hashes and every tensor")
-    info = import_inkpatch(Path(a.project), Path(a.file), trust=a.trust)
-    events.stage("import", "completed", f"{info['checks']['tensors']} tensors verified")
-    result: dict[str, Any] = {"import": {k: v for k, v in info.items() if k != "manifest"}, "name": info["manifest"].get("name")}
-    if not a.no_gate:
-        result["gate"] = run_gate_only(Path(a.project), _make_plan(a), Path(info["adapter_dir"]))
+    import shutil  # noqa: WPS433
+
+    from engine.contract import project_lock  # noqa: WPS433
+
+    with project_lock(Path(a.project), "being trained"):
+        events.stage("import", "started", "Checking signature, SHA-256 hashes and every tensor")
+        info = import_inkpatch(Path(a.project), Path(a.file), trust=a.trust)
+        events.stage("import", "completed", f"{info['checks']['tensors']} tensors verified")
+        result: dict[str, Any] = {"import": {k: v for k, v in info.items() if k != "manifest"}, "name": info["manifest"].get("name")}
+        if not a.no_gate:
+            try:
+                result["gate"] = run_gate_only(Path(a.project), _make_plan(a), Path(info["adapter_dir"]))
+            finally:
+                # The unpacked copy has served its purpose (a promoted adapter lives under versions/).
+                shutil.rmtree(Path(info["adapter_dir"]).parent, ignore_errors=True)
     return result
 
 
@@ -325,13 +340,17 @@ def _classify(exc: BaseException) -> tuple[str, bool]:
     from engine.adapters import PatchRejected  # noqa: WPS433
     from engine.pipeline.train_and_gate import LeakageError  # noqa: WPS433
 
+    from engine.contract import ProjectBusy  # noqa: WPS433
+
     msg = str(exc).lower()
+    if isinstance(exc, ProjectBusy):
+        return "BUSY", True
     if isinstance(exc, LeakageError):
         return "LEAKAGE", False
     if isinstance(exc, PatchRejected):
         return ("UNTRUSTED_PUBLISHER" if str(exc).startswith("UNTRUSTED_PUBLISHER") else "PATCH_REJECTED"), False
-    if "out of memory" in msg or exc.__class__.__name__ == "OutOfMemoryError":
-        return "OOM", True
+    if isinstance(exc, MemoryError) or exc.__class__.__name__ == "OutOfMemoryError" or any(w in msg for w in ("out of memory", "not enough memory", "unable to allocate", "cannot allocate memory", "paging file is too small")):
+        return "OUT_OF_MEMORY", True
     if isinstance(exc, FloatingPointError):
         return "NAN_LOSS", True
     if isinstance(exc, FileNotFoundError):
@@ -365,8 +384,11 @@ def main(argv: list[str] | None = None) -> int:
         traceback.print_exc(file=sys.stderr)
         code, retry = _classify(exc)
         message = str(exc)
-        if code == "OOM":
-            message = "Ran out of graphics memory. Inkport will retry with a smaller batch."
+        if code == "OUT_OF_MEMORY":
+            on_gpu = "cuda" in message.lower() or "gpu" in message.lower() or "mps" in message.lower() or "metal" in message.lower()
+            where = "The graphics card ran out of memory" if on_gpu else "Your computer ran out of memory"
+            other = "programs that use the graphics card (games, video editors, browsers with many tabs)" if on_gpu else "programs (web browsers use a lot of memory)"
+            message = f"{where}. Close other {other} and try again. If it keeps happening, restart the computer first, or use Quick run."
         events.error(code, message, retryable=retry)
         events.done(False, code=code, message=message)
         return 1
