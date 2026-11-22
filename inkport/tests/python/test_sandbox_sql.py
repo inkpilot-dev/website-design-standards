@@ -56,3 +56,24 @@ def test_sql_match(db):
 def test_sql_rejects_writes(db, bad):
     ok, detail = sql.verify(db, "SELECT COUNT(*) FROM orders", bad)
     assert not ok and detail.get("error")
+
+
+def test_limits_apply_inside_the_runner():
+    # CPU: a busy loop is ended by the limit the runner put on itself (or by the wall clock).
+    r = run_tests("def add(a, b):\n    while True:\n        pass\n", TESTS, timeout_s=1)
+    assert r["passed"] == 0 and (r["error"] == "timeout" or "crashed" in r["error"])
+    # Memory: half a gigabyte is the ceiling; asking for much more fails inside the test.
+    import sys
+
+    if sys.platform.startswith("linux"):
+        r = run_tests("def add(a, b):\n    return len(bytearray(2_000_000_000))\n", TESTS)
+        assert r["passed"] == 0
+
+
+def test_many_checks_at_once_all_finish():
+    """Answers are checked four at a time from threads; none may get stuck starting up."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(lambda i: run_tests(f"def add(a, b):\n    return a + b + {i} - {i}\n", TESTS), range(48)))
+    assert all(r["error"] is None and r["passed"] == 2 for r in results), [r for r in results if r["error"]][:3]

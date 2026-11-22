@@ -66,3 +66,17 @@ def test_format_check_needs_a_real_drop():
     assert not format_check(1.0, 91 / 96, ref96, [True] * 91 + [False] * 5)  # gain unknown: the plain rule
     assert format_check(None, 0.5, None, [])  # nothing to compare
     assert not format_check(1.0, 0.9, None, [True] * 88)  # old cached baseline: plain threshold
+
+
+def test_a_saved_mac_adapter_names_the_modules_it_adapts():
+    """Whoever loads the adapter must adapt exactly the modules it has weights for."""
+    import ast
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parents[2] / "engine" / "backends" / "mlx_backend.py").read_text()
+    fn = next(n for n in ast.parse(src).body if isinstance(n, ast.FunctionDef) and n.name == "adapted_modules")
+    scope: dict = {"Any": object}
+    exec(compile(ast.Module(body=[fn], type_ignores=[]), "mlx_backend", "exec"), scope)  # the module itself needs MLX to import
+    names = ["model.layers.0.self_attn.q_proj.lora_a", "model.layers.0.self_attn.q_proj.lora_b", "model.layers.27.mlp.down_proj.lora_b", "language_model.model.layers.3.mlp.up_proj.m", "model.embed_tokens.weight"]
+    assert scope["adapted_modules"](names) == ["mlp.down_proj", "mlp.up_proj", "self_attn.q_proj"]
+    assert scope["adapted_modules"]([]) == []

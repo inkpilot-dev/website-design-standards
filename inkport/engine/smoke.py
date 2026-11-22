@@ -278,7 +278,14 @@ def _generic_examples(rng: random.Random, n: int) -> list[list[dict]]:
     return out
 
 
-def build_smoke_model(out: Path, steps: int = 800, seed: int = 0) -> dict:
+# How long the tiny test model is trained when it is built. With 800 steps it copied amounts from
+# the text only about half the time, so after fine-tuning it passed 0 to 12% of the business
+# sample's hidden exam: around the bar for a statistically solid gain (about 6 of 96), which made
+# "the trained model is promoted" fail one run in four. With 3000 steps it passes 11 to 24%.
+SMOKE_MODEL_STEPS = 3000
+
+
+def build_smoke_model(out: Path, steps: int = SMOKE_MODEL_STEPS, seed: int = 0) -> dict:
     import torch  # noqa: WPS433
     from tokenizers import Tokenizer, decoders, models, pre_tokenizers, trainers  # noqa: WPS433
     from transformers import LlamaConfig, LlamaForCausalLM, PreTrainedTokenizerFast  # noqa: WPS433

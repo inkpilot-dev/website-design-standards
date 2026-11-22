@@ -46,7 +46,20 @@ cleanup() {
   pkill -f "WebKitWebDriver --port=$PORT" 2>/dev/null || true
   [ -n "$XVFB_PID" ] && kill "$XVFB_PID" 2>/dev/null || true
   pkill -f "$WORK" 2>/dev/null || true
-  rm -rf "$WORK" 2>/dev/null || true   # a desktop-portal mount inside it may refuse; harmless
+  # The session bus started for the driver, and the desktop services it started in turn, outlive
+  # dbus-run-session. They were all started with this run's folders in their environment.
+  local pid left
+  for sig in TERM KILL; do
+    left=0
+    for pid in $(grep -lsaF "$WORK" /proc/[0-9]*/environ 2>/dev/null | cut -d/ -f3); do
+      [ "$pid" = "$$" ] || [ "$pid" = "$BASHPID" ] || { kill "-$sig" "$pid" 2>/dev/null && left=1; }
+    done
+    [ "$left" = 1 ] && sleep 1
+  done
+  # The document service keeps a mount in the cache folder; it goes when the service does.
+  for _ in 1 2 3 4 5; do mountpoint -q "$WORK/xdg/cache/doc" 2>/dev/null || break; sleep 0.4; done
+  mountpoint -q "$WORK/xdg/cache/doc" 2>/dev/null && { fusermount3 -uz "$WORK/xdg/cache/doc" 2>/dev/null || umount -l "$WORK/xdg/cache/doc" 2>/dev/null || true; }
+  rm -rf "$WORK" 2>/dev/null || true
 }
 trap cleanup EXIT
 

@@ -150,6 +150,38 @@ def format_check(f_ref: Optional[float], f_cand: Optional[float], ref_items: Opt
     return task_gain is not None and task_gain >= 2 * (lost - gained)
 
 
+def gone_wrong(base_pass: list, base_format: Optional[float], res: dict, drift: float, drift_limit: float) -> Optional[str]:
+    """Why the model being trained must not be kept as it is now (None: nothing wrong).
+
+    Seen on a real machine: a run whose result passed 0% of the hidden exam against 58% for the
+    original, where the same settings had given 95% the time before. A run like that is not "a bit
+    worse", it has broken, and the signs are visible at the first practice evaluation:
+
+    * the measure of forgetting is not a number, or is over its limit;
+    * it passes a quarter or less of the practice questions the original passes (and the original
+      passes at least 8, so this is not noise);
+    * at most half of its answers are well-formed where the original's nearly all were.
+
+    A model that is merely slow to improve trips none of these.
+    """
+    if not math.isfinite(drift):
+        return "its numbers stopped being numbers"
+    if drift > drift_limit:
+        return f"it is forgetting general skills (drift {drift:.3f}, limit {drift_limit})"
+    was = sum(1 for x in base_pass if x)
+    if was >= 8 and 4 * res["passed"] <= was:
+        return f"it passes {res['passed']} of the {res['n']} practice questions; the original passes {was}"
+    now_format = format_rate(res)
+    if base_format is not None and now_format is not None and base_format >= 0.8 and now_format <= 0.5:
+        return f"only {now_format:.0%} of its practice answers are well-formed (the original: {base_format:.0%})"
+    return None
+
+
+def training_failed(info: Optional[dict]) -> bool:
+    """The stage stopped because it kept going wrong, and never produced anything worth keeping."""
+    return bool(info) and info.get("stopped") == "unstable" and float(info.get("best_dev", -1.0)) < 0
+
+
 def audit_rate(res: dict) -> Optional[float]:
     """Among items that passed, the fraction that also pass the held-out audit verifiers."""
     vals = [r["audit_pass"] for r in res["results"] if r["pass"] and r["audit_pass"] is not None]
@@ -189,6 +221,7 @@ class Trainer:
         self.test = read_jsonl(self.paths.split("test"))
         self.gate_cfg = plan["gate"]
         self.max_new = int(self.gate_cfg["max_new_tokens"])
+        self.training_info: Optional[dict] = None  # how the first training stage ended (run_train)
 
     # ---------------------------------------------------------------- utils ----------------
     def elapsed_min(self) -> float:
@@ -277,7 +310,7 @@ class Trainer:
         return rows
 
     # ---------------------------------------------------------------- SFT loop -------------
-    def _dev_eval(self, baseline: dict, step: int) -> float:
+    def _dev_eval(self, baseline: dict, step: int) -> dict:
         b = self.backend
         dev = self.dev_subset()
         res = evaluate(b, dev, self.vset, self.ctx, self.max_new)
@@ -295,7 +328,7 @@ class Trainer:
                 step=step,
                 judge=None,
             )
-        return res["passed"] / max(res["n"], 1)
+        return res
 
     def sft(self, examples: list[dict], replay_rows: list[dict], baseline: dict, *, stage: str, lr: float, epochs: float, overall: tuple[float, float], resume: bool) -> dict:
         b = self.backend
@@ -316,6 +349,7 @@ class Trainer:
         st = self.state.data.setdefault(stage, {})
         ckpt = self.run_dir / f"ckpt-{stage}"
         best_dir = self.run_dir / f"best-{stage}"
+        init_dir = self.run_dir / f"init-{stage}"
         step = 0
         best = st.get("best_dev", -1.0)
         patience = st.get("patience", 0)
@@ -325,6 +359,20 @@ class Trainer:
             b.load_checkpoint(ckpt)
             step = int(st["step"])
             events.log(f"Resumed {stage} from step {step}", "info")
+        else:
+            # Where this stage starts from: the place to go back to if training breaks before
+            # anything better exists.
+            b.save_checkpoint(init_dir)
+        dev = self.dev_subset()
+        # The practice score and the answer format tell a broken model from a healthy one only if
+        # the reference answers themselves pass those checks; a model must never be called broken
+        # for learning what its examples say.
+        refs = score_batch(dev, [str(it.get("reference") or "") for it in dev], self.vset, self.ctx)
+        refs_pass = sum(1 for r in refs if r["pass"]) / max(1, len(refs))
+        base_dev_pass = list(baseline.get("dev_pass") or [])[: len(dev)] if refs_pass >= 0.8 else []
+        base_dev_format = None
+        if refs_pass >= 0.8 and (format_rate({"results": refs}) or 0.0) >= 0.8 and len(baseline.get("dev_outputs") or []) == len(dev):
+            base_dev_format = format_rate({"results": score_batch(dev, baseline["dev_outputs"], self.vset, self.ctx)})
         base_nll = st.get("base_nll")
         if base_nll is None:
             base_nll = b.nll(holdout)
@@ -356,18 +404,35 @@ class Trainer:
             tok_s = tokens / max(1e-6, now - t_last)
             metrics = {"loss": round(mean_loss, 4), "loss_ema": round(loss_ema, 4), "lr": cur_lr, "grad_norm": gnorm, "tok_s": round(tok_s, 1), "dev_pass": last_dev, "replay_dnll": last_dnll, "mem_gb": b.memory_gb()}
             if step % eval_every == 0 or step == total:
-                last_dev = self._dev_eval(baseline, step)
+                dev_res = self._dev_eval(baseline, step)
+                last_dev = dev_res["passed"] / max(dev_res["n"], 1)
                 last_dnll = b.nll(holdout) - base_nll
-                metrics.update(dev_pass=last_dev, replay_dnll=round(last_dnll, 4))
+                metrics.update(dev_pass=last_dev, replay_dnll=round(last_dnll, 4) if math.isfinite(last_dnll) else None)
                 events.log(f"{stage} step {step}/{total}: dev pass {last_dev:.0%}, drift {last_dnll:+.3f} nats/token", "info")
-                if last_dnll > float(cfg["dnll_limit"]):
+                # Forgetting can only be judged when it could be measured before training started.
+                why = gone_wrong(base_dev_pass, base_dev_format, dev_res, last_dnll if math.isfinite(base_nll) else 0.0, float(cfg["dnll_limit"]))
+                if why:
+                    # Never keep, and never go on from, a model in this state: go back to the last
+                    # good one (the best so far, or where the stage started) and tread more gently.
                     guard_trips += 1
-                    events.log(f"Forgetting guard tripped (drift {last_dnll:.3f} > {cfg['dnll_limit']}).", "warn")
-                    if guard_trips >= 2 or not best_dir.is_dir():
-                        stopped = "forgetting_guard"
+                    good = best_dir if best_dir.is_dir() else (init_dir if init_dir.is_dir() else None)
+                    events.log(f"Training went wrong at step {step}: {why}.", "warn")
+                    if good is not None:
+                        b.load_checkpoint(good)
+                    if guard_trips > 2 or good is None:
+                        stopped = "unstable"
+                        events.log("Stopping this stage here" + ("." if good is None else ", with the best version so far." if best_dir.is_dir() else ", with the model as it was before the stage."), "warn")
                         break
-                    b.load_checkpoint(best_dir)
                     lr_mult *= 0.5
+                    if good == init_dir:
+                        b.reset_optimizer()
+                        step, patience, loss_ema, last_dev = 0, 0, None, None
+                        st.update(step=0, best_dev=best, patience=0, lr_mult=lr_mult, guard_trips=guard_trips, last_dev=None)
+                        self.state.save()
+                        events.log("Starting this stage again, more gently (learning rate halved).", "warn")
+                        prog.update(0, force=True)
+                        continue
+                    events.log("Went back to the best version so far; continuing more gently (learning rate halved).", "warn")
                 elif last_dev > best + 1e-9:
                     best, patience = last_dev, 0
                     b.save_checkpoint(best_dir)
@@ -388,9 +453,9 @@ class Trainer:
                 break
         if best_dir.is_dir():
             b.load_checkpoint(best_dir)
-        st.update(step=step, best_dev=best, stopped=stopped)
+        st.update(step=step, best_dev=best, stopped=stopped, guard_trips=guard_trips)
         self.state.save()
-        return {"best_dev": best, "steps": step, "total": total, "stopped": stopped, "examples": len(examples), "replay": n_replay}
+        return {"best_dev": best, "steps": step, "total": total, "stopped": stopped, "examples": len(examples), "replay": n_replay, "went_wrong": guard_trips, "lr_mult": lr_mult}
 
     # ---------------------------------------------------------------- stage 2 --------------
     def rft(self, replay_rows: list[dict], baseline: dict, best_dev: float, placebo: bool = False) -> dict:
@@ -524,7 +589,10 @@ class Trainer:
         general_ok = not (g_drop > float(self.gate_cfg["max_general_drop_pts"]) and g_p <= 0.10)
         format_ok = format_check(f_ref, f_cand, ref.get("format_pass"), format_pass(cand), task_gain=cand["passed"] - ref["passed"])
         audit_ok = True if aud is None else aud >= 0.9
-        checks = {"task": task_ok, "general": general_ok, "format": format_ok, "audit": audit_ok, "leakage": True}
+        # Training broke at every attempt and nothing better than the starting point exists: what
+        # was just tested is the untrained model, which must never be saved as a "version".
+        nothing_trained = training_failed(self.training_info)
+        checks = {"task": task_ok, "general": general_ok, "format": format_ok, "audit": audit_ok, "leakage": True, "training": not nothing_trained}
         if decision != "INSUFFICIENT_DATA":
             decision = "PROMOTE" if all(checks.values()) else "REJECT"
             label = "VERIFIED" if verified else "PRELIMINARY"
@@ -539,10 +607,13 @@ class Trainer:
                 lines.append(f"Marked preliminary: add more examples to reach {self.gate_cfg['verified_min_items']}+ hidden questions for a verified result.")
         elif decision == "INSUFFICIENT_DATA":
             lines.append("There are too few hidden test questions to judge fairly. Add more examples and train again.")
+        elif nothing_trained:
+            kept = "Your current version stays active." if ref_name != "base" else "Nothing was saved, and the original model is unchanged."
+            lines = [f"Training did not hold steady on this computer: it was tried three times, each time more gently, and each time the model got worse instead of better. So there is no trained model to judge (the model as it was before training passes {cand_rate:.0%} of the {n} hidden test questions). {kept}"]
         else:
             why = []
             if not task_ok:
-                why.append("the improvement is too small or not statistically reliable yet")
+                why.append(f"it did worse than the {ref_name} on the hidden questions" if (delta < 0 and p_val < 0.05) else "the improvement is too small or not statistically reliable yet")
             if not general_ok:
                 why.append(f"general skills dropped {g_drop:.1f} points")
             if not format_ok:
@@ -565,6 +636,7 @@ class Trainer:
             "format": {"baseline": f_ref, "candidate": f_cand},
             "audit_pass_rate": aud,
             "placebo": placebo_result,
+            "training": None if not self.training_info else {k: self.training_info.get(k) for k in ("steps", "total", "stopped", "best_dev", "went_wrong", "lr_mult")},
             "checks": checks,
             "explanation": " ".join(lines),
             "plan": {k: self.plan[k] for k in ("backend", "base_model", "quant", "lora", "sft", "stage2", "tier") if k in self.plan},
@@ -632,7 +704,7 @@ def _stage(state: RunState, name: str, detail: str) -> bool:
     return True
 
 
-HEAVY_RUN_DIRS = ("ckpt-", "best-", "pre-", "candidate")
+HEAVY_RUN_DIRS = ("ckpt-", "best-", "init-", "pre-", "candidate")
 
 
 def prune_run_dirs(runs: Path, keep: Optional[str] = None) -> int:
@@ -685,11 +757,13 @@ def run_train(root: Path, plan: dict, resume: bool = False) -> dict:
             tr.backend.save_checkpoint(best_dir)
         st.complete("sft", **sft_info)
         events.stage("sft", "completed", f"Best practice score {max(0.0, sft_info['best_dev']):.0%} after {sft_info['steps']} steps ({sft_info['stopped']})")
+    tr.training_info = sft_info
 
     chosen = best_dir
     s2 = plan["stage2"]
     placebo_result = None
-    if s2["mode"] != "none" and _stage(st, "stage2", "Practicing with automatic grading"):
+    # A first stage that never produced a usable model leaves nothing to refine.
+    if s2["mode"] != "none" and not training_failed(sft_info) and _stage(st, "stage2", "Practicing with automatic grading"):
         if not tr.backend.has_adapter:
             tr.load(best_dir, trainable=True)
             tr.backend.prepare_training()

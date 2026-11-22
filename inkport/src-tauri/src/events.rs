@@ -7,7 +7,7 @@ pub trait EventSink: Send + Sync + 'static {
     fn emit(&self, channel: &str, payload: &Value);
 }
 
-/// Prints `[channel] {...}` lines; with `quiet`, only logs, stages, evals, gates and errors.
+/// Prints `[channel] {...}` lines; with `quiet`, only logs, stages, evals, practice answers, gates and errors.
 pub struct StdoutSink {
     pub raw: bool,
     lock: Mutex<()>,
@@ -48,6 +48,19 @@ impl EventSink for StdoutSink {
                 payload["n"]
             ),
             "gate" => eprintln!("   gate | {} - {}", payload["decision"].as_str().unwrap_or(""), payload["explanation"].as_str().unwrap_or("")),
+            // What the model being trained answers on a few practice questions, each time it is
+            // checked: the quickest way to see a run that has broken (empty or garbled answers).
+            "benchmark" if payload["source"].as_str() == Some("training_dev") => {
+                let answer: String = payload["trained"]["output"].as_str().unwrap_or("").split_whitespace().collect::<Vec<_>>().join(" ");
+                let shown: String = answer.chars().take(110).collect();
+                eprintln!(
+                    "    dev | step {}: {} | {}{}",
+                    payload["step"],
+                    if payload["trained"]["pass"].as_bool() == Some(true) { "pass" } else { "FAIL" },
+                    shown,
+                    if answer.chars().count() > 110 { "…" } else { "" }
+                );
+            }
             "error" => eprintln!("  error | {}: {}", payload["code"].as_str().unwrap_or(""), payload["message"].as_str().unwrap_or("")),
             "ready" => eprintln!("  ready | worker on 127.0.0.1:{}", payload["port"]),
             "runtime" => eprintln!("runtime | {}", payload.get("label").and_then(Value::as_str).unwrap_or("")),

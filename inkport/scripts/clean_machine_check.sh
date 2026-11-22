@@ -60,7 +60,17 @@ touch "$WORK/.before"
 cat > "$WORK/inner.sh" <<'INNER'
 set -euo pipefail
 pass() { printf '    \033[32mPASS\033[0m %s\n' "$*"; }
-fail() { printf '    \033[31mFAIL\033[0m %s\n' "$*"; echo "    --- errors in the Inkport log ---"; grep -iE "error|traceback|exception" "$WORK/cli.log" 2>/dev/null | tail -15 | sed 's/^/    /'; echo "    --- last lines of the Inkport log ---"; grep -v "not an adapter parameter" "$WORK/cli.log" 2>/dev/null | tail -30 | sed 's/^/    /'; exit 1; }
+# (A grep that finds nothing must not end the script here: that once swallowed the log of a failed run.)
+fail() {
+  printf '    \033[31mFAIL\033[0m %s\n' "$*"
+  echo "    --- errors in the Inkport log ---"
+  { grep -iE "error|traceback|exception" "$WORK/cli.log" 2>/dev/null || true; } | tail -15 | cut -c1-400 | sed 's/^/    /'
+  echo "    --- last lines of the Inkport log ---"
+  { grep -v "not an adapter parameter" "$WORK/cli.log" 2>/dev/null || true; } | tail -70 | cut -c1-400 | sed 's/^/    /'
+  exit 1
+}
+# The story of the training run just made: stages, practice scores, a few practice answers, verdict.
+story() { { grep -E "^ *(stage|info|warn|eval|dev|gate) \|" "$WORK/cli.log" 2>/dev/null || true; } | tail -n "${1:-40}" | cut -c1-260 | sed 's/^/      /'; }
 json() { sed -n 's/^RESULT //p' | tail -1; }
 field() { tr -d '\n' | grep -o "\"$1\":[^,}]*" | head -1 | cut -d: -f2- | tr -d '"'; }
 t0=$(date +%s)
@@ -107,6 +117,7 @@ else
   T=$("$CLI" train --project clean-check --preset fast --overrides '{"sft":{"max_steps":40,"eval_every":20,"checkpoint_every":20},"stage2":{"mode":"none"},"gate":{"general_suite_n":20,"max_general_drop_pts":100}}' 2>>"$WORK/cli.log" | json) || fail "training crashed"
   echo "$T" | grep -q '"decision":"PROMOTE"' || fail "training finished but the trained model was not promoted on the bundled samples: $T"
 fi
+story 30
 pass "trained + gated on the hidden test: $(echo "$T" | field decision) $(echo "$T" | field version)"
 
 A=$("$CLI" api-smoke --project clean-check --port "$PORT" 2>>"$WORK/cli.log" | json) || fail "local API: $(tail -3 "$WORK/cli.log")"

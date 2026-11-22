@@ -8,7 +8,8 @@ Defense in depth (see engine/verify/sandbox.py for the parent-side controls):
   * this process installs a PEP 578 audit hook *before* touching user code. Audit hooks cannot
     be removed, and they veto file writes, reads outside the stdlib, sockets, subprocesses,
     os.system/exec/fork/kill, ctypes and similar escape hatches;
-  * the parent applies CPU, memory, file-size and open-file rlimits (POSIX) and a wall timeout.
+  * before anything else this process puts CPU, memory, file-size and open-file limits on itself
+    (POSIX; they cannot be raised again), and the parent enforces a wall-clock time limit.
 This file intentionally imports only the standard library.
 """
 
@@ -102,9 +103,27 @@ def _equal(result, expect_src):
         return False
 
 
+def _limit_myself(limits):
+    """CPU seconds, address space, file size, open files. Hard limits: the code cannot lift them."""
+    try:
+        import resource
+    except ImportError:  # Windows: the parent's wall-clock limit is what applies
+        return
+    cpu_s, mem_mb = int(limits.get("cpu_s", 7)), int(limits.get("mem_mb", 512))
+    wanted = [(resource.RLIMIT_CPU, cpu_s, cpu_s + 1), (resource.RLIMIT_FSIZE, 1 << 20, 1 << 20), (resource.RLIMIT_NOFILE, 64, 64)]
+    if sys.platform != "darwin":  # RLIMIT_AS is unreliable on macOS
+        wanted.append((resource.RLIMIT_AS, mem_mb << 20, mem_mb << 20))
+    for which, soft, hard in wanted:
+        try:
+            resource.setrlimit(which, (soft, hard))
+        except (ValueError, OSError):  # already lower than this
+            pass
+
+
 def main():
     global _armed
     req = json.loads(sys.stdin.read())
+    _limit_myself(req.get("limits") or {})
     real_stdout = sys.stdout
     nonce = req["nonce"]
     code, tests = req["code"], req["tests"]

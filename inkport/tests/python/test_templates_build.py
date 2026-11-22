@@ -24,8 +24,11 @@ def test_code_sql_reference_answers_pass_their_own_verifiers(project, tmp_path):
     write_smoke_data(data)
     run_ingest(project, [str(data / "orders.csv"), str(data / "customers.csv"), str(data / "helpers.py")], [])
     vset, ctx = load_verifier_set(project), Context(root=project)
-    items = read_jsonl(project / "data" / "train.jsonl") + read_jsonl(project / "data" / "test.jsonl")
+    # Every split: the sample has only two questions about Python functions, and where they land is
+    # drawn per project (reading train and test alone made this fail about once in a hundred runs).
+    items = [it for split in ("train", "dev", "test") for it in read_jsonl(project / "data" / f"{split}.jsonl")]
     assert any(i["meta"].get("gold_sql") for i in items) and any(i["meta"].get("tests") for i in items)
+    items.sort(key=lambda i: not i["meta"].get("tests"))  # the function questions first: they are among those checked below
     for it in items[:60]:
         r = score_item(it, it["reference"], vset, ctx)
         assert r["pass"], (it["messages"][-1]["content"], r["verdicts"])

@@ -58,20 +58,6 @@ def screen(code: str) -> None:
             raise SandboxRejected(f"'{type(node).__name__}' is not allowed")
 
 
-def _limits(cpu_s: int, mem_mb: int):  # pragma: no cover - runs in the child
-    def apply() -> None:
-        import resource
-
-        resource.setrlimit(resource.RLIMIT_CPU, (cpu_s, cpu_s + 1))
-        if sys.platform != "darwin":  # RLIMIT_AS is unreliable on macOS
-            resource.setrlimit(resource.RLIMIT_AS, (mem_mb << 20, mem_mb << 20))
-        resource.setrlimit(resource.RLIMIT_FSIZE, (1 << 20, 1 << 20))
-        resource.setrlimit(resource.RLIMIT_NOFILE, (64, 64))
-        os.setsid()
-
-    return apply
-
-
 def run_tests(code: str, tests: list[dict], timeout_s: float = 6.0, mem_mb: int = 512) -> dict:
     """Returns {"passed": int, "total": int, "results": [...], "error": str|None}."""
     try:
@@ -84,14 +70,18 @@ def run_tests(code: str, tests: list[dict], timeout_s: float = 6.0, mem_mb: int 
         env["SYSTEMROOT"] = os.environ.get("SYSTEMROOT", r"C:\Windows")
     kwargs: dict = {}
     if os.name == "posix":
-        kwargs["preexec_fn"] = _limits(int(timeout_s) + 1, mem_mb)
+        # Its own session, and limits the runner puts on itself before it touches the code (see
+        # sandbox_runner.py). Not a function run between fork and exec: answers are checked from
+        # several threads at once, where that can leave the child stuck before it has even started
+        # (which would then be counted as a wrong answer after the time limit).
+        kwargs["start_new_session"] = True
     else:
         kwargs["creationflags"] = 0x08000000 | 0x00000200  # CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP
     with tempfile.TemporaryDirectory(prefix="ik-sbx-") as cwd:
         try:
             proc = subprocess.run(
                 [sys.executable, "-I", "-S", "-B", "-X", "utf8", str(RUNNER)],
-                input=json.dumps({"code": code, "tests": tests, "nonce": nonce}),
+                input=json.dumps({"code": code, "tests": tests, "nonce": nonce, "limits": {"cpu_s": int(timeout_s) + 1, "mem_mb": mem_mb}}),
                 capture_output=True,
                 text=True,
                 encoding="utf-8",

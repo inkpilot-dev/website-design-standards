@@ -30,7 +30,8 @@ const OUT = arg('out', 'gui-e2e');
 const PHASE = arg('phase', 'first');
 const EXPECT = arg('expect', 'promote');
 const TRAIN_TIMEOUT = Number(arg('train-timeout', '900')) * 1000;
-const PROJECT = arg('project', 'Window test');
+// The start-and-stop pass has its own project, so that it can follow a full pass in the same data folder.
+const PROJECT = arg('project', PHASE === 'smoke' ? 'Start and stop' : 'Window test');
 // Which goal the 'first' and 'smoke' phases use: its title on screen, a suggested rule to add, and
 // a file name that shows up under the sample questions.
 const GOALS = {
@@ -220,8 +221,9 @@ async function openPlaywright() {
 
   try {
     // ---------------------------------------------------------------- step 1: your computer
-    await waitFor('the start-up check to finish', () => d.evaluate('api.has("Continue", "main") || api.text().includes("Needs repair") || api.text().includes("could not finish")'), 600000, 1000);
+    await waitFor('the start-up check to finish', () => d.evaluate('api.has("Continue", "main") || api.text().includes("Needs repair") || api.text().includes("could not finish") || api.text().includes("Developer build")'), 600000, 1000);
     const ready = await text();
+    if (ready.includes('Developer build')) throw new Error('this is a development build without the bundled runtime; point INKPORT_BUNDLE_DIR at an assembled bundle (build/payload-<platform>)');
     await shot('01-ready');
     note(`browser engine: ${await d.evaluate('api.ua()')}`);
     note(`fonts loaded: ${await d.evaluate('api.fonts()')}`);

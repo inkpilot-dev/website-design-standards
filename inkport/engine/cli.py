@@ -210,7 +210,7 @@ def cmd_import(a: argparse.Namespace) -> dict:
 def cmd_smoke_model(a: argparse.Namespace) -> dict:
     from engine.smoke import build_smoke_model  # noqa: WPS433
 
-    return build_smoke_model(Path(a.out), steps=a.steps)
+    return build_smoke_model(Path(a.out), **({"steps": a.steps} if a.steps else {}))
 
 
 def cmd_smoke_data(a: argparse.Namespace) -> dict:
@@ -331,7 +331,7 @@ def build_parser() -> argparse.ArgumentParser:
     planning(sp)
     sp = add("smoke-model", cmd_smoke_model, "build the tiny offline test model")
     sp.add_argument("--out", required=True)
-    sp.add_argument("--steps", type=int, default=800)
+    sp.add_argument("--steps", type=int, default=None)
     sp = add("smoke-data", cmd_smoke_data, "write synthetic small-business files")
     sp.add_argument("--out", required=True)
     sp = add("fetch-model", cmd_fetch_model, "download a catalog model")

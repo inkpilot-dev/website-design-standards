@@ -16,6 +16,23 @@ from typing import Any, Iterator, Optional
 from engine.backends.base import Backend
 
 
+def adapted_modules(weight_names: Any) -> list[str]:
+    """The modules inside a block that carry adapter weights, e.g. ``self_attn.q_proj``.
+
+    Written into every saved adapter. Without it, whoever loads the adapter decides for itself
+    which modules to adapt (mlx-lm's default has changed between versions), and an adapter saved
+    by a model that was itself loaded from a file used to be written without it.
+    """
+    found = set()
+    for name in weight_names:
+        parts = name.split(".")
+        if "layers" in parts and parts[-1] in ("lora_a", "lora_b", "m"):
+            inner = parts[parts.index("layers") + 2 : -1]
+            if inner:
+                found.add(".".join(inner))
+    return sorted(found)
+
+
 class MlxBackend(Backend):
     name = "mlx"
 
@@ -237,12 +254,13 @@ class MlxBackend(Backend):
 
     def _write_mlx(self, d: Path) -> None:
         d.mkdir(parents=True, exist_ok=True)
-        self.mx.save_safetensors(str(d / "adapters.safetensors"), self._adapter_weights())
+        weights = self._adapter_weights()
+        self.mx.save_safetensors(str(d / "adapters.safetensors"), weights)
         lora = self.plan["lora"]
         cfg = {
             "fine_tune_type": "dora" if lora["dora"] else "lora",
             "num_layers": getattr(self, "_num_layers", len(self._layers())),
-            "lora_parameters": {"rank": lora["r"], "scale": lora["alpha"] / lora["r"], "dropout": lora["dropout"], **({"keys": self._keys} if getattr(self, "_keys", None) else {})},
+            "lora_parameters": {"rank": lora["r"], "scale": lora["alpha"] / lora["r"], "dropout": lora["dropout"], **({"keys": keys} if (keys := adapted_modules(weights)) else {})},
         }
         (d / "adapter_config.json").write_text(json.dumps(cfg, indent=2), encoding="utf-8")
 
