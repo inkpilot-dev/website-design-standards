@@ -441,6 +441,15 @@ _SPAN_PATTERNS = [
 _HEADING = re.compile(r"^\s{0,3}#{1,6}\s+\S")
 
 
+def _is_heading(line: str) -> bool:
+    """A line that titles what follows ("# Rent", "3. Security deposit", "ARTICLE IV") rather than
+    stating something: marked as a heading, or a few words with no figures and no full stop."""
+    if _HEADING.match(line):
+        return True
+    t = re.sub(r"^\s*(?:\(?\d+(?:\.\d+)*[.)]?|[IVXLC]+[.)]|§+\s*\d+)\s+", "", line.strip())
+    return len(t.split()) <= 8 and not re.search(r"[.!?;,]$|\d", t)
+
+
 def chunk_document(text: str, target: int = 700) -> list[str]:
     """Excerpts of roughly `target` characters, made of whole paragraphs or whole sentences.
 
@@ -501,7 +510,7 @@ def cloze_items(doc: dict, max_per_chunk: int = 6) -> list[dict]:
     out = []
     for ci, chunk in enumerate(chunk_document(doc["text"])):
         made = 0
-        for sent in (x for line in chunk.split("\n") if not _HEADING.match(line) for x in _SENT.split(line)):
+        for sent in (x for line in chunk.split("\n") if not _is_heading(line) for x in _SENT.split(line)):
             if made >= max_per_chunk:
                 break
             if not (30 <= len(sent) <= 320):

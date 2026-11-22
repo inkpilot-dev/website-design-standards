@@ -148,6 +148,31 @@ def test_word_document_is_read(project, tmp_path):
     assert sum(summary["counts"].values()) >= 30 and summary["ready"]
 
 
+def test_word_headings_are_not_glued_to_the_next_sentence_or_quizzed(project, tmp_path):
+    from engine.pipeline.ingest_and_verify import _is_heading
+
+    _set_template(project, "docs_legal")
+    w = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
+    paragraphs = []
+    for i in range(1, 121):
+        paragraphs += [f"{i}. Fees And Charges", f"The fee under clause {i} is ${100 + i} and is due within {i + 2} days. Late payment under clause {i} adds {i}.5% per month."]
+    path = tmp_path / "contract.docx"
+    with zipfile.ZipFile(path, "w") as z:
+        z.writestr("word/document.xml", f"<w:document {w}><w:body>" + "".join(f"<w:p><w:r><w:t>{t}</w:t></w:r></w:p>" for t in paragraphs) + "</w:body></w:document>")
+    summary = run_ingest(project, [str(path)], [])
+    assert summary["ready"]
+    items = [it for rows in _splits(project).values() for it in rows]
+    quotes = [it["reference_json"]["quote"] for it in items]
+    assert len(quotes) >= 60
+    assert all(q.startswith(("The fee under clause", "Late payment under clause")) for q in quotes), [q for q in quotes if not q.startswith(("The fee", "Late"))][:3]
+    # The heading is still there as context, on its own line.
+    assert all("Fees And Charges\n" in it["meta"]["source_text"] for it in items)
+    for heading in ["# Rent", "3. Security deposit", "ARTICLE IV", "Fees And Charges", "(2) Term", "§ 12 Notices"]:
+        assert _is_heading(heading), heading
+    for sentence in ["Rent: $1,450 per month", "The term is 12 months.", "Deposit of 2000 dollars", "Pets are allowed, with conditions,", "The landlord is Harborview Property Group and it has many offices in the city"]:
+        assert not _is_heading(sentence), sentence
+
+
 def test_documents_without_blank_lines_are_cut_into_excerpts():
     from engine.pipeline.ingest_and_verify import chunk_document
 

@@ -505,9 +505,11 @@ def _subject(ctx: _Ctx, text: str) -> tuple[str, str]:
         return "field", s
     if s and not key:
         raise _NotUnderstood  # only punctuation where a name should be
+    if ctx.input_field is not None and key == ctx.input_field:
+        return "input", s  # the user's own name for the question column, even one called "text"
     if key in _ANSWER_KEYS:
         return "answer", ""
-    if key in _INPUT_KEYS or (ctx.input_field is not None and key == ctx.input_field):
+    if key in _INPUT_KEYS:
         return "input", s
     return "field", s
 

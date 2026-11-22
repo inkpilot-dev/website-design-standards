@@ -390,7 +390,8 @@ _W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 
 
 def read_docx(path: Path) -> str:
-    """The text of a Word document, one paragraph (or table cell) per line."""
+    """The text of a Word document: paragraphs (and table cells) separated by a blank line, so
+    that a heading stays apart from the paragraph after it."""
     try:
         with zipfile.ZipFile(path) as z:
             if "word/document.xml" not in z.namelist():
@@ -413,7 +414,7 @@ def read_docx(path: Path) -> str:
         text = "".join(parts).strip()
         if text:
             paragraphs.append(text)
-    return "\n".join(paragraphs)
+    return "\n\n".join(paragraphs)
 
 
 def read_pdf(path: Path) -> list[str]:

@@ -150,4 +150,5 @@ def test_docx_text_without_python_docx(tmp_path):
     path = tmp_path / "lease.docx"
     with zipfile.ZipFile(path, "w") as z:
         z.writestr("word/document.xml", xml)
-    assert readers.read_docx(path) == "Rent is $1,850 per month.\nDeposit\t$2,400\nLine one\nline two"
+    # Paragraphs are separated by a blank line; a line break inside a paragraph stays a line break.
+    assert readers.read_docx(path) == "Rent is $1,850 per month.\n\nDeposit\t$2,400\n\nLine one\nline two"

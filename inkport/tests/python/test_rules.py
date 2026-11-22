@@ -150,6 +150,9 @@ def test_condition_can_look_at_the_question():
     r = compile_rule("if the description mentions uber then category must be travel", columns={"category", "amount"}, input_field="description")
     assert evaluate(r.expr, {"category": "Travel"}, "", "Uber to the airport")
     assert not evaluate(r.expr, {"category": "meals"}, "", "Uber to the airport")
+    # ... also when that column has a name that otherwise means "the answer".
+    r = compile_rule("if the text mentions uber then label must be travel", columns={"label"}, input_field="text")
+    assert r.expr.startswith("(not (mentions(input,") and not evaluate(r.expr, {"label": "meals"}, "", "Uber ride")
 
 
 def test_plural_and_singular_column_names_meet_when_the_columns_are_known():
