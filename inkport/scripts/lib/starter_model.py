@@ -110,11 +110,16 @@ def convert_mlx(args: list, target: Path, attempts: int = 3) -> None:
         last = attempt == attempts and attempts > 1
         run_cmd = [cmd[0], "-c", _MLX_ON_CPU, *cmd[3:]] if last else cmd
         log("$ " + " ".join(cmd) + ("   (on the processor)" if last else ""))
-        proc = subprocess.run(run_cmd, env={**os.environ})
-        if proc.returncode == 0 and (target / "config.json").is_file():
+        try:
+            # A stuck graphics card can also leave the conversion waiting for ever; a healthy one
+            # needs a few minutes for this model, the processor well under half an hour.
+            code = subprocess.run(run_cmd, env={**os.environ}, timeout=40 * 60).returncode
+        except subprocess.TimeoutExpired:
+            code = "no result after 40 minutes"
+        if code == 0 and (target / "config.json").is_file():
             return
         if attempt < attempts:
-            log(f"model conversion failed (attempt {attempt} of {attempts}, exit code {proc.returncode}); trying again in 30 s")
+            log(f"model conversion failed (attempt {attempt} of {attempts}: {code}); trying again in 30 s")
             time.sleep(30)
     die(f"model conversion failed {attempts} times: {' '.join(cmd)}")
 
