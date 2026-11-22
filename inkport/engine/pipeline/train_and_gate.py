@@ -38,6 +38,7 @@ from engine.suites import general
 from engine.verify.core import Context, load_verifier_set, score_batch
 
 OVERALL = {"baseline": (2, 18), "replay": (18, 22), "sft": (22, 70), "stage2": (70, 84), "gate": (84, 98), "promote": (98, 100)}
+WATCHED = 60  # general questions held back from training and asked at every practice evaluation
 
 
 class LeakageError(RuntimeError):
@@ -150,7 +151,17 @@ def format_check(f_ref: Optional[float], f_cand: Optional[float], ref_items: Opt
     return task_gain is not None and task_gain >= 2 * (lost - gained)
 
 
-def gone_wrong(base_pass: list, base_format: Optional[float], res: dict, drift: float, drift_limit: float) -> Optional[str]:
+def general_limit(n: int) -> int:
+    """How many of ``n`` general questions a model may lose (net) before training backs off.
+
+    The final exam refuses a model that loses more than 5 points on 60 general questions when that
+    loss is beyond chance, which works out at 5 questions of 60. The same share here, and never
+    fewer than 2: one question changing hands is noise.
+    """
+    return max(2, math.ceil(n / 12))  # 5 of the 60 that are watched
+
+
+def gone_wrong(base_pass: list, base_format: Optional[float], res: dict, drift: float, drift_limit: float, general_lost: int = 0, general_n: int = 0) -> Optional[str]:
     """Why the model being trained must not be kept as it is now (None: nothing wrong).
 
     Seen on a real machine: a run whose result passed 0% of the hidden exam against 58% for the
@@ -163,6 +174,11 @@ def gone_wrong(base_pass: list, base_format: Optional[float], res: dict, drift: 
     * at most half of its answers are well-formed where the original's nearly all were.
 
     A model that is merely slow to improve trips none of these.
+
+    One more sign is not about breaking but about what the final exam will refuse: the model has
+    lost general questions the original answers (``general_lost`` of ``general_n``, net of any it
+    gained). Learning the task more gently usually keeps them; finding out only at the exam, after
+    the whole run, is what this prevents.
     """
     if not math.isfinite(drift):
         return "its numbers stopped being numbers"
@@ -174,6 +190,8 @@ def gone_wrong(base_pass: list, base_format: Optional[float], res: dict, drift: 
     now_format = format_rate(res)
     if base_format is not None and now_format is not None and base_format >= 0.8 and now_format <= 0.5:
         return f"only {now_format:.0%} of its practice answers are well-formed (the original: {base_format:.0%})"
+    if general_n and general_lost >= general_limit(general_n):
+        return f"it lost {general_lost} of the {general_n} general questions it is checked on (the final exam allows about one in twelve)"
     return None
 
 
@@ -303,9 +321,13 @@ class Trainer:
         if path.is_file():
             return read_jsonl(path)
         b = self.backend or self.load()
-        prompts = general.replay_prompts(64)
+        # 60 are held back from training and asked again while it runs (see sft); the rest are mixed
+        # into the training examples.
+        prompts = general.replay_prompts(int(self.plan["sft"].get("replay_prompts", 132)))
         outs = b.generate([p["messages"] for p in prompts], max_new_tokens=64, temperature=0.0, use_adapter=False)
-        rows = [{"messages": p["messages"] + [{"role": "assistant", "content": o[0] or "OK"}]} for p, o in zip(prompts, outs)]
+        # "check": how an answer to this question is judged (None for the free-form ones), so that
+        # the questions held back from training can be asked again while it runs.
+        rows = [{"messages": p["messages"] + [{"role": "assistant", "content": o[0] or "OK"}], "check": p.get("check")} for p, o in zip(prompts, outs)]
         write_jsonl(path, rows)
         return rows
 
@@ -333,8 +355,12 @@ class Trainer:
     def sft(self, examples: list[dict], replay_rows: list[dict], baseline: dict, *, stage: str, lr: float, epochs: float, overall: tuple[float, float], resume: bool) -> dict:
         b = self.backend
         cfg = self.plan["sft"]
-        holdout = replay_rows[: max(4, len(replay_rows) // 4)]
-        replay_train = replay_rows[len(holdout) :]
+        # Held back from training: with enough of them, as many as the final exam asks (60), so that
+        # losing them can be told from chance the way the exam does; from a shorter list, a quarter.
+        n_held = WATCHED if len(replay_rows) >= WATCHED + 32 else max(4, len(replay_rows) // 4)
+        held = replay_rows[:n_held]
+        replay_train = replay_rows[n_held:]
+        holdout = held[:16]  # the forgetting readings need no more than these
         rho = float(cfg["replay_frac"])
         n_replay = min(len(replay_train), int(round(rho / max(1e-9, 1 - rho) * len(examples)))) if rho > 0 else 0
         data = examples + replay_train[:n_replay]
@@ -382,6 +408,11 @@ class Trainer:
         # -0.8 to -1.8 nats/token, which can only mean those end tokens cost the original model a
         # lot and are learned at once, hiding any real forgetting behind them. Logged next to the
         # first so that the limit can be set on real figures; the guard still uses the first.
+        # General questions held back from training, of the kind the final exam asks: asked again at
+        # every practice evaluation, compared with how the original model answered them.
+        watch = [row for row in held if row.get("check")]
+        base_general = [general.check(row, row["messages"][-1]["content"]) for row in watch]
+        watch_general = bool(cfg.get("general_guard", True)) and sum(base_general) >= 8
         answers_only = [{**row, "open_end": True} for row in holdout]
         base_answers = st.get("base_nll_answers")
         if base_answers is None:
@@ -420,13 +451,22 @@ class Trainer:
                 last_dnll = b.nll(holdout) - base_nll
                 answers_dnll = b.nll(answers_only) - base_answers
                 metrics.update(dev_pass=last_dev, replay_dnll=round(last_dnll, 4) if math.isfinite(last_dnll) else None)
-                events.log(f"{stage} step {step}/{total}: dev pass {last_dev:.0%}, drift {last_dnll:+.3f} nats/token (answers alone {answers_dnll:+.3f})", "info")
+                general_lost, general_note = 0, ""
+                if watch_general:
+                    said = b.generate([row["messages"][:-1] for row in watch], max_new_tokens=16, temperature=0.0)
+                    now_general = [general.check(row, o[0]) for row, o in zip(watch, said)]
+                    gained, lost = discordant(base_general, now_general)
+                    general_lost = lost - gained
+                    general_note = f", general questions {sum(now_general)}/{len(watch)} (the original: {sum(base_general)})"
+                    metrics.update(general_pass=sum(now_general) / len(watch))
+                events.log(f"{stage} step {step}/{total}: dev pass {last_dev:.0%}, drift {last_dnll:+.3f} nats/token (answers alone {answers_dnll:+.3f}){general_note}", "info")
                 # Forgetting can only be judged when it could be measured before training started.
-                why = gone_wrong(base_dev_pass, base_dev_format, dev_res, last_dnll if math.isfinite(base_nll) else 0.0, float(cfg["dnll_limit"]))
+                why = gone_wrong(base_dev_pass, base_dev_format, dev_res, last_dnll if math.isfinite(base_nll) else 0.0, float(cfg["dnll_limit"]), general_lost, len(watch) if watch_general else 0)
                 if why:
                     # Never keep, and never go on from, a model in this state: go back to the last
                     # good one (the best so far, or where the stage started) and tread more gently.
                     guard_trips += 1
+                    st["why"] = why
                     good = best_dir if best_dir.is_dir() else (init_dir if init_dir.is_dir() else None)
                     events.log(f"Training went wrong at step {step}: {why}.", "warn")
                     if good is not None:
@@ -470,7 +510,7 @@ class Trainer:
             b.load_checkpoint(best_dir)
         st.update(step=step, best_dev=best, stopped=stopped, guard_trips=guard_trips)
         self.state.save()
-        return {"best_dev": best, "steps": step, "total": total, "stopped": stopped, "examples": len(examples), "replay": n_replay, "went_wrong": guard_trips, "lr_mult": lr_mult}
+        return {"best_dev": best, "steps": step, "total": total, "stopped": stopped, "examples": len(examples), "replay": n_replay, "went_wrong": guard_trips, "lr_mult": lr_mult, "why": st.get("why")}
 
     # ---------------------------------------------------------------- stage 2 --------------
     def rft(self, replay_rows: list[dict], baseline: dict, best_dev: float, placebo: bool = False) -> dict:
@@ -632,7 +672,8 @@ class Trainer:
             lines.append("There are too few hidden test questions to judge fairly. Add more examples and train again.")
         elif nothing_trained:
             kept = "Your current version stays active." if ref_name != "base" else "Nothing was saved, and the original model is unchanged."
-            lines = [f"Training did not hold steady on this computer: it was tried three times, each time more gently, and each time the model got worse instead of better. So there is no trained model to judge (the model as it was before training passes {cand_rate:.0%} of the {n} hidden test questions). {kept}"]
+            why_last = (self.training_info or {}).get("why")
+            lines = [f"Training did not hold steady on this computer: it was tried three times, each time more gently, and each time the model got worse instead of better{f' (the last time: {why_last})' if why_last else ''}. So there is no trained model to judge (the model as it was before training passes {cand_rate:.0%} of the {n} hidden test questions). {kept}"]
         else:
             why = []
             if not task_ok:
@@ -659,7 +700,7 @@ class Trainer:
             "format": {"baseline": f_ref, "candidate": f_cand},
             "audit_pass_rate": aud,
             "placebo": placebo_result,
-            "training": None if not self.training_info else {k: self.training_info.get(k) for k in ("steps", "total", "stopped", "best_dev", "went_wrong", "lr_mult")},
+            "training": None if not self.training_info else {k: self.training_info.get(k) for k in ("steps", "total", "stopped", "best_dev", "went_wrong", "lr_mult", "why")},
             "checks": checks,
             "explanation": " ".join(lines),
             "plan": {k: self.plan[k] for k in ("backend", "base_model", "quant", "lora", "sft", "stage2", "tier") if k in self.plan},

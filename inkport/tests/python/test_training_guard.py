@@ -29,15 +29,17 @@ class Stand(Backend):
 
     name = "torch"
     answers: dict = {}
+    general: dict = {}  # stock general questions -> their right answers (the original knows them all)
     base = 0.6
     breaks_above = 1.0  # a learning rate; 1.0 = never
+    forgets_above = 1.0  # a learning rate above which it learns the task but loses the general questions
     broken_drift = 0.0  # what the measure of forgetting reads once broken (may be nan)
     always_drifts = 0.0  # drift added per step even when healthy
     log: list = []
 
     def __init__(self, plan):
         super().__init__(plan)
-        self.w, self.broken, self.adapter, self.steps = 0.0, False, False, 0
+        self.w, self.broken, self.forgot, self.adapter, self.steps = 0.0, False, False, False, 0
 
     # -- loading
     def load(self, adapter_dir=None, trainable=False):
@@ -55,12 +57,15 @@ class Stand(Backend):
 
     def _answer(self, conv, use_adapter):
         question = conv[-1]["content"]
+        trained = use_adapter and self.adapter
+        if question in self.general:
+            return "no idea" if trained and (self.broken or self.forgot) else self.general[question]
         right = self.answers.get(question)
         if right is None:
-            return "OK"  # general prompts: the same answer before and after
-        if use_adapter and self.adapter and self.broken:
+            return "OK"  # free-form general prompts: the same answer before and after
+        if trained and self.broken:
             return GARBAGE
-        skill = self.base + (min(0.35, self.w) if (use_adapter and self.adapter) else 0.0)
+        skill = self.base + (min(0.35, self.w) if trained else 0.0)
         rank = (sum(question.encode()) % 100) / 100.0
         return right if rank < skill else json.dumps({"category": "none", "amount": 1})
 
@@ -82,6 +87,8 @@ class Stand(Backend):
         self.steps += 1
         if lr > self.breaks_above:
             self.broken = True
+        if lr > self.forgets_above:
+            self.forgot = True
         self.w += 60 * lr
         return 0.5
 
@@ -90,11 +97,11 @@ class Stand(Backend):
 
     def save_checkpoint(self, d):
         d.mkdir(parents=True, exist_ok=True)
-        (d / "stand.json").write_text(json.dumps({"w": self.w, "broken": self.broken, "steps": self.steps}))
+        (d / "stand.json").write_text(json.dumps({"w": self.w, "broken": self.broken, "forgot": self.forgot, "steps": self.steps}))
 
     def load_checkpoint(self, d):
         state = json.loads((d / "stand.json").read_text())
-        self.w, self.broken, self.steps = state["w"], state["broken"], state["steps"]
+        self.w, self.broken, self.forgot, self.steps = state["w"], state["broken"], state["forgot"], state["steps"]
 
     def save_adapter(self, d):
         self.save_checkpoint(d)
@@ -119,17 +126,21 @@ def trained(project, tmp_path, monkeypatch):
     monkeypatch.setattr(tg, "make_backend", lambda plan, inference_only=False: Stand(plan))
     monkeypatch.delenv("INKPORT_LLAMA_CPP", raising=False)
 
-    def run(**settings):
-        Stand.answers, Stand.log = answers, []
-        Stand.base, Stand.breaks_above, Stand.broken_drift, Stand.always_drifts = 0.6, 1.0, 0.0, 0.0
+    from engine.suites import general
+
+    stock = {it["messages"][-1]["content"]: it["reference"] for it in general.replay_prompts(132) + general.suite(60) if it.get("reference")}
+
+    def run(plan=None, **settings):
+        Stand.answers, Stand.general, Stand.log = answers, stock, []
+        Stand.base, Stand.breaks_above, Stand.forgets_above, Stand.broken_drift, Stand.always_drifts = 0.6, 1.0, 1.0, 0.0, 0.0
         for key, value in settings.items():
             setattr(Stand, key, value)
         del lines[:]
         report = {"gpus": [], "ram_gb": 16, "apple_silicon": False}
         report["recommendation"] = select_tier(report)
         meta = json.loads((project / "project.json").read_text())
-        plan = make_plan(meta, report, preset="fast", overrides={"sft": {"max_steps": 40, "eval_every": 20, "checkpoint_every": 20, "micro_batch": 4, "grad_accum": 1}, "stage2": {"mode": "none"}, "gate": {"general_suite_n": 8}})
-        result = tg.run_train(project, plan)
+        overrides = {"sft": {"max_steps": 40, "eval_every": 20, "checkpoint_every": 20, "micro_batch": 4, "grad_accum": 1, **((plan or {}).get("sft") or {})}, "stage2": {"mode": "none"}, "gate": {"general_suite_n": 12}}
+        result = tg.run_train(project, make_plan(meta, report, preset="fast", overrides=overrides))
         text = [f.get("message") or f.get("detail") or "" for kind, f in lines if kind in ("log", "stage")]
         return result, text, json.loads(Path(result["report_path"]).read_text())
 
@@ -208,6 +219,38 @@ def test_a_model_that_ends_up_worse_is_told_so(trained, monkeypatch):
     result, text, _ = trained()
     assert result["decision"] == "REJECT"
     assert "it did worse than the base on the hidden questions" in result["explanation"], result["explanation"]
+
+
+def test_losing_general_questions_makes_training_back_off_and_the_result_keeps_them(trained):
+    # At the full learning rate this model learns the task and loses every general question; at
+    # half of it, it learns the task and keeps them. Found at the first check, not at the exam.
+    result, text, report = trained(forgets_above=1.5e-4)
+    assert _has(text, "general questions 0/60 (the original: 60)"), text
+    assert _has(text, "Training went wrong at step 20: it lost 60 of the 60 general questions"), text
+    assert _has(text, "general questions 60/60"), text
+    assert result["decision"] == "PROMOTE", (result, text)
+    assert report["general"]["drop_pts"] == 0 and report["training"]["went_wrong"] == 1
+
+
+def test_without_that_watch_the_same_run_is_refused_only_at_the_exam(trained):
+    result, text, report = trained(forgets_above=1.5e-4, plan={"sft": {"general_guard": False}})
+    assert not _has(text, "went wrong") and not _has(text, "general questions 0/")
+    assert result["decision"] == "REJECT" and "general skills dropped" in result["explanation"], result
+    assert _has(text, "General question no longer answered correctly"), text
+
+
+def test_a_model_that_cannot_keep_them_at_any_rate_says_why(trained):
+    result, text, report = trained(forgets_above=1e-9)
+    assert result["decision"] == "REJECT" and report["training"]["stopped"] == "unstable"
+    assert "the last time: it lost 60 of the 60 general questions" in result["explanation"], result["explanation"]
+
+
+def test_how_many_general_questions_may_be_lost():
+    assert [tg.general_limit(n) for n in (8, 16, 24, 36, 60)] == [2, 2, 2, 3, 5]
+    ok = {"n": 32, "passed": 20, "results": []}
+    assert tg.gone_wrong([], None, ok, 0.0, 0.15, general_lost=4, general_n=60) is None  # what the final exam also lets pass
+    assert "general questions" in tg.gone_wrong([], None, ok, 0.0, 0.15, general_lost=5, general_n=60)
+    assert tg.gone_wrong([], None, ok, 0.0, 0.15, general_lost=5, general_n=0) is None  # not being watched
 
 
 def test_the_signs_of_a_broken_model():
