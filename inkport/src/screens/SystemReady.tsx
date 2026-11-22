@@ -1,12 +1,21 @@
 import { useEffect, useState } from "react";
 import type { AppError, HardwareReport, PackProgress, PackState, PreflightProgress, PreflightReport, RuntimeProgress } from "../lib/contract";
 import { api, on, subscribe, toAppError } from "../lib/ipc";
-import { Box, Check, Cpu, Monitor, Sparkles, Zap } from "lucide-react";
-import { Badge, Button, Card, Drawer, ErrorNote, Icon, PageHeader, ProgressBar, SectionTitle, Spinner } from "../components/ui";
+import { trainingMemoryNote } from "../lib/memory";
+import { Box, Check, Cpu, Monitor, Sparkles, TriangleAlert, Zap } from "lucide-react";
+import { Badge, Button, Card, Drawer, ErrorNote, Icon, Note, PageHeader, ProgressBar, SectionTitle, Spinner } from "../components/ui";
 
 const gb = (bytes: number) => `${(bytes / 1e9).toFixed(1)} GB`;
 
-export function SystemReady({ onReady, onContinue }: { onReady: () => void; onContinue: () => void }) {
+/** What the rest of the app needs to know about this computer once the start-up check has passed. */
+export interface Machine {
+  ramGb: number;
+  /** Where training runs, as shown on the ready screen ("Processor (CPU)", a graphics card, ...). */
+  accelerator: string;
+  starter: { id: string; paramsB: number } | null;
+}
+
+export function SystemReady({ onReady, onContinue }: { onReady: (machine: Machine) => void; onContinue: () => void }) {
   const [hw, setHw] = useState<HardwareReport | null>(null);
   const [report, setReport] = useState<PreflightReport | null>(null);
   const [checking, setChecking] = useState(true);
@@ -55,8 +64,10 @@ export function SystemReady({ onReady, onContinue }: { onReady: () => void; onCo
   const ready = report?.ok ?? false;
   const starter = report?.starter_model;
 
+  const memory = trainingMemoryNote(hw?.ram_gb, starter?.params_b, report?.training_accelerator);
+
   useEffect(() => {
-    if (ready && hw) onReady();
+    if (ready && hw && report) onReady({ ramGb: hw.ram_gb, accelerator: report.training_accelerator, starter: starter ? { id: starter.id, paramsB: starter.params_b } : null });
   }, [ready, hw]);
 
   return (
@@ -92,6 +103,7 @@ export function SystemReady({ onReady, onContinue }: { onReady: () => void; onCo
                 </div>
               ))}
             </dl>
+            {memory && <Note icon={TriangleAlert} tone={memory.level === "short" ? "warn" : "neutral"}>{memory.text}</Note>}
             <div className="flex flex-wrap gap-3">
               <Button onClick={onContinue}>Continue</Button>
             </div>

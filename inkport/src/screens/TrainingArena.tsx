@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
-import { Check, Gauge, Hourglass, Rocket, X } from "lucide-react";
+import { Check, Gauge, Hourglass, Rocket, TriangleAlert, X } from "lucide-react";
 import type { AppError, EngineEvent, ProjectInfo } from "../lib/contract";
 import { api, isMac, isWindows, on, subscribe, toAppError } from "../lib/ipc";
 import { type Bench, type Preset, type TrainingState, verdictReady } from "../lib/training";
+import type { MemoryNote } from "../lib/memory";
 import { Badge, Button, Card, ChoiceCard, Drawer, ErrorNote, fmtEta, Icon, LiftGauge, Note, PageHeader, ProgressBar, SectionTitle, Sparkline, TextInput } from "../components/ui";
 
 const STAGES: { id: string; label: string; what: string }[] = [
@@ -16,6 +17,8 @@ const STAGES: { id: string; label: string; what: string }[] = [
 
 interface Props {
   project: ProjectInfo;
+  /** Set when this computer has little memory for training this project's model. */
+  memory?: MemoryNote | null;
   /** The one training run the app knows about (it may belong to another project). */
   training: TrainingState;
   trainingName: string;
@@ -32,7 +35,7 @@ function cardQuestion(prompt: string): string {
   return prompt.startsWith("Excerpt from ") && cut > 0 ? prompt.slice(cut + 5) : prompt;
 }
 
-export function TrainingArena({ project, training, trainingName, onStart, onStop, onDismissError, onDeploy, onEditData }: Props) {
+export function TrainingArena({ project, memory, training, trainingName, onStart, onStop, onDismissError, onDeploy, onEditData }: Props) {
   const mine = training.projectId === project.id;
   const t = mine ? training : null;
   const running = !!t?.running;
@@ -191,6 +194,7 @@ export function TrainingArena({ project, training, trainingName, onStart, onStop
       {!running && (
         <section className="space-y-5">
           {(project.active_version || t?.ended) && <SectionTitle title={project.active_version ? "Train a newer version" : "Train again"} lead={project.active_version ? `A new run only replaces version ${project.active_version} if it scores clearly higher on the hidden exam.` : undefined} />}
+          {memory && <Note icon={TriangleAlert} tone={memory.level === "short" ? "warn" : "neutral"}>{memory.text}</Note>}
           <div className="grid gap-5 sm:grid-cols-2">
             <ChoiceCard icon={Rocket} title="Best results" onClick={() => onStart("standard")} disabled={!canStart}>
               Trains for as long as it keeps improving, up to about 8 hours. Choose this when the result matters.

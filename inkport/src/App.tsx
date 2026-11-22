@@ -3,8 +3,9 @@ import { Check } from "lucide-react";
 import type { ApiStatus, BaseModel, EngineEvent, IngestSummary, Preview, ProjectInfo, RuleReport, Template } from "./lib/contract";
 import { api, inTauri, on, subscribe, toAppError } from "./lib/ipc";
 import { idleTraining, type Preset, trainingReducer } from "./lib/training";
+import { trainingMemoryNote } from "./lib/memory";
 import { Icon } from "./components/ui";
-import { SystemReady } from "./screens/SystemReady";
+import { type Machine, SystemReady } from "./screens/SystemReady";
 import { TemplateLauncher } from "./screens/TemplateLauncher";
 import { DataRulesStudio } from "./screens/DataRulesStudio";
 import { TrainingArena } from "./screens/TrainingArena";
@@ -45,6 +46,7 @@ export function App() {
   const [project, setProject] = useState<ProjectInfo | null>(null);
   const [template, setTemplate] = useState<Template | null>(null);
   const [models, setModels] = useState<BaseModel[]>([]);
+  const [machine, setMachine] = useState<Machine | null>(null);
   const [training, dispatch] = useReducer(trainingReducer, idleTraining);
   const [trainingName, setTrainingName] = useState("");
   const [apiStatus, setApiStatus] = useState<ApiStatus>(API_STOPPED);
@@ -206,7 +208,10 @@ export function App() {
         <div className="mx-auto max-w-[940px] px-10 pb-20 pt-14">
           {step === 0 && (
             <SystemReady
-              onReady={() => setReady(true)}
+              onReady={(m) => {
+                setMachine(m);
+                setReady(true);
+              }}
               onContinue={() => {
                 setReady(true);
                 setStep(project ? (project.active_version ? 4 : examBuilt ? 3 : 2) : 1);
@@ -230,6 +235,7 @@ export function App() {
             <TrainingArena
               key={project.id}
               project={project}
+              memory={trainingMemoryNote(machine?.ramGb, machine?.starter && machine.starter.id === project.base_model.id ? machine.starter.paramsB : null, machine?.accelerator)}
               training={training}
               trainingName={trainingName}
               onStart={startTraining}

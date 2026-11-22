@@ -13,6 +13,8 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const params = new URLSearchParams(typeof location !== "undefined" ? location.search : "");
 const OUTCOME = params.get("outcome") ?? "promote";
 const SPEED = Number(params.get("speed") ?? "1") || 1;
+// ?ram=8 simulates a Windows laptop without a graphics card for training and with that much memory.
+const SMALL_PC_RAM = Number(params.get("ram") ?? "0") || 0;
 let ts = 1_763_650_000;
 
 function emit(channel: Channel, payload: unknown) {
@@ -161,6 +163,7 @@ export async function mockInvoke<T>(cmd: string, args: Record<string, unknown> =
   await sleep(250 / SPEED);
   switch (cmd) {
     case "detect_hardware":
+      if (SMALL_PC_RAM) return { ...hardware, os: "windows", arch: "x86_64", cpu_brand: "Intel Core i5", cpu_cores: 4, ram_gb: SMALL_PC_RAM, apple_silicon: false, gpus: [], summary: [`Intel Core i5, ${SMALL_PC_RAM} GB memory`] } as T;
       return hardware as T;
     case "preflight": {
       for (let i = 1; i <= 10; i++) {
@@ -168,7 +171,7 @@ export async function mockInvoke<T>(cmd: string, args: Record<string, unknown> =
         await sleep(90 / SPEED);
       }
       emit("runtime://progress", { type: "preflight", phase: "warmup", done: 1, total: 1, pct: 100 });
-      return { ok: true, bundled: true, offline_core: true, platform: "macos-aarch64", flavor: "mlx", app_version: "0.1.0", engine_version: "0.1.0", python: "/Applications/Inkport.app/Contents/Resources/payload/python/bin/python3", training_accelerator: "Apple GPU (MLX)", inference_devices: ["MTL0: Apple M3 Pro (27648 MiB, 27647 MiB free)"], starter_model: { id: "qwen3-1.7b", label: "Qwen3 1.7B (included)", format: "mlx", license: "Apache-2.0", size_mb: 968, params_b: 1.7 }, verify: { ok: true, mode: "full", files_checked: 11842, bytes_checked: 1_900_000_000, seconds: 1.4, manifest_pinned: true, problems: [] }, seconds: 2.6, problems: [] } as T;
+      return { ok: true, bundled: true, offline_core: true, platform: "macos-aarch64", flavor: "mlx", app_version: "0.1.0", engine_version: "0.1.0", python: "/Applications/Inkport.app/Contents/Resources/payload/python/bin/python3", training_accelerator: SMALL_PC_RAM ? "Processor (CPU)" : "Apple GPU (MLX)", inference_devices: ["MTL0: Apple M3 Pro (27648 MiB, 27647 MiB free)"], starter_model: { id: "qwen3-1.7b", label: "Qwen3 1.7B (included)", format: "mlx", license: "Apache-2.0", size_mb: 968, params_b: 1.7 }, verify: { ok: true, mode: "full", files_checked: 11842, bytes_checked: 1_900_000_000, seconds: 1.4, manifest_pinned: true, problems: [] }, seconds: 2.6, problems: [] } as T;
     }
     case "list_models":
       return [{ id: "qwen3-1.7b", label: "Qwen3 1.7B (included)", path: "", format: "mlx", bundled: true }, ...(packInstalled ? [{ id: "qwen3-8b", label: "Qwen3 8B (add-on)", path: "", format: "mlx", pack: "qwen3-8b-mlx" }] : [])] as T;

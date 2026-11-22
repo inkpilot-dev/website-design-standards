@@ -219,6 +219,22 @@ const check = (name, ok, detail = '') => { results.push([ok, name, detail]); con
   check('F  no console errors', page.errors.length === 0, page.errors.slice(0, 3).join(' | '));
   await page.context().close();
 
+  // ---------------------------------------------------------------- G: a laptop with little memory
+  page = await open('&ram=8');
+  const g0 = (await page.locator('main').innerText()).replace(/\s+/g, ' ');
+  check('G1 the ready screen says that training needs more memory than this computer has', g0.includes('This computer has 8 GB of memory') && g0.includes('needs about 9 GB') && g0.includes('Close other programs'));
+  await btn(page, 'Continue').click();
+  await page.getByText('What do you want your AI to master?').waitFor();
+  await createProject(page, 'Small laptop');
+  await buildExam(page);
+  await btn(page, 'Continue to training').click();
+  await page.getByText('What happens').waitFor({ timeout: 10000 });
+  check('G2 the same note is shown above the buttons that start training', (await text(page)).includes('This computer has 8 GB of memory'));
+  await page.context().close();
+  page = await open('&ram=16');
+  check('G3 with enough memory there is no such note', !(await page.locator('main').innerText()).includes('needs about'));
+  await page.context().close();
+
   await browser.close();
   const failed = results.filter(r => !r[0]);
   console.log(`\n${results.length - failed.length}/${results.length} checks passed`);
