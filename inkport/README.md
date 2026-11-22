@@ -317,7 +317,11 @@ On Windows it also installs into, and keeps its data in, folders with spaces and
 characters, starts Inkport a second time (which must not open a second copy), ends a serving
 process abruptly (no helper may be left running), and re-verifies the installation afterwards.
 Both scripts run `scripts/gui_e2e.cjs`, which also works against the browser preview
-(`--mode=preview`). Training in the window offers only the two real run types, which take hours
+(`--mode=preview`). `WINDOW_GOAL=docs_legal WINDOW_EXPECT=any` (or `--goal` / `--expect`) runs the
+full flow with another goal and accepts a "not better yet" verdict. When a step fails or the window
+stops answering, the scripts print what the machine and Inkport's processes were doing at that
+moment (on Linux, with `gdb` installed, where each thread of the app is), and the app's own crash
+log, `logs/app-crash.log` in the data folder. Training in the window offers only the two real run types, which take hours
 with a real model; for tests, `INKPORT_TEST_PRESET` and `INKPORT_TEST_OVERRIDES` (read by the
 supervisor when a run starts) shorten it. macOS has no way to drive its webview from outside, so
 CI only checks there that the window opens, runs its start-up check and stays open.
@@ -329,7 +333,7 @@ pnpm dev --host 127.0.0.1 &
 node scripts/ui_flows_test.cjs      # needs the playwright package with a Chromium
 ```
 
-35 checks against the browser preview, whose simulated engine follows the real backend's rules:
+38 checks against the browser preview, whose simulated engine follows the real backend's rules:
 leaving a step while training runs, Stop, a crash, a rejected run, too little data, an adapter
 from an unknown publisher, reopening a trained project, a second project. Other outcomes can be
 reviewed by hand with `?outcome=reject`, `?outcome=fail`, `?outcome=few` and `?untrusted=1`.
