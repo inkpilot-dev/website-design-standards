@@ -149,8 +149,11 @@ def cmd_train(a: argparse.Namespace) -> dict:
     else:
         plan = _make_plan(a)
     from engine.contract import project_lock  # noqa: WPS433
+    from engine.keepawake import keep_awake  # noqa: WPS433
 
     events.log(f"Run {plan['run_id']}: {plan['base_model']['id']} on {plan['backend']} ({plan['quant']}), LoRA r={plan['lora']['r']}", "info")
+    if keep_awake():
+        events.log("The computer will stay awake until training has finished.", "info")
     with project_lock(root, "being trained"):
         return run_train(root, plan, resume=bool(a.resume))
 
@@ -187,7 +190,9 @@ def cmd_import(a: argparse.Namespace) -> dict:
     import shutil  # noqa: WPS433
 
     from engine.contract import project_lock  # noqa: WPS433
+    from engine.keepawake import keep_awake  # noqa: WPS433
 
+    keep_awake("Inkport is testing an imported adapter")
     with project_lock(Path(a.project), "being trained"):
         events.stage("import", "started", "Checking signature, SHA-256 hashes and every tensor")
         info = import_inkpatch(Path(a.project), Path(a.file), trust=a.trust)
@@ -389,6 +394,8 @@ def main(argv: list[str] | None = None) -> int:
             where = "The graphics card ran out of memory" if on_gpu else "Your computer ran out of memory"
             other = "programs that use the graphics card (games, video editors, browsers with many tabs)" if on_gpu else "programs (web browsers use a lot of memory)"
             message = f"{where}. Close other {other} and try again. If it keeps happening, restart the computer first, or use Quick run."
+        elif code == "DISK_FULL":
+            message = "The disk is full, so Inkport could not save its work. Free up a few gigabytes on the drive that holds your Inkport projects and try again."
         events.error(code, message, retryable=retry)
         events.done(False, code=code, message=message)
         return 1

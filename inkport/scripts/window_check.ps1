@@ -114,11 +114,29 @@ $PlaywrightDir = Join-Path $PlaywrightRoot "node_modules\playwright-core"
 if (-not (Test-Path $PlaywrightDir)) { Die "could not install playwright-core" }
 
 Say "Opening Inkport and using it: project, exam, training, verdict, local API, chat, stop"
+# Training takes hours on a real project, so the engine asks Windows not to go to sleep while it runs.
+$awakeFile = Join-Path $Root "awake.txt"
+$awakeJob = Start-ThreadJob -ArgumentList $awakeFile -ScriptBlock {
+  param($file)
+  for ($i = 0; $i -lt 600; $i++) {
+    try {
+      $r = (& powercfg.exe /requests | Out-String)
+      if ($r -match "SYSTEM:" -and -not (Test-Path -LiteralPath "$file.ok")) { Set-Content -LiteralPath "$file.ok" -Value "powercfg works" }
+      if ($r -match "python\.exe") { Set-Content -LiteralPath $file -Value $r; break }
+    } catch { }
+    Start-Sleep -Seconds 8
+  }
+}
 $app = StartApp
 $code = Drive "first"
 Screen "desktop-after-first-run"
+Stop-Job $awakeJob -ErrorAction SilentlyContinue
+Remove-Job $awakeJob -Force -ErrorAction SilentlyContinue
 if ($code -ne 0) { Die "the window test failed (see the lines above and the screenshots)" }
 Pass "the window works end to end with the real engine, from a path with spaces and non-Latin characters"
+if (Test-Path -LiteralPath $awakeFile) { Pass "Windows was asked to stay awake while training ran" }
+elseif (Test-Path -LiteralPath "$awakeFile.ok") { Bad "no stay-awake request from the engine was seen during training (powercfg /requests)" }
+else { Write-Host "    note: powercfg /requests is not usable here, so the stay-awake request could not be observed" -ForegroundColor Yellow }
 
 Say "Starting Inkport a second time"
 $second = Start-Process -FilePath (Join-Path $InstallDir "inkport.exe") -PassThru

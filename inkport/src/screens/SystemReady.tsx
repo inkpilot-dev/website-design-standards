@@ -113,7 +113,7 @@ export function SystemReady({ onReady, onContinue }: { onReady: () => void; onCo
         ) : (
           <div className="space-y-3">
             <Badge tone="bad">Needs repair</Badge>
-            <p className="text-[15px] leading-relaxed">Some of Inkport’s installed files are missing or changed. Reinstall Inkport from the same installer (your projects are kept), then open it again.</p>
+            <p className="text-[15px] leading-relaxed">Some of Inkport’s installed files are missing or changed. Reinstall Inkport from the same installer (your projects are kept), then open it again. If this keeps happening, an antivirus program may be removing Inkport’s files: add Inkport’s folder to its exceptions.</p>
             <ul className="list-disc space-y-1 pl-5 font-mono text-xs">{report?.problems.map((p) => <li key={p}>{p}</li>)}</ul>
             <Button variant="secondary" onClick={() => check(true)}>Check again</Button>
           </div>

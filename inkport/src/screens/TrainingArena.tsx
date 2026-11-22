@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Check, Gauge, Hourglass, Rocket, X } from "lucide-react";
 import type { AppError, EngineEvent, ProjectInfo } from "../lib/contract";
-import { api, on, subscribe, toAppError } from "../lib/ipc";
+import { api, isMac, isWindows, on, subscribe, toAppError } from "../lib/ipc";
 import { type Bench, type Preset, type TrainingState, verdictReady } from "../lib/training";
 import { Badge, Button, Card, ChoiceCard, Drawer, ErrorNote, fmtEta, Icon, LiftGauge, Note, PageHeader, ProgressBar, SectionTitle, Sparkline, TextInput } from "../components/ui";
 
@@ -120,6 +120,7 @@ export function TrainingArena({ project, training, trainingName, onStart, onStop
             <div className="text-[15px] font-medium tabular-nums">{Math.round(t.overall)}%<span className="ml-2 font-normal text-muted">{running ? (t.eta === null ? "" : `${fmtEta(t.eta)} left in this step`) : "done"}</span></div>
           </div>
           <ProgressBar value={t.overall} label="Overall training progress" />
+          {running && <p className="text-sm leading-relaxed text-muted">You can keep using your computer, or leave it running.{isWindows || isMac ? " Inkport keeps it awake until training has finished (closing a laptop’s lid still puts it to sleep)." : " If it is set to go to sleep when idle, training pauses until it wakes up."}</p>}
           <ol className="flex flex-wrap gap-x-6 gap-y-2 text-sm">
             {STAGES.map((s) => {
               const st = t.stages[s.id];

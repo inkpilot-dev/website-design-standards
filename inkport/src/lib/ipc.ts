@@ -81,6 +81,7 @@ export const api = {
 
 /** Windows needs different copy-paste examples (PowerShell instead of a POSIX shell). */
 export const isWindows = typeof navigator !== "undefined" && /windows/i.test(navigator.userAgent);
+export const isMac = typeof navigator !== "undefined" && /mac os x|macintosh/i.test(navigator.userAgent);
 
 /** A yes/no question in a native dialog. (In the desktop app `window.confirm` is asynchronous:
  * it returns a Promise, so using it in an `if` treats every answer as "yes".) */
