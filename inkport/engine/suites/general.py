@@ -1,7 +1,8 @@
 """Built-in general-skills regression suite and self-replay prompts.
 
 Generated deterministically (no downloads, no licensing questions). The gate compares the
-base model and the candidate on this suite to catch catastrophic forgetting. The replay
+base model and the candidate on this suite (each of its questions once: ``exam``) to catch
+catastrophic forgetting. The replay
 prompts are answered by the *base* model itself: part of them is mixed into SFT, which anchors
 general behavior without importing anyone else's data, and part is held back and asked again
 while training runs.
@@ -75,6 +76,27 @@ def _one(rng: random.Random, kind: str, words: list[str], keys: list[str], item_
 
 def suite(n: int = 60) -> list[dict]:
     return _items(seed=7, n=n)
+
+
+def exam(n: int = 60) -> list[dict]:
+    """The ``n`` general questions of the final exam: the first ``n`` different questions of the
+    suite's sequence.
+
+    ``suite(60)`` asks 8 of its questions twice. Answers are decided by greedy decoding, so a
+    repeated question is kept or lost twice, and the exam's test of "more than chance" counted that
+    as two independent losses: three lost questions could weigh as much as five or six. Each
+    question is now asked once; the 52 different ones of ``suite(60)`` are still there, in the same
+    order, followed by the next 8 new ones of the sequence."""
+    seen: set[str] = set()
+    out: list[dict] = []
+    for item in _items(seed=7, n=4 * n + 24):
+        q = item["messages"][0]["content"]
+        if q not in seen:
+            seen.add(q)
+            out.append(item)
+            if len(out) == n:
+                break
+    return out
 
 
 def replay_prompts(n: int = 64) -> list[dict]:

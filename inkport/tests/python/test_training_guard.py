@@ -151,7 +151,7 @@ def trained(project, tmp_path, monkeypatch):
 
     from engine.suites import general
 
-    stock = {it["messages"][-1]["content"]: it["reference"] for it in general.replay_prompts(132) + general.suite(60) if it.get("reference")}
+    stock = {it["messages"][-1]["content"]: it["reference"] for it in general.replay_prompts(132) + general.suite(60) + general.exam(60) if it.get("reference")}
 
     def run(plan=None, **settings):
         Stand.answers, Stand.general, Stand.log, Stand.scales = answers, stock, [], []
@@ -162,7 +162,7 @@ def trained(project, tmp_path, monkeypatch):
         report = {"gpus": [], "ram_gb": 16, "apple_silicon": False}
         report["recommendation"] = select_tier(report)
         meta = json.loads((project / "project.json").read_text())
-        overrides = {"sft": {"max_steps": 40, "eval_every": 20, "checkpoint_every": 20, "micro_batch": 4, "grad_accum": 1, **((plan or {}).get("sft") or {})}, "stage2": {"mode": "none"}, "gate": {"general_suite_n": 12}}
+        overrides = {"sft": {"max_steps": 40, "eval_every": 20, "checkpoint_every": 20, "micro_batch": 4, "grad_accum": 1, **((plan or {}).get("sft") or {})}, "stage2": {"mode": "none"}, "gate": {"general_suite_n": 12, **((plan or {}).get("gate") or {})}}
         result = tg.run_train(project, make_plan(meta, report, preset="fast", overrides=overrides))
         text = [f.get("message") or f.get("detail") or "" for kind, f in lines if kind in ("log", "stage")]
         return result, text, json.loads(Path(result["report_path"]).read_text())
@@ -332,7 +332,7 @@ def test_a_dip_that_chance_can_explain_is_called_that(trained):
     # the allowed limit".
     from engine.suites import general
 
-    one = general.suite(12)[0]["messages"][0]["content"]
+    one = general.exam(12)[0]["messages"][0]["content"]
 
     class Slip(Stand):
         def _answer(self, conv, use_adapter):
@@ -441,7 +441,7 @@ def test_what_the_exam_asks_is_never_rehearsed_and_nothing_is_asked_twice():
     from engine.suites import general
 
     rehearsal = [it["messages"][0]["content"] for it in general.replay_prompts(132)]
-    exam = {it["messages"][0]["content"] for it in general.suite(240)}
+    exam = {it["messages"][0]["content"] for it in general.suite(240) + general.exam(60) + general.exam(100)}
     assert len(set(rehearsal)) == len(rehearsal) == 132
     assert not set(rehearsal) & exam
     watched, pool = rehearsal[: tg.WATCHED], rehearsal[tg.WATCHED :]
@@ -452,11 +452,59 @@ def test_what_the_exam_asks_is_never_rehearsed_and_nothing_is_asked_twice():
     assert len(set(many)) == 400 and not set(many) & exam
 
 
+def test_the_exam_asks_each_general_question_once():
+    """8 of the 60 general questions were asked twice. Greedy answers are the same both times, so
+    one lost question counted as two in a test that takes its questions to be independent: on the
+    Mac build machine the log named "Write the word 'river' in uppercase letters only." twice."""
+    from engine.suites import general
+
+    old = [it["messages"][0]["content"] for it in general.suite(60)]
+    assert len(set(old)) == 52
+    for n in (12, 20, 60, 100):
+        asked = [it["messages"][0]["content"] for it in general.exam(n)]
+        assert len(asked) == n == len(set(asked)), n
+    asked = [it["messages"][0]["content"] for it in general.exam(60)]
+    # The same questions as before, in the same order, then the next new ones of the sequence.
+    assert asked[:52] == list(dict.fromkeys(old))
+    assert all(it["check"] for it in general.exam(60))
+
+
+def test_a_question_lost_counts_once(trained):
+    """The model below loses three general questions for good. Two of them used to be asked twice:
+    five lost of 60 was "more than chance" (p = 0.06) and the model was refused; three lost is not."""
+    from collections import Counter
+    from engine.suites import general
+
+    old = Counter(it["messages"][0]["content"] for it in general.suite(60))
+    twice = [q for q, c in old.items() if c == 2][:2]
+    once = [q for q, c in old.items() if c == 1][:1]
+    gone = set(twice + once)
+    assert len(gone) == 3
+
+    class Loses(Stand):
+        def _answer(self, conv, use_adapter):
+            if use_adapter and self.adapter and conv[-1]["content"] in gone:
+                return "no idea"
+            return super()._answer(conv, use_adapter)
+
+    import engine.pipeline.train_and_gate as module
+
+    original = module.make_backend
+    module.make_backend = lambda plan, inference_only=False: Loses(plan)
+    try:
+        result, text, report = trained(plan={"gate": {"general_suite_n": 60}})
+    finally:
+        module.make_backend = original
+    assert report["general"]["n"] == 60 and report["general"]["baseline"] - report["general"]["candidate"] == 3, report["general"]
+    assert sum("General question no longer answered correctly" in line for line in text) == 3, text
+    assert result["decision"] == "PROMOTE", result
+
+
 def test_the_exam_itself_did_not_change():
     """Results stored for the original model are compared with new ones question by question."""
     from engine.suites import general
 
-    first = [it["messages"][0]["content"] for it in general.suite(60)[:6]]
+    first = [it["messages"][0]["content"] for it in general.exam(60)[:6]]
     assert first == [
         "What is 22 + 11? Reply with only the number.",
         "Reply with only the word: north",

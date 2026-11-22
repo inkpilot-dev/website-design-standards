@@ -39,6 +39,10 @@ from engine.verify.core import Context, load_verifier_set, score_batch
 
 OVERALL = {"baseline": (2, 18), "replay": (18, 22), "sft": (22, 70), "stage2": (70, 84), "gate": (84, 98), "promote": (98, 100)}
 WATCHED = 60  # general questions held back from training and asked at every practice evaluation
+# Part of the key under which evaluations are stored. Changed when what is asked changes, so that
+# results stored by an earlier build (the general questions with 8 of 60 asked twice) are measured
+# again instead of being compared, question by question, with answers to other questions.
+EVAL_CACHE = "2"
 
 
 class LeakageError(RuntimeError):
@@ -113,7 +117,7 @@ def evaluate(backend: Backend, items: list[dict], vset: dict, ctx: Context, max_
 
 
 def eval_general(backend: Backend, n: int, use_adapter: bool = True) -> dict:
-    items = general.suite(n)
+    items = general.exam(n)
     outs = backend.generate([it["messages"] for it in items], max_new_tokens=24, temperature=0.0, use_adapter=use_adapter)
     passes = [general.check(it, o[0]) for it, o in zip(items, outs)]
     return {"pass": passes, "n": len(items), "passed": sum(passes), "outputs": [o[0] for o in outs]}
@@ -310,7 +314,7 @@ class Trainer:
 
     def _cache_key(self, model_tag: str) -> Path:
         root = json.loads(self.paths.test_manifest.read_text())["merkle_root"]
-        tag = f"{self.plan['base_model']['id']}|{self.plan['backend']}|{self.plan.get('quant')}|{model_tag}|{root}|{self.max_new}|{self.gate_cfg['general_suite_n']}"
+        tag = f"{self.plan['base_model']['id']}|{self.plan['backend']}|{self.plan.get('quant')}|{model_tag}|{root}|{self.max_new}|{self.gate_cfg['general_suite_n']}|{EVAL_CACHE}"
         import hashlib  # noqa: WPS433
 
         return self.paths.cache / f"eval-{hashlib.sha256(tag.encode()).hexdigest()[:20]}.json"
@@ -712,7 +716,7 @@ class Trainer:
         # longer does, with what it says now (these are stock questions, nothing of the user's).
         lost_general = [i for i, (was, now) in enumerate(zip(ref_gen["pass"], cand_gen["pass"])) if was and not now]
         if lost_general:
-            stock = general.suite(g_n)
+            stock = general.exam(g_n)
             for i in lost_general[:8]:
                 said = " ".join(str((cand_gen.get("outputs") or [""] * g_n)[i]).split())
                 events.log(f"General question no longer answered correctly: {stock[i]['messages'][-1]['content'][:90]} -> {said[:90]}", "info")
