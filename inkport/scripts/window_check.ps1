@@ -17,6 +17,8 @@ param(
   [int]$CdpPort = 9222,
   [int]$TrainTimeoutSec = 3600,
   # A short run: this proves the window, training, the gate and answering work together; it is not a quality benchmark.
+  # (20 steps are too few to learn the task and keep general skills, so the verdict's general-skills
+  # check is off here; the command-line check that follows trains longer with the verdict a user gets.)
   [string]$TrainOverrides = '{"sft":{"max_steps":20,"eval_every":20,"checkpoint_every":20},"stage2":{"mode":"none"},"gate":{"general_suite_n":8,"max_new_tokens":96,"max_general_drop_pts":100},"dev_eval_n":8}'
 )
 $ErrorActionPreference = "Stop"

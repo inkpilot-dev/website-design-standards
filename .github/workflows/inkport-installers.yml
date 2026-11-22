@@ -206,12 +206,12 @@ jobs:
       - name: Full clean-machine check (adds training + the hidden-test gate through the command line)
         if: ${{ !cancelled() && steps.build.outcome == 'success' && (github.event_name == 'push' || inputs.long_checks) }}
         shell: pwsh
-        timeout-minutes: 100
+        timeout-minutes: 180
         run: |
           $f = @(Get-ChildItem build/installers/windows-x86_64-cpu/* -Include *.exe, *.zip) | Sort-Object { $_.Extension -ne ".exe" } | Select-Object -First 1
           Write-Host "### checking $($f.Name)"
-          # A short run: this proves training, the gate and adapter serving work on Windows; it is not a quality benchmark.
-          ./scripts/clean_machine_check.ps1 -Installer $f.FullName -TrainOverrides '{"sft":{"max_steps":20,"eval_every":20,"checkpoint_every":20},"stage2":{"mode":"none"},"gate":{"general_suite_n":8,"max_new_tokens":96,"max_general_drop_pts":100},"dev_eval_n":8}'
+          # 60 steps with the verdict a user gets (general-skills check on): training, the gate and adapter serving on Windows.
+          ./scripts/clean_machine_check.ps1 -Installer $f.FullName -TrainOverrides '{"sft":{"max_steps":60,"eval_every":20,"checkpoint_every":20},"stage2":{"mode":"none"},"gate":{"max_new_tokens":96},"dev_eval_n":8}'
           if ($LASTEXITCODE -ne 0) { exit 1 }
       - name: The .exe installer must exist (the portable zip alone is not a complete release)
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}

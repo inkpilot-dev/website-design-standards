@@ -17,10 +17,10 @@ param(
   [Parameter(Mandatory = $true)][string]$Installer,
   [int]$Port = 11541,
   [switch]$Quick,
-  # The side check on general skills is switched off for this run (noisy on a handful of questions),
-  # so training on the bundled samples must end in PROMOTE and answering with a trained version is
-  # always exercised.
-  [string]$TrainOverrides = '{"sft":{"max_steps":40,"eval_every":20,"checkpoint_every":20},"stage2":{"mode":"none"},"gate":{"general_suite_n":20,"max_general_drop_pts":100}}'
+  # 60 steps instead of the 81 of a "Quick run", no practice stage; the verdict is the one a user
+  # gets, general-skills check included (a default run turned out to be refused for it, which no
+  # check saw while it was switched off here). Must end in PROMOTE.
+  [string]$TrainOverrides = '{"sft":{"max_steps":60,"eval_every":20,"checkpoint_every":20},"stage2":{"mode":"none"}}'
 )
 $ErrorActionPreference = "Stop"
 $Installer = (Resolve-Path $Installer).Path

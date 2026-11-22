@@ -110,11 +110,11 @@ if [ "$MODEL" = "smoke-tiny" ]; then
   T=$("$CLI" train --project clean-check --preset smoke 2>>"$WORK/cli.log" | json) || fail "training crashed"
   echo "$T" | grep -q '"decision":"PROMOTE"' || fail "training/gate did not promote: $T"
 else
-  # A short real run on the bundled model: proves training + hidden-test gate complete offline.
-  # The side check on general skills is switched off here (it is noisy on 20 questions and is
-  # not what this check is about), so the run must end in PROMOTE and the steps below always
-  # exercise answering with a trained version.
-  T=$("$CLI" train --project clean-check --preset fast --overrides '{"sft":{"max_steps":40,"eval_every":20,"checkpoint_every":20},"stage2":{"mode":"none"},"gate":{"general_suite_n":20,"max_general_drop_pts":100}}' 2>>"$WORK/cli.log" | json) || fail "training crashed"
+  # A real run on the bundled model, shortened to 60 steps (a "Quick run" takes 81) and without
+  # the practice stage. The verdict is the one a user gets: the hidden exam and, switched on here
+  # since a default run turned out to be refused for it, the general-skills check on 60 questions.
+  # It must end in PROMOTE, and the steps below then answer with the trained version.
+  T=$("$CLI" train --project clean-check --preset fast --overrides '{"sft":{"max_steps":60,"eval_every":20,"checkpoint_every":20},"stage2":{"mode":"none"}}' 2>>"$WORK/cli.log" | json) || fail "training crashed"
   echo "$T" | grep -q '"decision":"PROMOTE"' || fail "training finished but the trained model was not promoted on the bundled samples: $T"
 fi
 story 30
