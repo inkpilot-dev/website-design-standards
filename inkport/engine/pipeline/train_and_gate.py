@@ -403,16 +403,16 @@ class Trainer:
         if base_nll is None:
             base_nll = b.nll(holdout)
             st["base_nll"] = base_nll
-        # A second reading of the same thing, on the answers alone. The first also counts the
-        # tokens that mark the end of an answer; every real-model run so far reported a "drift" of
-        # -0.8 to -1.8 nats/token, which can only mean those end tokens cost the original model a
-        # lot and are learned at once, hiding any real forgetting behind them. Logged next to the
-        # first so that the limit can be set on real figures; the guard still uses the first.
         # General questions held back from training, of the kind the final exam asks: asked again at
         # every practice evaluation, compared with how the original model answered them.
         watch = [row for row in held if row.get("check")]
         base_general = [general.check(row, row["messages"][-1]["content"]) for row in watch]
         watch_general = bool(cfg.get("general_guard", True)) and sum(base_general) >= 8
+        # A second reading of forgetting, on the answers alone. The first also counts the tokens
+        # that mark the end of an answer; every real-model run so far reported a "drift" of -0.8 to
+        # -1.8 nats/token, which can only mean those end tokens cost the original model a lot and
+        # are learned at once, hiding any real forgetting behind them. Logged next to the first so
+        # that the limit can be set on real figures; the guard still uses the first.
         answers_only = [{**row, "open_end": True} for row in holdout]
         base_answers = st.get("base_nll_answers")
         if base_answers is None:
