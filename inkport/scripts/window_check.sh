@@ -50,6 +50,29 @@ cleanup() {
 }
 trap cleanup EXIT
 
+echo "    machine: $(nproc) processors, $(awk '/MemTotal/{printf "%.1f", $2/1048576}' /proc/meminfo) GB of memory, $(awk '/SwapTotal/{printf "%.1f", $2/1048576}' /proc/meminfo) GB of swap"
+# If the window stops answering, this is run while it is still open: what is the app doing?
+cat >"$WORK/diagnose.sh" <<DIAG
+#!/usr/bin/env bash
+echo "--- the machine when the window stopped answering ---"
+echo "load: \$(cat /proc/loadavg)"; free -m
+echo "--- Inkport's processes (state, cpu, memory, running time) ---"
+ps -eo pid,ppid,stat,pcpu,pmem,etime,args | grep -E "inkport|WebKit|python.* -m engine|llama-server" | grep -v -E "grep|gui_e2e|window_check|diagnose" | cut -c1-220
+for f in "$DATA/logs/app-crash.log" "$DATA/logs/last-engine-error.log"; do [ -f "\$f" ] && { echo "--- \$(basename "\$f") ---"; tail -30 "\$f"; }; done
+echo "--- the app's own output (last lines) ---"; tail -25 "$OUT/webdriver.log" | cut -c1-300
+if command -v gdb >/dev/null; then
+  for pid in \$(pgrep -f "bin/inkport\$|/inkport\$|AppRun" | head -2) \$(pgrep -f WebKitWebProcess | head -1); do
+    echo "--- where process \$pid (\$(cat /proc/\$pid/comm 2>/dev/null)) is, thread by thread ---"
+    # The main thread first and in full (a frozen window means it is stuck somewhere), then the top of every thread.
+    G=(-p "\$pid" -batch -ex "echo == main thread ==\\n" -ex "thread 1" -ex "bt 28" -ex "echo == every thread, top frames ==\\n" -ex "thread apply all bt 4")
+    (sudo -n gdb "\${G[@]}" 2>/dev/null || gdb "\${G[@]}" 2>/dev/null) | grep -E "^==|^Thread|^#" | sed -E 's/ \\([^)]*\\) / /' | cut -c1-150 | head -130
+  done
+fi
+(dmesg 2>/dev/null || sudo -n dmesg 2>/dev/null || true) | grep -iE "out of memory|killed process|oom-kill" | tail -5
+DIAG
+chmod +x "$WORK/diagnose.sh"
+export GUI_E2E_ON_FAILURE="$WORK/diagnose.sh" RUST_BACKTRACE=1
+
 Xvfb ":$DISPLAY_NUM" -screen 0 1240x900x24 -nolisten tcp >/dev/null 2>&1 &
 XVFB_PID=$!
 sleep 1

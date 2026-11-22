@@ -159,7 +159,8 @@ async function openPlaywright() {
     }
   };
   const click = async (label, scope) => {
-    const r = await d.evaluate(`api.click(${q(label)}${scope ? ', ' + q(scope) : ''})`);
+    let r;
+    try { r = await d.evaluate(`api.click(${q(label)}${scope ? ', ' + q(scope) : ''})`); } catch (e) { throw new Error(`clicking "${label}": ${e.message}`); }
     if (r !== 'ok') throw new Error(`button "${label}" is ${r}`);
     await sleep(300);
   };
@@ -375,7 +376,12 @@ async function openPlaywright() {
     if (d.errors) check('no errors in the page console', d.errors.length === 0, d.errors.slice(0, 3).join(' | '));
   } catch (e) {
     check(`run completed`, false, e.message);
-    try { await d.screenshot(path.join(OUT, '99-failure.png')); note('on screen: ' + (await d.evaluate('api.text()')).slice(0, 700)); } catch { /* the window is gone */ }
+    // What the machine and the app were doing at that moment (set by the window-check scripts).
+    if (process.env.GUI_E2E_ON_FAILURE) {
+      try { console.log(require('child_process').execSync(process.env.GUI_E2E_ON_FAILURE, { encoding: 'utf8', timeout: 180000, stdio: ['ignore', 'pipe', 'pipe'] }).split('\n').map((l) => '      ' + l).join('\n')); } catch (x) { note('diagnostics failed: ' + String(x.message).split('\n')[0]); }
+    }
+    const soon = (promise) => Promise.race([promise, sleep(20000).then(() => { throw new Error('no answer from the window'); })]);
+    try { await soon(d.screenshot(path.join(OUT, '99-failure.png'))); note('on screen: ' + (await soon(d.evaluate('api.text()'))).slice(0, 700)); } catch (x) { note('the window did not answer afterwards: ' + x.message); }
   }
   await d.close();
   const failed = results.filter((r) => !r[0]);

@@ -163,7 +163,26 @@ async fn import_adapter(s: State<'_, AppState>, project_id: String, file: String
     s.0.import_adapter(&project_id, &file, trust.unwrap_or(false), None).await
 }
 
+/// Record a crash where it can be found afterwards. The app has no console on Windows, so without
+/// this a crash leaves no trace at all; with it there is `logs/app-crash.log` in the data folder.
+fn record_crashes() {
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let dir = crate::runtime::home_dir().join("logs");
+        let _ = std::fs::create_dir_all(&dir);
+        let when = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+        let thread = std::thread::current().name().unwrap_or("unnamed").to_string();
+        let text = format!("--- Inkport {} crashed (unix time {when}, thread {thread}) ---\n{info}\n{}\n\n", env!("CARGO_PKG_VERSION"), std::backtrace::Backtrace::force_capture());
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("app-crash.log")) {
+            use std::io::Write;
+            let _ = f.write_all(text.as_bytes());
+        }
+        previous(info);
+    }));
+}
+
 pub fn run() {
+    record_crashes();
     let app = tauri::Builder::default()
         // A second launch (double-clicking the icon again while the first window is busy) brings
         // the existing window forward instead of starting a second copy that would fight over the

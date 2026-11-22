@@ -45,11 +45,21 @@ function Cleanup {
   $un = Join-Path $InstallDir "uninstall.exe"
   if (Test-Path $un) { try { Start-Process -FilePath $un -ArgumentList @("/S", "_?=$InstallDir") -Wait } catch { } }
 }
-function Die($m) {
-  Bad $m
-  foreach ($f in @((Join-Path $DataDir "logs\last-engine-error.log"), (Join-Path $DataDir "logs\llama-server.log"))) {
+# What the machine and Inkport's processes are doing: printed when a step fails or the window stops answering.
+function Diagnose {
+  try {
+    $os = Get-CimInstance Win32_OperatingSystem
+    Write-Host ("    --- machine: {0} processors, {1:N1} GB of memory, {2:N1} GB free ---" -f $env:NUMBER_OF_PROCESSORS, ($os.TotalVisibleMemorySize / 1MB), ($os.FreePhysicalMemory / 1MB))
+    Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -match "^(inkport|inkport-cli|python|llama-server|msedgewebview2)$" } |
+      ForEach-Object { Write-Host ("    {0,-18} pid {1,-6} cpu {2,8:N0} s   memory {3,7:N0} MB   responding: {4}" -f $_.ProcessName, $_.Id, $_.CPU, ($_.WorkingSet64 / 1MB), $_.Responding) }
+  } catch { Write-Host "    (could not list processes: $($_.Exception.Message))" }
+  foreach ($f in @((Join-Path $DataDir "logs\app-crash.log"), (Join-Path $DataDir "logs\last-engine-error.log"), (Join-Path $DataDir "logs\llama-server.log"))) {
     if (Test-Path -LiteralPath $f) { Write-Host "    --- $(Split-Path $f -Leaf) ---"; Get-Content -LiteralPath $f -Tail 25 | ForEach-Object { Write-Host "    $_" } }
   }
+}
+function Die($m) {
+  Bad $m
+  Diagnose
   Cleanup
   exit 1
 }
@@ -82,6 +92,7 @@ function Drive($phase) {
   return $LASTEXITCODE
 }
 
+try { $os = Get-CimInstance Win32_OperatingSystem; Write-Host ("    machine: {0} processors, {1:N1} GB of memory" -f $env:NUMBER_OF_PROCESSORS, ($os.TotalVisibleMemorySize / 1MB)) } catch { }
 Say "Installing into a folder with spaces and non-Latin characters: $InstallDir"
 $p = Start-Process -FilePath $Installer -ArgumentList @("/S", "/D=$InstallDir") -PassThru
 $null = $p.Handle
