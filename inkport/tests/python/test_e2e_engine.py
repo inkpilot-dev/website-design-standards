@@ -7,6 +7,13 @@ from pathlib import Path
 
 import pytest
 
+# Two of the three rules the app suggests for this goal. The rules are also written into the
+# model's instructions, and the 1.4M-parameter test model only copes with sentences of the kinds
+# it was built on; with the third ("if the description mentions Uber then ...") its score drops
+# to a few percent although every correct answer still passes the exam. Real models are not
+# affected: the installers' clean-machine check trains the starter model with all three.
+SUGGESTED_RULES = [r for r in next(t for t in json.loads((Path(__file__).resolve().parents[2] / "contracts" / "templates.json").read_text(encoding="utf-8"))["templates"] if t["id"] == "business_rules")["example_rules"] if not r.startswith("if ")]
+
 ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -28,7 +35,7 @@ def test_full_engine_pipeline(tmp_path):
     run("smoke-data", "--out", str(tmp_path / "data"), env=env)
     done, _ = run("create-project", "--root", str(tmp_path / "p"), "--name", "Expense Sorter", "--template", "business_rules", "--base-id", "smoke-tiny", "--base-path", str(tmp_path / "model"), "--backend", "torch", "--quant", "fp32", env=env)
     proj = done["result"]["project_dir"]
-    done, _ = run("ingest", "--project", proj, "--inputs", str(tmp_path / "data" / "expenses.csv"), str(tmp_path / "data" / "policy.md"), "--rules", json.dumps(["category must be one of fuel, meals, software, office_supplies, travel", "amount must be positive"]), env=env)
+    done, _ = run("ingest", "--project", proj, "--inputs", str(tmp_path / "data" / "expenses.csv"), str(tmp_path / "data" / "policy.md"), "--rules", json.dumps(SUGGESTED_RULES), env=env)
     assert done["ok"] and done["result"]["leakage_free"]
     done, events = run("train", "--project", proj, "--preset", "smoke", env=env)
     assert done["ok"], done

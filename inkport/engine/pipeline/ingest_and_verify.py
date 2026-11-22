@@ -852,6 +852,12 @@ def run_ingest(root: Path, inputs: list[str], rule_texts: list[str]) -> dict:
 
     events.stage("rules", "started", f"Checking {len(rule_texts)} rule(s)")
     rule_specs, rule_reports, left_out = compile_rules(rule_texts, items, info)
+    used = [rep["text"] for rep in rule_reports if rep["ok"]]
+    if template == "business_rules" and len(used) != len(rule_reports):
+        # This goal also writes the rules into the model's instructions. A rule that is not used
+        # as a check (it contradicts the examples, or names a column they do not have) must not
+        # be given to the model as an instruction either. Same files, same order of examples.
+        items, verifiers, info = build_business(src, used)
     if left_out:
         items = [it for i, it in enumerate(items) if i not in left_out]
     for it in items:

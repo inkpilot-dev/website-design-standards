@@ -68,6 +68,10 @@ def test_rule_about_a_column_that_does_not_exist_is_not_used(project, tmp_path):
     assert any("price must be positive" in w for w in summary["warnings"])
     specs = json.loads((project / "data" / "verifiers.json").read_text())["verifiers"]
     assert [v["params"]["text"] for v in specs if v["kind"] == "rule"] == ["amount must be positive"]
+    # The model is told the rules as well: only the one in use may appear in its instructions.
+    instructions = {it["messages"][0]["content"] for it in _items(project)}
+    assert len(instructions) == 1
+    assert "amount must be positive" in next(iter(instructions)) and "price" not in next(iter(instructions))
     assert all(sum(v.startswith("rule:") for v in it["verifiers"]) == 1 for it in _items(project))
 
 
