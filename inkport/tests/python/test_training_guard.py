@@ -312,6 +312,33 @@ def test_of_two_equally_good_versions_the_one_that_kept_more_general_questions_i
     assert result["decision"] == "PROMOTE", (result, text)
 
 
+def test_a_dip_that_chance_can_explain_is_called_that(trained):
+    # One of the exam's twelve general questions lost: 8 points, more than the 5 allowed, but one
+    # question proves nothing. The model is promoted, and the verdict does not call that "within
+    # the allowed limit".
+    from engine.suites import general
+
+    one = general.suite(12)[0]["messages"][0]["content"]
+
+    class Slip(Stand):
+        def _answer(self, conv, use_adapter):
+            if use_adapter and self.adapter and conv[-1]["content"] == one:
+                return "no idea"
+            return super()._answer(conv, use_adapter)
+
+    import engine.pipeline.train_and_gate as module
+
+    original = module.make_backend
+    module.make_backend = lambda plan, inference_only=False: Slip(plan)
+    try:
+        result, text, report = trained()
+    finally:
+        module.make_backend = original
+    assert result["decision"] == "PROMOTE", result
+    assert "General skills dipped 8.3 points on 12 questions, which chance alone can do" in result["explanation"], result["explanation"]
+    assert "within the allowed limit" not in result["explanation"]
+
+
 def test_without_that_watch_the_same_run_is_refused_only_at_the_exam(trained):
     result, text, report = trained(forgets_above=1e-9, plan={"sft": {"general_guard": False}})
     assert not _has(text, "It no longer answers") and not _has(text, "general questions 0/")

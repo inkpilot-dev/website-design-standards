@@ -706,7 +706,12 @@ class Trainer:
         lines = [f"Your trained model passed {cand_rate:.0%} of the {n} hidden test questions, versus {base_rate:.0%} for the {ref_name} ({delta:+.1f} points)."]
         if decision == "PROMOTE":
             lines.append("That difference is statistically solid" + (f" (p = {p_val:.2g})." if not verified else f" (95% range {lo:+.1f} to {hi:+.1f} points)."))
-            lines.append("General skills: no meaningful drop." if g_drop <= 1 else f"General skills dipped {g_drop:.1f} points, within the allowed limit.")
+            if g_drop <= 1:
+                lines.append("General skills: no meaningful drop.")
+            elif g_drop <= float(self.gate_cfg["max_general_drop_pts"]):
+                lines.append(f"General skills dipped {g_drop:.1f} points, within the allowed limit.")
+            else:  # over the limit in points, but not beyond what chance does on this many questions
+                lines.append(f"General skills dipped {g_drop:.1f} points on {g_n} questions, which chance alone can do with that few.")
             if f_ref is not None and f_cand is not None and f_cand < f_ref - 0.02:
                 lines.append(f"About {round(100 * (1 - f_cand))}% of its answers were not well-formed (the {ref_name}: {round(100 * (1 - f_ref))}%); those count as wrong in the score above.")
             if label == "PRELIMINARY":
