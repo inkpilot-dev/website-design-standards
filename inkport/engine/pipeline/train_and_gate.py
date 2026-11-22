@@ -152,7 +152,7 @@ def format_check(f_ref: Optional[float], f_cand: Optional[float], ref_items: Opt
 
 
 def general_limit(n: int) -> int:
-    """How many of ``n`` general questions a model may lose (net) before training backs off.
+    """How many of ``n`` general questions a model may lose (net) and still be a version to keep.
 
     The final exam refuses a model that loses more than 5 points on 60 general questions when that
     loss is beyond chance, which works out at 5 questions of 60. The same share here, and never
@@ -161,7 +161,7 @@ def general_limit(n: int) -> int:
     return max(2, math.ceil(n / 12))  # 5 of the 60 that are watched
 
 
-def gone_wrong(base_pass: list, base_format: Optional[float], res: dict, drift: float, drift_limit: float, general_lost: int = 0, general_n: int = 0) -> Optional[str]:
+def gone_wrong(base_pass: list, base_format: Optional[float], res: dict, drift: float, drift_limit: float) -> Optional[str]:
     """Why the model being trained must not be kept as it is now (None: nothing wrong).
 
     Seen on a real machine: a run whose result passed 0% of the hidden exam against 58% for the
@@ -173,12 +173,8 @@ def gone_wrong(base_pass: list, base_format: Optional[float], res: dict, drift: 
       passes at least 8, so this is not noise);
     * at most half of its answers are well-formed where the original's nearly all were.
 
-    A model that is merely slow to improve trips none of these.
-
-    One more sign is not about breaking but about what the final exam will refuse: the model has
-    lost general questions the original answers (``general_lost`` of ``general_n``, net of any it
-    gained). Learning the task more gently usually keeps them; finding out only at the exam, after
-    the whole run, is what this prevents.
+    A model that is merely slow to improve trips none of these. (Losing general questions is not
+    one of them either: that is a cost of learning, handled in the loop by rehearsing more.)
     """
     if not math.isfinite(drift):
         return "its numbers stopped being numbers"
@@ -190,8 +186,6 @@ def gone_wrong(base_pass: list, base_format: Optional[float], res: dict, drift: 
     now_format = format_rate(res)
     if base_format is not None and now_format is not None and base_format >= 0.8 and now_format <= 0.5:
         return f"only {now_format:.0%} of its practice answers are well-formed (the original: {base_format:.0%})"
-    if general_n and general_lost >= general_limit(general_n):
-        return f"it lost {general_lost} of the {general_n} general questions it is checked on (the final exam allows about one in twelve)"
     return None
 
 
@@ -376,11 +370,21 @@ class Trainer:
         ckpt = self.run_dir / f"ckpt-{stage}"
         best_dir = self.run_dir / f"best-{stage}"
         init_dir = self.run_dir / f"init-{stage}"
+        # The best on the practice questions among the versions that lost too many general ones:
+        # only used if no version at all kept them (the final exam then says so).
+        spare_dir = self.run_dir / f"best-over-{stage}"
         step = 0
         best = st.get("best_dev", -1.0)
+        spare = st.get("spare_dev", -1.0)
+        # How many of the watched general questions the best (and the spare) version answers:
+        # between two versions that pass as many practice questions, the one that kept more wins.
+        best_general, spare_general = st.get("best_general", -1), st.get("spare_general", -1)
         patience = st.get("patience", 0)
         lr_mult = st.get("lr_mult", 1.0)
         guard_trips = st.get("guard_trips", 0)
+        general_trips = st.get("general_trips", 0)
+        extra = st.get("extra_rehearsal", 0)  # rehearsal micro-batches added to every step
+        rehearsed = 0
         if resume and ckpt.is_dir() and st.get("step"):
             b.load_checkpoint(ckpt)
             step = int(st["step"])
@@ -430,13 +434,19 @@ class Trainer:
             random.Random(self.plan["seed"] * 1000 + epoch + (17 if stage != "sft" else 0)).shuffle(order)
             pos = (step % steps_per_epoch) * per_step
             losses = []
+            n_micro = ga + (extra if replay_train else 0)
             for k in range(ga):
                 idx = order[pos + k * mb : pos + (k + 1) * mb]
                 if not idx:
                     idx = order[: mb]
-                loss, ntok = b.train_microbatch([data[i] for i in idx], 1.0 / ga)
+                loss, ntok = b.train_microbatch([data[i] for i in idx], 1.0 / n_micro)
                 losses.append(loss)
                 tokens += ntok
+            for _ in range(n_micro - ga):
+                # General questions with the original model's own answers, on top of the usual mix.
+                rows = [replay_train[(rehearsed + j) % len(replay_train)] for j in range(mb)]
+                rehearsed += mb
+                tokens += b.train_microbatch(rows, 1.0 / n_micro)[1]
             cur_lr = lr_mult * lr_at(step, total, lr, cfg["warmup_frac"], cfg["min_lr_ratio"])
             gnorm = b.optimizer_step(cur_lr, cfg["max_grad_norm"])
             step += 1
@@ -451,17 +461,18 @@ class Trainer:
                 last_dnll = b.nll(holdout) - base_nll
                 answers_dnll = b.nll(answers_only) - base_answers
                 metrics.update(dev_pass=last_dev, replay_dnll=round(last_dnll, 4) if math.isfinite(last_dnll) else None)
-                general_lost, general_note = 0, ""
+                general_lost, general_note, kept_now = 0, "", 0
                 if watch_general:
                     said = b.generate([row["messages"][:-1] for row in watch], max_new_tokens=16, temperature=0.0)
                     now_general = [general.check(row, o[0]) for row, o in zip(watch, said)]
                     gained, lost = discordant(base_general, now_general)
-                    general_lost = lost - gained
+                    general_lost, kept_now = lost - gained, sum(now_general)
                     general_note = f", general questions {sum(now_general)}/{len(watch)} (the original: {sum(base_general)})"
                     metrics.update(general_pass=sum(now_general) / len(watch))
                 events.log(f"{stage} step {step}/{total}: dev pass {last_dev:.0%}, drift {last_dnll:+.3f} nats/token (answers alone {answers_dnll:+.3f}){general_note}", "info")
                 # Forgetting can only be judged when it could be measured before training started.
-                why = gone_wrong(base_dev_pass, base_dev_format, dev_res, last_dnll if math.isfinite(base_nll) else 0.0, float(cfg["dnll_limit"]), general_lost, len(watch) if watch_general else 0)
+                why = gone_wrong(base_dev_pass, base_dev_format, dev_res, last_dnll if math.isfinite(base_nll) else 0.0, float(cfg["dnll_limit"]))
+                over = watch_general and general_lost >= general_limit(len(watch))
                 if why:
                     # Never keep, and never go on from, a model in this state: go back to the last
                     # good one (the best so far, or where the stage started) and tread more gently.
@@ -488,29 +499,54 @@ class Trainer:
                         continue
                     events.log("Went back to the best version so far; continuing more gently (learning rate halved).", "warn")
                     events.stage("sft" if stage == "sft" else "rft", "started", "Training slipped, so it went back to its best version and continues more gently")
-                elif last_dev > best + 1e-9:
-                    best, patience = last_dev, 0
-                    b.save_checkpoint(best_dir)
+                elif over:
+                    # Learning the task is costing general skills beyond what the final exam accepts.
+                    # Nothing is thrown away: from here on every step also rehearses general
+                    # questions (more of them each time this happens) and moves more gently, and
+                    # this version is not one of those the final choice is made from.
+                    general_trips += 1
+                    extra = min(ga, max(1, math.ceil(ga / 2)) * general_trips) if replay_train else 0
+                    if general_trips <= 2:
+                        lr_mult *= 0.5
+                    events.log(f"It no longer answers {general_lost} of the {len(watch)} general questions it is checked on (the final exam accepts {general_limit(len(watch)) - 1}): rehearsing them more from here on, and learning more gently.", "warn")
+                    events.stage("sft" if stage == "sft" else "rft", "started", "Rehearsing general skills more while it learns your task")
+                    if last_dev > spare + 1e-9 or (abs(last_dev - spare) <= 1e-9 and kept_now > spare_general):
+                        spare, spare_general = last_dev, kept_now
+                        b.save_checkpoint(spare_dir)
                 else:
-                    patience += 1
-                    if patience >= int(cfg["early_stop_patience"]):
-                        stopped = "early_stop"
-                        prog.update(total, metrics, force=True)
-                        break
+                    improved = last_dev > best + 1e-9
+                    if improved or (watch_general and abs(last_dev - best) <= 1e-9 and kept_now > best_general):
+                        best, best_general = last_dev, kept_now
+                        b.save_checkpoint(best_dir)
+                    if improved:
+                        patience = 0
+                    else:
+                        patience += 1
+                        if patience >= int(cfg["early_stop_patience"]):
+                            stopped = "early_stop"
+                            prog.update(total, metrics, force=True)
+                            break
             if step % ckpt_every == 0 or step == total:
                 b.save_checkpoint(ckpt)
-                st.update(step=step, best_dev=best, patience=patience, lr_mult=lr_mult, guard_trips=guard_trips, last_dev=last_dev)
+                st.update(step=step, best_dev=best, spare_dev=spare, best_general=best_general, spare_general=spare_general, patience=patience, lr_mult=lr_mult, guard_trips=guard_trips, general_trips=general_trips, extra_rehearsal=extra, last_dev=last_dev)
                 self.state.save()
             prog.update(step, metrics)
             if self.over_budget(0.75 if stage == "sft" else 0.9):
                 events.log("Time budget reached; finishing with the best result so far", "warn")
                 stopped = "budget"
                 break
+        kept_general = True
         if best_dir.is_dir():
             b.load_checkpoint(best_dir)
-        st.update(step=step, best_dev=best, stopped=stopped, guard_trips=guard_trips)
+        elif spare_dir.is_dir():
+            # No version kept its general skills within the limit. The one that learned the task
+            # best goes to the final exam, which measures both and says what it finds.
+            b.load_checkpoint(spare_dir)
+            best, best_general, kept_general = spare, spare_general, False
+            events.log("No version of this stage kept its general skills within the limit; the one that learned your task best goes to the final exam.", "warn")
+        st.update(step=step, best_dev=best, stopped=stopped, guard_trips=guard_trips, general_trips=general_trips)
         self.state.save()
-        return {"best_dev": best, "steps": step, "total": total, "stopped": stopped, "examples": len(examples), "replay": n_replay, "went_wrong": guard_trips, "lr_mult": lr_mult, "why": st.get("why")}
+        return {"best_dev": best, "steps": step, "total": total, "stopped": stopped, "examples": len(examples), "replay": n_replay, "went_wrong": guard_trips, "lr_mult": lr_mult, "why": st.get("why"), "rehearsed_more": general_trips, "kept_general": kept_general, "general_answered": best_general if watch_general else None, "general_watched": len(watch) if watch_general else None}
 
     # ---------------------------------------------------------------- stage 2 --------------
     def rft(self, replay_rows: list[dict], baseline: dict, best_dev: float, placebo: bool = False) -> dict:
@@ -556,6 +592,11 @@ class Trainer:
             res = self.sft(accepted, replay_rows, baseline, stage=f"rft{rnd + 1}{'-placebo' if placebo else ''}", lr=float(s2["lr"]), epochs=1, overall=(o0 + (o1 - o0) * rnd / max(1, s2["rounds"]), o0 + (o1 - o0) * (rnd + 1) / max(1, s2["rounds"])), resume=False)
             gain = 100 * (res["best_dev"] - current)
             history.append({"round": rnd + 1, "accept_rate": accept_rate, "dev": res["best_dev"], "gain_pts": gain})
+            if not res.get("kept_general", True):
+                # Every version of this round lost general skills beyond the limit: not worth it.
+                b.load_checkpoint(self.run_dir / "pre-rft")
+                events.stage("rft", "completed", f"Round {rnd + 1} cost general skills; kept the previous version")
+                break
             if gain >= float(s2["min_gain_pts"]):
                 current = res["best_dev"]
                 keep_dir = self.run_dir / f"best-rft{rnd + 1}{'-placebo' if placebo else ''}"
@@ -700,7 +741,7 @@ class Trainer:
             "format": {"baseline": f_ref, "candidate": f_cand},
             "audit_pass_rate": aud,
             "placebo": placebo_result,
-            "training": None if not self.training_info else {k: self.training_info.get(k) for k in ("steps", "total", "stopped", "best_dev", "went_wrong", "lr_mult", "why")},
+            "training": None if not self.training_info else {k: self.training_info.get(k) for k in ("steps", "total", "stopped", "best_dev", "went_wrong", "lr_mult", "why", "rehearsed_more", "kept_general", "general_answered", "general_watched")},
             "checks": checks,
             "explanation": " ".join(lines),
             "plan": {k: self.plan[k] for k in ("backend", "base_model", "quant", "lora", "sft", "stage2", "tier") if k in self.plan},

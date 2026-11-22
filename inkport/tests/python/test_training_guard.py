@@ -32,14 +32,17 @@ class Stand(Backend):
     general: dict = {}  # stock general questions -> their right answers (the original knows them all)
     base = 0.6
     breaks_above = 1.0  # a learning rate; 1.0 = never
-    forgets_above = 1.0  # a learning rate above which it learns the task but loses the general questions
+    forgets_above = 1.0  # a learning rate above which it learns the task but loses the general questions...
+    rehearsal_cures = 1  # ...unless a step also holds this many micro-batches of nothing but general questions
     broken_drift = 0.0  # what the measure of forgetting reads once broken (may be nan)
     always_drifts = 0.0  # drift added per step even when healthy
     log: list = []
+    scales: list = []  # the weight each micro-batch was given
 
     def __init__(self, plan):
         super().__init__(plan)
         self.w, self.broken, self.forgot, self.adapter, self.steps = 0.0, False, False, False, 0
+        self.rehearsal = 0  # micro-batches of general questions only, in the step being built
 
     # -- loading
     def load(self, adapter_dir=None, trainable=False):
@@ -81,14 +84,20 @@ class Stand(Backend):
         Stand.log.append("new optimizer")
 
     def train_microbatch(self, examples, scale):
+        Stand.scales.append(scale)
+        if all("check" in ex for ex in examples):
+            self.rehearsal += 1
         return 1.0, 10 * len(examples)
 
     def optimizer_step(self, lr, max_grad_norm):
         self.steps += 1
         if lr > self.breaks_above:
             self.broken = True
-        if lr > self.forgets_above:
+        if self.rehearsal >= self.rehearsal_cures:
+            self.forgot = False
+        elif lr > self.forgets_above:
             self.forgot = True
+        self.rehearsal = 0
         self.w += 60 * lr
         return 0.5
 
@@ -131,8 +140,8 @@ def trained(project, tmp_path, monkeypatch):
     stock = {it["messages"][-1]["content"]: it["reference"] for it in general.replay_prompts(132) + general.suite(60) if it.get("reference")}
 
     def run(plan=None, **settings):
-        Stand.answers, Stand.general, Stand.log = answers, stock, []
-        Stand.base, Stand.breaks_above, Stand.forgets_above, Stand.broken_drift, Stand.always_drifts = 0.6, 1.0, 1.0, 0.0, 0.0
+        Stand.answers, Stand.general, Stand.log, Stand.scales = answers, stock, [], []
+        Stand.base, Stand.breaks_above, Stand.forgets_above, Stand.rehearsal_cures, Stand.broken_drift, Stand.always_drifts = 0.6, 1.0, 1.0, 1, 0.0, 0.0
         for key, value in settings.items():
             setattr(Stand, key, value)
         del lines[:]
@@ -221,36 +230,97 @@ def test_a_model_that_ends_up_worse_is_told_so(trained, monkeypatch):
     assert "it did worse than the base on the hidden questions" in result["explanation"], result["explanation"]
 
 
-def test_losing_general_questions_makes_training_back_off_and_the_result_keeps_them(trained):
-    # At the full learning rate this model learns the task and loses every general question; at
-    # half of it, it learns the task and keeps them. Found at the first check, not at the exam.
-    result, text, report = trained(forgets_above=1.5e-4)
+def test_losing_general_questions_brings_more_rehearsal_and_keeps_the_progress(trained):
+    # This model learns the task and, at any learning rate, loses the general questions unless
+    # each step also rehearses some. Found at the first check, not at the exam, and nothing is
+    # thrown away: the step counter goes on, rehearsal is added, the next version keeps them.
+    result, text, report = trained(forgets_above=1e-9)
     assert _has(text, "general questions 0/60 (the original: 60)"), text
-    assert _has(text, "Training went wrong at step 20: it lost 60 of the 60 general questions"), text
-    assert _has(text, "general questions 60/60"), text
+    assert _has(text, "It no longer answers 60 of the 60 general questions"), text
+    assert not _has(text, "Training went wrong") and not _has(text, "Starting this stage again")
+    assert _has(text, "sft step 40/40") and _has(text, "general questions 60/60"), text
     assert result["decision"] == "PROMOTE", (result, text)
-    assert report["general"]["drop_pts"] == 0 and report["training"]["went_wrong"] == 1
+    assert report["general"]["drop_pts"] == 0
+    assert report["training"]["rehearsed_more"] == 1 and report["training"]["kept_general"] is True
+    # Each step is still one average: with one rehearsal micro-batch added to one, each weighs a half.
+    assert set(Stand.scales[:20]) == {1.0} and set(Stand.scales[-20:]) == {0.5}, (Stand.scales[:3], Stand.scales[-3:])
+
+
+def test_a_version_that_lost_them_is_never_chosen_while_one_that_kept_them_exists(trained):
+    # Fine at the first check; from then on it learns faster but loses the general questions
+    # whatever is rehearsed. The first version is the one that goes to the exam.
+    class Greedy(Stand):
+        def optimizer_step(self, lr, max_grad_norm):
+            norm = super().optimizer_step(lr, max_grad_norm)
+            if self.steps > 20:
+                self.forgot = True
+            return norm
+
+    import engine.pipeline.train_and_gate as module
+
+    original = module.make_backend
+    module.make_backend = lambda plan, inference_only=False: Greedy(plan)
+    try:
+        result, text, report = trained()
+    finally:
+        module.make_backend = original
+    assert _has(text, "It no longer answers 60 of the 60 general questions"), text
+    assert report["training"]["kept_general"] is True and report["general"]["drop_pts"] == 0
+    assert result["decision"] == "PROMOTE", (result, text)
+
+
+def test_of_two_equally_good_versions_the_one_that_kept_more_general_questions_is_chosen(trained):
+    """Seen on the real model: every check from step 20 on passed all practice questions, the
+    first of them was kept, and that was the one that had lost most general questions."""
+    from engine.suites import general
+
+    slow_to_return = {it["messages"][0]["content"] for it in general.replay_prompts(132)[:3]}
+
+    class Quick(Stand):  # knows the task after a few steps; three general questions come back late
+        def optimizer_step(self, lr, max_grad_norm):
+            norm = super().optimizer_step(lr, max_grad_norm)
+            self.w = 1.0
+            return norm
+
+        def _answer(self, conv, use_adapter):
+            if use_adapter and self.adapter and self.steps <= 20 and conv[-1]["content"] in slow_to_return:
+                return "no idea"
+            return super()._answer(conv, use_adapter)
+
+    import engine.pipeline.train_and_gate as module
+
+    original = module.make_backend
+    module.make_backend = lambda plan, inference_only=False: Quick(plan)
+    try:
+        result, text, report = trained()
+    finally:
+        module.make_backend = original
+    assert _has(text, "general questions 57/60") and _has(text, "general questions 60/60"), text
+    assert not _has(text, "It no longer answers")  # three of sixty is within what the exam accepts
+    assert report["training"]["general_answered"] == 60 and report["training"]["general_watched"] == 60
+    assert result["decision"] == "PROMOTE", (result, text)
 
 
 def test_without_that_watch_the_same_run_is_refused_only_at_the_exam(trained):
-    result, text, report = trained(forgets_above=1.5e-4, plan={"sft": {"general_guard": False}})
-    assert not _has(text, "went wrong") and not _has(text, "general questions 0/")
+    result, text, report = trained(forgets_above=1e-9, plan={"sft": {"general_guard": False}})
+    assert not _has(text, "It no longer answers") and not _has(text, "general questions 0/")
     assert result["decision"] == "REJECT" and "general skills dropped" in result["explanation"], result
     assert _has(text, "General question no longer answered correctly"), text
 
 
-def test_a_model_that_cannot_keep_them_at_any_rate_says_why(trained):
-    result, text, report = trained(forgets_above=1e-9)
-    assert result["decision"] == "REJECT" and report["training"]["stopped"] == "unstable"
-    assert "the last time: it lost 60 of the 60 general questions" in result["explanation"], result["explanation"]
+def test_a_model_that_cannot_keep_them_still_gets_its_exam_and_an_honest_verdict(trained):
+    # Rehearsal does not help this one. It is not "broken": the version that learned the task best
+    # sits the exam, and the verdict names the real reason.
+    result, text, report = trained(forgets_above=1e-9, rehearsal_cures=99)
+    assert _has(text, "No version of this stage kept its general skills"), text
+    assert report["training"]["stopped"] == "completed" and report["training"]["kept_general"] is False
+    assert report["training"]["rehearsed_more"] == 2
+    assert result["decision"] == "REJECT" and "general skills dropped" in result["explanation"], result["explanation"]
+    assert "did not hold steady" not in result["explanation"]
 
 
 def test_how_many_general_questions_may_be_lost():
     assert [tg.general_limit(n) for n in (8, 16, 24, 36, 60)] == [2, 2, 2, 3, 5]
-    ok = {"n": 32, "passed": 20, "results": []}
-    assert tg.gone_wrong([], None, ok, 0.0, 0.15, general_lost=4, general_n=60) is None  # what the final exam also lets pass
-    assert "general questions" in tg.gone_wrong([], None, ok, 0.0, 0.15, general_lost=5, general_n=60)
-    assert tg.gone_wrong([], None, ok, 0.0, 0.15, general_lost=5, general_n=0) is None  # not being watched
 
 
 def test_the_signs_of_a_broken_model():
@@ -264,3 +334,35 @@ def test_the_signs_of_a_broken_model():
     malformed = {"n": 4, "passed": 0, "results": [{"verdicts": [{"kind": "json_valid", "pass": i < 1}]} for i in range(4)]}
     assert "well-formed" in tg.gone_wrong([], 1.0, malformed, 0.0, 0.15)
     assert tg.gone_wrong([], 0.5, malformed, 0.0, 0.15) is None  # the original was no better
+
+
+def test_what_the_exam_asks_is_never_rehearsed_and_nothing_is_asked_twice():
+    """The general questions mixed into training, the ones watched while it runs and the ones of
+    the final exam are three separate sets (35 of 132 rehearsal prompts used to be exam questions)."""
+    from engine.suites import general
+
+    rehearsal = [it["messages"][0]["content"] for it in general.replay_prompts(132)]
+    exam = {it["messages"][0]["content"] for it in general.suite(240)}
+    assert len(set(rehearsal)) == len(rehearsal) == 132
+    assert not set(rehearsal) & exam
+    watched, pool = rehearsal[: tg.WATCHED], rehearsal[tg.WATCHED :]
+    assert not set(watched) & set(pool)
+    assert all(it["check"] for it in general.replay_prompts(132)[: tg.WATCHED]), "every watched question can be judged"
+    # Still distinct when more are asked for than there are words.
+    many = [it["messages"][0]["content"] for it in general.replay_prompts(400)]
+    assert len(set(many)) == 400 and not set(many) & exam
+
+
+def test_the_exam_itself_did_not_change():
+    """Results stored for the original model are compared with new ones question by question."""
+    from engine.suites import general
+
+    first = [it["messages"][0]["content"] for it in general.suite(60)[:6]]
+    assert first == [
+        "What is 22 + 11? Reply with only the number.",
+        "Reply with only the word: north",
+        "Write the word 'harbor' in uppercase letters only.",
+        'Return a JSON object with the key "color" set to "river". Reply with JSON only.',
+        "How many letters are in the word 'meadow'? Reply with only the number.",
+        "Which is larger, 73 or 17? Reply with only the number.",
+    ], first

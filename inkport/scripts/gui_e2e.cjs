@@ -233,6 +233,14 @@ async function openPlaywright() {
     return false;
   };
   const waitText = (needle, timeout) => waitFor(`text "${needle}"`, async () => (await text()).includes(needle), timeout);
+  // Has the test chat answered `question`? Any answer counts, well-formed or not: whether the
+  // app delivers an answer is what is tested, not how good the model is (the tiny test model
+  // answers an unknown shop with half a JSON object).
+  const chatAnswered = (t, question) => {
+    const area = (t.split('Try it here')[1] || '').split('Type a message')[0];
+    if (/\{[^}]*\}/.test(area) || t.includes('The model did not answer')) return true;
+    return area.includes(question) && !area.includes('thinking') && area.replace(question, '').replace(/Send a message.*?use\./, '').trim().length > 3;
+  };
 
   try {
     // ---------------------------------------------------------------- step 1: your computer
@@ -273,7 +281,7 @@ async function openPlaywright() {
       await click('Open test chat', 'main');
       await d.evaluate(`api.fill("Message", "Paid $19 at Costco for printer ink")`);
       await d.evaluate('api.enter("Message")');
-      await waitFor('an answer in the test chat', async () => { const t = await text(); return /\{[^}]*\}/.test(t.split('Type a message')[0].split('Try it here')[1] || '') || t.includes('The model did not answer'); }, 300000, 1000);
+      await waitFor('an answer in the test chat', async () => chatAnswered(await text(), 'Paid $19 at Costco for printer ink'), 300000, 1000);
       const chat = await text();
       await shot('23-reopened-chat');
       check('the trained model answers again after the restart', !chat.includes('The model did not answer'), chat.slice(chat.indexOf('Try it here'), chat.indexOf('Try it here') + 200));
@@ -406,7 +414,7 @@ async function openPlaywright() {
         await click('Open test chat', 'main');
         await d.evaluate(`api.fill("Message", "Paid $58 at Shell for the delivery van")`);
         await d.evaluate('api.enter("Message")');
-        await waitFor('an answer in the test chat', async () => { const t = await text(); const area = (t.split('Try it here')[1] || '').split('Type a message')[0]; return /\{[^}]*\}/.test(area) || t.includes('The model did not answer') || (area.includes('for the delivery van') && !area.includes('thinking') && area.replace('Paid $58 at Shell for the delivery van', '').replace(/Send a message.*?use\./, '').trim().length > 3); }, 300000, 1000);
+        await waitFor('an answer in the test chat', async () => chatAnswered(await text(), 'Paid $58 at Shell for the delivery van'), 300000, 1000);
         const chat = await text();
         await shot('09-chat');
         check('the test chat gets an answer from the trained model', !chat.includes('The model did not answer'), (chat.split('Try it here')[1] || '').slice(0, 220));

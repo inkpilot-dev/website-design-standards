@@ -361,7 +361,9 @@ def make_plan(project: dict, report: dict, preset: str = "standard", overrides: 
     }
     if preset == "smoke":
         plan["lora"].update({"r": 64, "alpha": 128})
-        plan["sft"].update({"lr": 1.5e-3, "epochs": 40, "micro_batch": 16, "grad_accum": 1, "max_seq": 256, "warmup_frac": 0.05, "eval_every": 60, "early_stop_patience": 4, "checkpoint_every": 60, "replay_frac": 0.2, "gradient_checkpointing": False, "dnll_limit": 5.0})
+        # (general_guard off: the tiny model's general skills are a few memorised patterns that come
+        # and go while it trains; watching them would only slow down a model that barely learns.)
+        plan["sft"].update({"lr": 1.5e-3, "epochs": 40, "micro_batch": 16, "grad_accum": 1, "max_seq": 256, "warmup_frac": 0.05, "eval_every": 60, "early_stop_patience": 4, "checkpoint_every": 60, "replay_frac": 0.2, "gradient_checkpointing": False, "dnll_limit": 5.0, "general_guard": False})
         plan["stage2"].update({"mode": "rft", "k": 2, "rounds": 1, "lr": 1e-3})
         plan["gate"].update({"max_new_tokens": 40, "general_suite_n": 20, "min_test_items": 30})
         plan["dev_eval_n"] = 16

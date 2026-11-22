@@ -268,7 +268,7 @@ def _generic_examples(rng: random.Random, n: int) -> list[list[dict]]:
             v = rng.choice(WORDS) if rng.random() < 0.5 else rng.randint(1, 500)
             q, a = f"Return JSON with {k} set to {v}", json.dumps({k: v})
         elif r < 0.9:
-            it = rng.choice(general.suite(60) + general.replay_prompts(64))
+            it = rng.choice(general.suite(60) + general.replay_prompts(132))
             q, a = it["messages"][0]["content"], it.get("reference") or "OK"
         else:
             k = rng.choice(WORDS)
