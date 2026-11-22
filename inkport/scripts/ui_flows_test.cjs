@@ -193,6 +193,29 @@ const check = (name, ok, detail = '') => { results.push([ok, name, detail]); con
   await shot(page, 'D-rejected');
   await page.context().close();
 
+  // ---------------- D2: training breaks once and starts again more gently ----------------
+  page = await open('&outcome=restart');
+  await btn(page, 'Continue').click(); await createProject(page, 'Restarted'); await buildExam(page); await btn(page, 'Continue to training').click();
+  await main(page).locator('button', { hasText: 'Quick run' }).click();
+  await page.getByText('starting again more gently').waitFor({ timeout: 30000 });
+  const pct = async () => Number(((await text(page)).match(/(\d+)% /) || [0, -1])[1]);
+  const seen = [];
+  for (let i = 0; i < 12; i++) { seen.push(await pct()); await page.waitForTimeout(150); }
+  await page.getByText('Better: new version').waitFor({ timeout: 60000 });
+  const d2 = await text(page);
+  check('D2 a run that breaks once says it is starting again, never shows progress going backwards, and still ends with a verdict', seen.every((v, i) => v >= 0 && (i === 0 || v >= seen[i - 1])) && d2.includes('Use it in your apps') && d2.includes('Finished'), `progress while restarting: ${seen.join(',')}`);
+  await page.context().close();
+
+  // ---------------- D3: training never holds ----------------
+  page = await open('&outcome=unsteady');
+  await btn(page, 'Continue').click(); await createProject(page, 'Unsteady'); await buildExam(page); await btn(page, 'Continue to training').click();
+  await main(page).locator('button', { hasText: 'Quick run' }).click();
+  await page.getByText('Training did not hold: nothing was saved').waitFor({ timeout: 90000 });
+  const d3 = await text(page);
+  check('D3 a run that never holds says so plainly, saves nothing and keeps Use it locked', d3.includes('there is no trained model to judge') && !d3.includes('Not better yet') && !d3.includes('Use it in your apps') && await nav(page, 'Use it').isDisabled() && d3.includes('Train again'));
+  await shot(page, 'D-unsteady');
+  await page.context().close();
+
   // ---------------- E: too little data ----------------
   page = await open('&outcome=few');
   await btn(page, 'Continue').click(); await createProject(page, 'Tiny'); await buildExam(page);

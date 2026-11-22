@@ -3,7 +3,8 @@
 // closely (job kinds on events, BUSY guards, stop, a second gate event once the version is saved,
 // project state that survives "reopening") so the screens behave here as they do in the app.
 //
-// URL switches for reviewing other outcomes: ?outcome=reject | fail | few   ?untrusted=1
+// URL switches for reviewing other outcomes: ?outcome=reject | fail | few | restart | unsteady   ?untrusted=1
+// (restart: training breaks once and starts again more gently; unsteady: it never holds.)
 
 import type { Channel } from "./contract";
 
@@ -105,11 +106,23 @@ async function simulateTraining(job: NonNullable<typeof training>, project: Mock
     ["gate", "Final exam: original vs trained on hidden questions", 84, 98],
   ];
   const incumbent = project.active_version;
+  let restarts = 0;
   for (const [stage, detail, o0, o1] of stages) {
+    if (OUTCOME === "unsteady" && stage === "rft1") continue; // nothing to refine
     send("training://progress", ev({ type: "stage", stage, status: "started", detail }));
     const steps = stage === "sft" ? 24 : 6;
     for (let i = 1; i <= steps; i++) {
       await sleep((stage === "sft" ? 260 : 150) / SPEED);
+      // Training that breaks at its first check: back to the start of the stage, more gently.
+      if (stage === "sft" && i === 7 && ((OUTCOME === "restart" && restarts < 1) || (OUTCOME === "unsteady" && restarts < 3))) {
+        restarts += 1;
+        emit("training://log", ev({ type: "log", level: "warn", message: "Training went wrong at step 120: it passes 2 of the 32 practice questions; the original passes 18." }));
+        if (OUTCOME === "unsteady" && restarts === 3) break;
+        send("training://progress", ev({ type: "stage", stage, status: "started", detail: "That attempt made the model worse, so training is starting again more gently" }));
+        send("training://progress", ev({ type: "progress", stage, step: 0, total: steps, pct: 0, overall_pct: o0, eta_s: null, metrics: {} }));
+        i = 0;
+        continue;
+      }
       if (job.cancelled) {
         emit("training://progress", ev({ type: "error", code: "CANCELLED", message: "Stopped. Nothing was saved from this run.", retryable: true }));
         return finish(false, { code: "CANCELLED" });
@@ -130,14 +143,17 @@ async function simulateTraining(job: NonNullable<typeof training>, project: Mock
     send("training://progress", ev({ type: "stage", stage, status: "completed", detail: stage === "baseline" ? "Original model: 38/120 correct" : stage === "gate" ? (OUTCOME === "reject" || incumbent ? "REJECT" : "PROMOTE") : "" }));
     if (stage === "rft1") send("training://progress", ev({ type: "stage", stage: "stage2", status: "completed", detail: "" }));
   }
-  const reject = OUTCOME === "reject" || !!incumbent;
-  const cand = reject ? (incumbent ? 0.867 : 0.333) : 0.867;
+  const unsteady = OUTCOME === "unsteady";
+  const reject = OUTCOME === "reject" || unsteady || !!incumbent;
   const ref = incumbent ? 0.867 : 0.317;
+  const cand = unsteady ? 0.317 : reject ? (incumbent ? 0.867 : 0.333) : 0.867;
   send("training://progress", ev({ type: "eval", split: "test", model: "candidate", n: 120, passed: Math.round(cand * 120), pass_rate: cand, ci95: [0.79, 0.92] }));
-  const explanation = reject
+  const explanation = unsteady
+    ? `Training did not hold steady on this computer: it was tried three times, each time more gently, and each time the model got worse instead of better. So there is no trained model to judge (the model as it was before training passes 32% of the 120 hidden test questions). ${incumbent ? "Your current version stays active." : "Nothing was saved, and the original model is unchanged."}`
+    : reject
     ? `Your trained model passed ${Math.round(cand * 100)}% of the 120 hidden test questions, versus ${Math.round(ref * 100)}% for the ${incumbent ? `current version ${incumbent}` : "base"} (${((cand - ref) * 100 >= 0 ? "+" : "") + ((cand - ref) * 100).toFixed(1)} points). Not promoted because the improvement is too small or not statistically reliable yet. ${incumbent ? "Your current version stays active." : "Nothing was saved, and the original model is unchanged."}`
     : "Your trained model passed 87% of the 120 hidden test questions, versus 32% for the base (+55.0 points). That difference is statistically solid (95% range +45.8 to +63.3 points). General skills: no meaningful drop.";
-  const gate = { type: "gate", decision: reject ? "REJECT" : "PROMOTE", label: "VERIFIED", delta_pts: (cand - ref) * 100, baseline_pass_rate: ref, candidate_pass_rate: cand, checks: { task: !reject, general: true, format: true, audit: true, leakage: true }, report_path: `${project.dir}/runs/run-preview/report.json`, explanation };
+  const gate = { type: "gate", decision: reject ? "REJECT" : "PROMOTE", label: "VERIFIED", delta_pts: (cand - ref) * 100, baseline_pass_rate: ref, candidate_pass_rate: cand, checks: { task: !reject, general: true, format: true, audit: true, leakage: true, training: !unsteady }, report_path: `${project.dir}/runs/run-preview/report.json`, explanation };
   send("training://progress", ev({ ...gate, version: null }));
   if (!reject) {
     send("training://progress", ev({ type: "stage", stage: "promote", status: "started", detail: "Saving your new version" }));

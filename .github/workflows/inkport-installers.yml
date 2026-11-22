@@ -252,7 +252,7 @@ jobs:
           for i in $(seq 1 60); do curl -s -o /dev/null http://127.0.0.1:1420/ && break; sleep 1; done
           NODE_PATH="$RUNNER_TEMP/pw/node_modules" node scripts/ui_flows_test.cjs ui-flows
           # Random clicks and typing: no page error, console error or empty screen, whatever the order.
-          for run in "1" "2 &outcome=reject" "3 &outcome=fail" "4 &outcome=few" "5 &untrusted=1" "6"; do
+          for run in "1" "2 &outcome=reject" "3 &outcome=fail" "4 &outcome=few" "5 &untrusted=1" "6" "7 &outcome=restart" "8 &outcome=unsteady"; do
             set -- $run
             NODE_PATH="$RUNNER_TEMP/pw/node_modules" node scripts/ui_monkey_test.cjs "$1" 300 "${2:-}"
           done

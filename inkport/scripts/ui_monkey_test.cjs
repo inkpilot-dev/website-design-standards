@@ -3,7 +3,7 @@
 // cat on the keyboard would use it: no step may produce a page error, a console error or an empty
 // screen. The sequence depends only on the seed, so a failure can be replayed.
 //
-//   node scripts/ui_monkey_test.cjs <seed> <steps> ["&outcome=reject" | "&outcome=fail" | "&outcome=few" | "&untrusted=1"]
+//   node scripts/ui_monkey_test.cjs <seed> <steps> ["&outcome=reject" | "&outcome=fail" | "&outcome=restart" | "&outcome=unsteady" | "&outcome=few" | "&untrusted=1"]
 //
 // Needs the playwright package with a Chromium (the same as scripts/ui_flows_test.cjs).
 'use strict';

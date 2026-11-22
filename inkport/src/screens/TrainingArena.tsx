@@ -149,8 +149,8 @@ export function TrainingArena({ project, memory, training, trainingName, onStart
       {verdict && (
         <Card className={`space-y-4 ${promoted ? "border-ink" : ""}`}>
           <div className="flex flex-wrap items-center gap-2">
-            {promoted ? <Badge tone="good"><Icon icon={Check} size={13} /> Better: new version {verdict.version} saved</Badge> : verdict.decision === "INSUFFICIENT_DATA" ? <Badge tone="warn">Need more examples</Badge> : <Badge tone="warn">{project.active_version ? `Not better yet: version ${project.active_version} stays in use` : "Not better yet: nothing was saved"}</Badge>}
-            {verdict.label && <Badge>{verdict.label === "VERIFIED" ? "Verified result" : "Preliminary result"}</Badge>}
+            {promoted ? <Badge tone="good"><Icon icon={Check} size={13} /> Better: new version {verdict.version} saved</Badge> : verdict.decision === "INSUFFICIENT_DATA" ? <Badge tone="warn">Need more examples</Badge> : <Badge tone="warn">{verdict.checks?.training === false ? (project.active_version ? `Training did not hold: version ${project.active_version} stays in use` : "Training did not hold: nothing was saved") : project.active_version ? `Not better yet: version ${project.active_version} stays in use` : "Not better yet: nothing was saved"}</Badge>}
+            {verdict.label && verdict.checks?.training !== false && <Badge>{verdict.label === "VERIFIED" ? "Verified result" : "Preliminary result"}</Badge>}
           </div>
           <p className="max-w-[70ch] text-[17px] leading-[1.65]">{verdict.explanation}</p>
           <div className="flex flex-wrap gap-3 pt-1">

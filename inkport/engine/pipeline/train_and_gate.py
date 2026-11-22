@@ -430,9 +430,12 @@ class Trainer:
                         st.update(step=0, best_dev=best, patience=0, lr_mult=lr_mult, guard_trips=guard_trips, last_dev=None)
                         self.state.save()
                         events.log("Starting this stage again, more gently (learning rate halved).", "warn")
+                        # The sentence the window shows under the progress bar while this goes on.
+                        events.stage("sft" if stage == "sft" else "rft", "started", "That attempt made the model worse, so training is starting again more gently")
                         prog.update(0, force=True)
                         continue
                     events.log("Went back to the best version so far; continuing more gently (learning rate halved).", "warn")
+                    events.stage("sft" if stage == "sft" else "rft", "started", "Training slipped, so it went back to its best version and continues more gently")
                 elif last_dev > best + 1e-9:
                     best, patience = last_dev, 0
                     b.save_checkpoint(best_dir)

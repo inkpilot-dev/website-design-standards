@@ -336,10 +336,12 @@ pnpm dev --host 127.0.0.1 &
 node scripts/ui_flows_test.cjs      # needs the playwright package with a Chromium
 ```
 
-38 checks against the browser preview, whose simulated engine follows the real backend's rules:
-leaving a step while training runs, Stop, a crash, a rejected run, too little data, an adapter
-from an unknown publisher, reopening a trained project, a second project. Other outcomes can be
-reviewed by hand with `?outcome=reject`, `?outcome=fail`, `?outcome=few` and `?untrusted=1`.
+40 checks against the browser preview, whose simulated engine follows the real backend's rules:
+leaving a step while training runs, Stop, a crash, a rejected run, a run that breaks and starts
+again more gently, a run that never holds, too little data, an adapter from an unknown publisher,
+reopening a trained project, a second project. Other outcomes can be reviewed by hand with
+`?outcome=reject`, `?outcome=fail`, `?outcome=restart`, `?outcome=unsteady`, `?outcome=few` and
+`?untrusted=1`.
 
 `node scripts/ui_monkey_test.cjs <seed> <steps>` clicks and types at random in the same preview
 and fails on any page error, console error or empty screen (replayable by seed).
