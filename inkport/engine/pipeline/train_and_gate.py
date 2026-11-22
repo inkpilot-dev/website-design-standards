@@ -39,6 +39,7 @@ from engine.verify.core import Context, load_verifier_set, score_batch
 
 OVERALL = {"baseline": (2, 18), "replay": (18, 22), "sft": (22, 70), "stage2": (70, 84), "gate": (84, 98), "promote": (98, 100)}
 WATCHED = 60  # general questions held back from training and asked at every practice evaluation
+LEARNED = 0.9  # share of the practice questions passed from which a task counts as learned
 # Part of the key under which evaluations are stored. Changed when what is asked changes, so that
 # results stored by an earlier build (the general questions with 8 of 60 asked twice) are measured
 # again instead of being compared, question by question, with answers to other questions.
@@ -416,6 +417,7 @@ class Trainer:
         lr_mult = st.get("lr_mult", 1.0)
         guard_trips = st.get("guard_trips", 0)
         general_trips = st.get("general_trips", 0)
+        general_slowed = st.get("general_slowed", 0)  # how often that also halved the learning rate
         extra = st.get("extra_rehearsal", 0)  # rehearsal micro-batches added to every step
         rehearsed = 0
         if resume and ckpt.is_dir() and st.get("step"):
@@ -541,13 +543,22 @@ class Trainer:
                 elif over:
                     # Learning the task is costing general skills beyond what the final exam accepts.
                     # Nothing is thrown away: from here on every step also rehearses general
-                    # questions (more of them each time this happens) and moves more gently, and
-                    # this version is not one of those the final choice is made from.
+                    # questions (more of them each time this happens), and this version is not one
+                    # of those the final choice is made from.
                     general_trips += 1
                     extra = min(ga, max(1, math.ceil(ga / 2)) * general_trips) if replay_train else 0
-                    if general_trips <= 2:
+                    # Moving more gently as well costs nothing once the task is learned. A model
+                    # that is still learning it keeps its pace and only rehearses more, until
+                    # rehearsal has been raised as far as it goes. (Seen on the customer-replies
+                    # sample, one run each: slowed down at its first check, at 15% of the practice
+                    # questions, it ended with 26% of the hidden exam and 56 of 60 general questions
+                    # where the original answers 45; a run of the same goal that was not slowed
+                    # had reached 56% of the exam with 44 of 60.)
+                    gentler = general_slowed < 2 and (last_dev >= LEARNED or general_trips > 2)
+                    if gentler:
                         lr_mult *= 0.5
-                    events.log(f"It no longer answers {general_lost} of the {len(watch)} general questions it is checked on (more than {general_limit(len(watch)) - 1} is too close to what the final exam refuses): rehearsing them more from here on, and learning more gently.", "warn")
+                        general_slowed += 1
+                    events.log(f"It no longer answers {general_lost} of the {len(watch)} general questions it is checked on (more than {general_limit(len(watch)) - 1} is too close to what the final exam refuses): rehearsing them more from here on{', and learning more gently' if gentler else ''}.", "warn")
                     events.stage("sft" if stage == "sft" else "rft", "started", "Rehearsing general skills more while it learns your task")
                     if last_dev > spare + 1e-9 or (abs(last_dev - spare) <= 1e-9 and kept_now > spare_general):
                         spare, spare_general = last_dev, kept_now
@@ -567,7 +578,7 @@ class Trainer:
                             break
             if step % ckpt_every == 0 or step == total:
                 b.save_checkpoint(ckpt)
-                st.update(step=step, best_dev=best, spare_dev=spare, best_general=best_general, spare_general=spare_general, patience=patience, lr_mult=lr_mult, guard_trips=guard_trips, general_trips=general_trips, extra_rehearsal=extra, last_dev=last_dev)
+                st.update(step=step, best_dev=best, spare_dev=spare, best_general=best_general, spare_general=spare_general, patience=patience, lr_mult=lr_mult, guard_trips=guard_trips, general_trips=general_trips, general_slowed=general_slowed, extra_rehearsal=extra, last_dev=last_dev)
                 self.state.save()
             prog.update(step, metrics)
             if self.over_budget(0.75 if stage == "sft" else 0.9):

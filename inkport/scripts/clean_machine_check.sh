@@ -117,7 +117,7 @@ else
   T=$("$CLI" train --project clean-check --preset fast --overrides '{"sft":{"max_steps":60,"eval_every":20,"checkpoint_every":20},"stage2":{"mode":"none"}}' 2>>"$WORK/cli.log" | json) || fail "training crashed"
   echo "$T" | grep -q '"decision":"PROMOTE"' || fail "training finished but the trained model was not promoted on the bundled samples: $T"
 fi
-story 30
+story 60
 pass "trained + gated on the hidden test: $(echo "$T" | field decision) $(echo "$T" | field version)"
 
 A=$("$CLI" api-smoke --project clean-check --port "$PORT" 2>>"$WORK/cli.log" | json) || fail "local API: $(tail -3 "$WORK/cli.log")"

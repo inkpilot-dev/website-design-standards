@@ -321,10 +321,11 @@ def make_plan(project: dict, report: dict, preset: str = "standard", overrides: 
         "lora": {"r": r, "alpha": 2 * r, "dropout": 0.0, "dora": False, "targets": LORA_TARGETS},
         "sft": {
             # Half of what is usual for LoRA. Measured with the bundled model on the samples: at 2e-4
-            # a model that learns an answer format quickly (JSON) answers 9, 13 and 27 of 60 general
-            # questions at its first practice check (the original: 45) and is refused by the final
-            # exam for it; at 1e-4 it answers 38, 45, 46 and 54, with the task learned just as well.
-            # (So not safe by itself either: the watch on general skills in Trainer.sft stays.)
+            # a model that learns an answer format quickly (JSON) answered 3, 13, 25 and 26 of the
+            # 60 watched general questions at its first practice check (the original: 50) and a
+            # default run was refused by the final exam for it; at 1e-4 it answered 32, 38, 39 and
+            # 43, with the task learned just as well. (So not safe by itself either: the watch on
+            # general skills in Trainer.sft does the rest, and brought those runs to 45 to 56.)
             "lr": 1e-4,
             "epochs": 3,
             # Few examples: more passes over them (up to small_set_passes) instead of a higher rate.

@@ -43,6 +43,7 @@ class Stand(Backend):
     breaks_above = 9.0  # a share of the plan's learning rate; 9.0 = never
     forgets_above = 9.0  # a share above which it learns the task but loses the general questions...
     rehearsal_cures = 1  # ...unless a step also holds this many micro-batches of nothing but general questions
+    learns = 0.03  # how much of the task one step at the full learning rate teaches it
     broken_drift = 0.0  # what the measure of forgetting reads once broken (may be nan)
     always_drifts = 0.0  # drift added per step even when healthy
     log: list = []
@@ -108,7 +109,7 @@ class Stand(Backend):
         elif share > self.forgets_above:
             self.forgot = True
         self.rehearsal = 0
-        self.w += 0.03 * share
+        self.w += self.learns * share
         return 0.5
 
     def nll(self, examples):
@@ -156,6 +157,7 @@ def trained(project, tmp_path, monkeypatch):
     def run(plan=None, **settings):
         Stand.answers, Stand.general, Stand.log, Stand.scales = answers, stock, [], []
         Stand.base, Stand.breaks_above, Stand.forgets_above, Stand.rehearsal_cures, Stand.broken_drift, Stand.always_drifts = 0.6, 9.0, 9.0, 1, 0.0, 0.0
+        Stand.learns = 0.03
         for key, value in settings.items():
             setattr(Stand, key, value)
         del lines[:]
@@ -267,8 +269,36 @@ def test_losing_general_questions_brings_more_rehearsal_and_keeps_the_progress(t
     assert result["decision"] == "PROMOTE", (result, text)
     assert report["general"]["drop_pts"] == 0
     assert report["training"]["rehearsed_more"] == 1 and report["training"]["kept_general"] is True
+    # It had learned the task by then (95% of the practice questions), so it also moves more gently.
+    assert _has(text, "rehearsing them more from here on, and learning more gently."), text
+    assert report["training"]["lr_mult"] == 0.5
     # Each step is still one average: with one rehearsal micro-batch added to one, each weighs a half.
     assert set(Stand.scales[:20]) == {1.0} and set(Stand.scales[-20:]) == {0.5}, (Stand.scales[:3], Stand.scales[-3:])
+
+
+def test_a_model_still_learning_the_task_keeps_its_pace_and_only_rehearses_more(trained):
+    """Seen on the customer-replies sample of the real model: at its first check it passed 15% of
+    the practice questions and had lost general questions. Halving the learning rate there left it
+    at 26% of the hidden exam, with more general questions answered than the original answers;
+    without that brake the same goal had reached 56%. Rehearsal is the cure; the brake is only for
+    a task that is already learned (or when rehearsal has been raised as far as it goes)."""
+    result, text, report = trained(forgets_above=1e-9, learns=0.006, base=0.3)
+    first = next(line for line in text if line.startswith("sft step 20/40: dev pass "))
+    assert int(first.split("dev pass ")[1].split("%")[0]) < 90, first  # still learning
+    assert _has(text, "It no longer answers 60 of the 60 general questions"), text
+    assert _has(text, "rehearsing them more from here on."), text
+    assert not _has(text, "learning more gently")
+    assert report["training"]["rehearsed_more"] == 1 and report["training"]["lr_mult"] == 1.0
+    assert _has(text, "general questions 60/60") and report["training"]["kept_general"] is True
+    assert result["decision"] == "PROMOTE", (result, text)
+
+
+def test_when_rehearsal_is_as_high_as_it_goes_a_slow_learner_is_slowed_after_all(trained):
+    # Rehearsal does not help this one, and it is still learning: two checks of more rehearsal at
+    # the same pace, then (the third time) more gently too.
+    result, text, report = trained(forgets_above=1e-9, rehearsal_cures=99, learns=0.006, base=0.3, plan={"sft": {"max_steps": 60}})
+    assert report["training"]["rehearsed_more"] == 3 and report["training"]["lr_mult"] == 0.5, report["training"]
+    assert sum("and learning more gently" in line for line in text) == 1, text
 
 
 def test_a_version_that_lost_them_is_never_chosen_while_one_that_kept_them_exists(trained):
