@@ -104,6 +104,14 @@ tesseract "$WORK/screen-big.png" - --psm 11 2>/dev/null
 SCREEN
 chmod +x "$WORK/screen_text.sh"
 export GUI_E2E_SCREEN_TEXT="$WORK/screen_text.sh"
+# Screenshots are taken of the virtual display itself, not through the test driver: the driver of
+# the WebKitGTK inside the AppImage (Ubuntu 22.04) never answers a screenshot request for a page
+# on which nothing is moving, and then answers nothing else either.
+if command -v import >/dev/null; then
+  printf '#!/usr/bin/env bash\nexec import -display ":%s" -window root "$1"\n' "$DISPLAY_NUM" >"$WORK/screenshot.sh"
+  chmod +x "$WORK/screenshot.sh"
+  export GUI_E2E_SCREENSHOT="$WORK/screenshot.sh"
+fi
 
 Xvfb ":$DISPLAY_NUM" -screen 0 1240x900x24 -nolisten tcp >/dev/null 2>&1 &
 XVFB_PID=$!

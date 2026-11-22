@@ -114,7 +114,19 @@ async function openWebDriver() {
   const s = `${base}/session/${id}`;
   return {
     evaluate: async (expr, timeoutMs) => { const r = await request('POST', `${s}/execute/sync`, { script: `return ${call(expr)};`, args: [] }, timeoutMs); if (r.value && r.value.error) throw new Error(r.value.message || r.value.error); return r.value; },
-    screenshot: async (file) => { const r = await request('GET', `${s}/screenshot`); if (typeof r.value === 'string') fs.writeFileSync(file, Buffer.from(r.value, 'base64')); },
+    // A picture of the window. With GUI_E2E_SCREENSHOT (a command that writes a picture of the
+    // screen to the file it is given; scripts/window_check.sh sets it) the screen itself is
+    // captured. The driver's own screenshot is the fallback, with a time limit: the WebKitGTK of
+    // Ubuntu 22.04 only answers it when the page draws a new frame, so on a page where nothing
+    // moves (right after "Stop training") it never answered, and no later request did either.
+    screenshot: async (file) => {
+      if (process.env.GUI_E2E_SCREENSHOT) {
+        try { require('child_process').execFileSync(process.env.GUI_E2E_SCREENSHOT, [file], { timeout: 30000, stdio: 'ignore' }); } catch (e) { note(`screenshot skipped: ${String(e.message).split('\n')[0]}`); }
+        return;
+      }
+      const r = await request('GET', `${s}/screenshot`, undefined, 30000);
+      if (typeof r.value === 'string') fs.writeFileSync(file, Buffer.from(r.value, 'base64'));
+    },
     close: async () => { await request('DELETE', s).catch(() => {}); },
   };
 }
@@ -150,7 +162,10 @@ async function openPlaywright() {
   const d = MODE === 'webdriver' ? await openWebDriver() : await openPlaywright();
   const q = JSON.stringify;
   const text = () => d.evaluate('api.text()');
-  const shot = async (name) => { await d.evaluate('api.scrollTop()'); await sleep(250); await d.screenshot(path.join(OUT, name + '.png')); };
+  // Screenshots are for people; one that cannot be taken must never fail or hold up a check.
+  const shot = async (name) => {
+    try { await d.evaluate('api.scrollTop()', 15000); await sleep(250); await d.screenshot(path.join(OUT, name + '.png')); } catch (e) { note(`no screenshot "${name}": ${String(e.message).split('\n')[0]}`); }
+  };
   const waitFor = async (what, fn, timeout = 30000, every = 500) => {
     const end = Date.now() + timeout;
     let last;
@@ -208,8 +223,8 @@ async function openPlaywright() {
   // the driver has lost the window, so the caller knows not to use it any further.
   const checkStopped = async (stopped, screenshot) => {
     if (stopped.via === 'window') {
+      check('Stop ends the run with a plain note and the start cards return', stopped.text.includes('Nothing was saved from that run') && (await d.evaluate('api.enabled("Quick run", "main")', 15000)) && !stopped.text.includes('Finished'));
       await shot(screenshot);
-      check('Stop ends the run with a plain note and the start cards return', stopped.text.includes('Nothing was saved from that run') && (await d.evaluate('api.enabled("Quick run", "main")')) && !stopped.text.includes('Finished'));
       return true;
     }
     note('the test driver stopped answering after the click, so the screen was read instead:');
@@ -294,7 +309,7 @@ async function openPlaywright() {
         await shot(`3${n}-goal-${id}`);
         await d.evaluate('api.scrollToHeading("Your practice exam")');
         await sleep(300);
-        await d.screenshot(path.join(OUT, `3${n}-goal-${id}-exam.png`));
+        await d.screenshot(path.join(OUT, `3${n}-goal-${id}-exam.png`)).catch((e) => note(`no screenshot of the ${id} exam: ${String(e.message).split('\n')[0]}`));
         const from = page.indexOf('Your practice exam');
         check(`${t.title}: sample data + suggested rules give an exam that can be trained on`, page.includes('hidden final-exam questions') && !page.includes('Not enough examples') && !page.includes('could not be built') && (await d.evaluate('api.enabled("Continue to training", "main")')), page.slice(from, from + 200));
         const setAside = (page.match(/This rule (?:is not being|will not be) used/g) || []).length;
