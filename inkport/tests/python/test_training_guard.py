@@ -202,8 +202,9 @@ def test_broken_numbers_count_as_broken(trained):
 
 
 def test_forgetting_at_the_first_check_no_longer_ships_the_drifted_model(trained):
-    # Drift over the limit at step 20 used to end the stage and offer that very model.
-    result, text, report = trained(breaks_above=0.75, broken_drift=0.4)
+    # Drift over the limit at step 20 used to end the stage and offer that very model. (The drift
+    # is the measure of forgetting where general questions are not asked directly.)
+    result, text, report = trained(breaks_above=0.75, broken_drift=0.4, plan={"sft": {"general_guard": False}})
     assert _has(text, "it is forgetting general skills"), text
     assert result["decision"] == "PROMOTE", (result, text)
     assert report["training"]["went_wrong"] == 1
@@ -222,11 +223,21 @@ def test_a_run_that_never_holds_ends_with_a_plain_verdict_and_saves_nothing(trai
 
 def test_breaking_later_goes_back_to_the_best_version_so_far(trained):
     # Healthy until the second check, then forgetting: the best version (step 20) is what counts.
-    result, text, report = trained(always_drifts=0.005)  # 0.1 at step 20 (fine), 0.2 at step 40 (over 0.15)
+    result, text, report = trained(always_drifts=0.005, plan={"sft": {"general_guard": False}})  # 0.1 at step 20 (fine), 0.2 at step 40 (over 0.15)
     assert _has(text, "Training went wrong at step 40"), text
     assert _has(text, "Went back to the best version so far")
     assert result["decision"] == "PROMOTE", (result, text)
     assert report["training"]["went_wrong"] == 1
+
+
+def test_where_general_questions_are_asked_directly_the_drift_reading_decides_nothing(trained):
+    """Seen on the real model: a refinement round read a drift of +0.148 (the limit: 0.15) while
+    the model answered 50 of the 60 watched general questions, two more than before the round. One
+    more hundredth and a healthy round would have been thrown away as "forgetting general skills"."""
+    result, text, report = trained(always_drifts=0.005)
+    assert _has(text, "drift +0.200") and _has(text, "general questions 60/60"), text
+    assert not _has(text, "Training went wrong")
+    assert result["decision"] == "PROMOTE" and report["training"]["went_wrong"] == 0
 
 
 def test_a_model_that_ends_up_worse_is_told_so(trained, monkeypatch):

@@ -186,7 +186,8 @@ def gone_wrong(base_pass: list, base_format: Optional[float], res: dict, drift: 
     original, where the same settings had given 95% the time before. A run like that is not "a bit
     worse", it has broken, and the signs are visible at the first practice evaluation:
 
-    * the measure of forgetting is not a number, or is over its limit;
+    * the measure of forgetting is not a number, or is over its limit (the limit only counts where
+      general questions cannot be asked directly: see the caller);
     * it passes a quarter or less of the practice questions the original passes (and the original
       passes at least 8, so this is not noise);
     * at most half of its answers are well-formed where the original's nearly all were.
@@ -499,7 +500,13 @@ class Trainer:
                     metrics.update(general_pass=sum(now_general) / len(watch))
                 events.log(f"{stage} step {step}/{total}: dev pass {last_dev:.0%}, drift {last_dnll:+.3f} nats/token (answers alone {answers_dnll:+.3f}){general_note}", "info")
                 # Forgetting can only be judged when it could be measured before training started.
-                why = gone_wrong(base_dev_pass, base_dev_format, dev_res, last_dnll if math.isfinite(base_nll) else 0.0, float(cfg["dnll_limit"]))
+                # Where general questions are asked directly (the watch), their count decides and
+                # the drift is only logged: on the real model it reads -0.7 to -1.9 through the
+                # whole first stage whatever happens to general skills, and read +0.148 (limit
+                # 0.15) in a refinement round after which the model answered more general
+                # questions than before. A reading that is not a number still means a broken run.
+                drift_limit = math.inf if watch_general else float(cfg["dnll_limit"])
+                why = gone_wrong(base_dev_pass, base_dev_format, dev_res, last_dnll if math.isfinite(base_nll) else 0.0, drift_limit)
                 over = watch_general and general_lost >= general_limit(len(watch))
                 if why:
                     # Never keep, and never go on from, a model in this state: go back to the last
