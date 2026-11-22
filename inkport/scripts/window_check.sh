@@ -9,6 +9,8 @@
 #                                  with every suggested rule (a few minutes; the default)
 #   WINDOW_PHASES="first reopen"   a full run to a verdict, then restart the app and check it is all still there
 #   INKPORT_TEST_PRESET / INKPORT_TEST_OVERRIDES keep training short (see src-tauri/src/app.rs)
+#   WINDOW_GOAL=docs_legal WINDOW_EXPECT=any   run the first/smoke phases with another goal; "any" accepts
+#                                  a verdict that the trained model was not better
 #
 # Needs on the test machine only: Xvfb, WebKitWebDriver (package webkit2gtk-driver), dbus-run-session, node.
 set -euo pipefail
@@ -69,7 +71,7 @@ fi
 
 for phase in $PHASES; do
   printf '\n\033[1;34m==> Window test: %s\033[0m\n' "$phase"
-  if node "$ROOT/scripts/gui_e2e.cjs" --mode=webdriver "--driver=http://127.0.0.1:$PORT" "--app=$APP" "--out=$OUT" "--phase=$phase" "--train-timeout=${WINDOW_TRAIN_TIMEOUT:-3600}" 2>&1 | sed 's/^/    /'; then
+  if node "$ROOT/scripts/gui_e2e.cjs" --mode=webdriver "--driver=http://127.0.0.1:$PORT" "--app=$APP" "--out=$OUT" "--phase=$phase" "--train-timeout=${WINDOW_TRAIN_TIMEOUT:-3600}" "--goal=${WINDOW_GOAL:-business_rules}" "--expect=${WINDOW_EXPECT:-promote}" 2>&1 | sed 's/^/    /'; then
     pass "window test ($phase), data folder with spaces and non-Latin characters"
   else
     fail "window test ($phase); see the lines above and the screenshots in $OUT"

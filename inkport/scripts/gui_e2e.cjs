@@ -15,6 +15,7 @@
 //                    must give an exam that can be trained on (no training; about a minute)
 //   --train-timeout=SECONDS   how long training may take (default 900)
 //   --expect=promote|any      "promote": the run must save a version (default); "any": a verdict is enough
+//   --goal=business_rules|code_sql|docs_legal|custom   which goal the first/smoke phases use (default: business_rules)
 //
 // Set INKPORT_TEST_PRESET / INKPORT_TEST_OVERRIDES in the app's environment to keep training short.
 // Exit code 0 = every check passed.
@@ -30,6 +31,16 @@ const PHASE = arg('phase', 'first');
 const EXPECT = arg('expect', 'promote');
 const TRAIN_TIMEOUT = Number(arg('train-timeout', '900')) * 1000;
 const PROJECT = arg('project', 'Window test');
+// Which goal the 'first' and 'smoke' phases use: its title on screen, a suggested rule to add, and
+// a file name that shows up under the sample questions.
+const GOALS = {
+  business_rules: ['Small Business & Finance Rules', 'amount must be positive', 'from expenses.csv'],
+  code_sql: ['Code & SQL Specialist', 'no more than 120 words', 'from your tables'],
+  docs_legal: ['Personal Docs & Legal Prep', 'no more than 80 words', 'from lease.md'],
+  custom: ['Custom Skill', 'no more than 50 words', 'from support.csv'],
+};
+const GOAL = GOALS[arg('goal', 'business_rules')];
+if (!GOAL) { console.log('unknown --goal'); process.exit(2); }
 fs.mkdirSync(OUT, { recursive: true });
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -244,7 +255,7 @@ async function openPlaywright() {
       // ------------------------------------------------------------ step 2: choose a goal
       await waitText('What do you want your AI to master?');
       await shot('02-goal');
-      await click('Small Business & Finance Rules', 'main');
+      await click(GOAL[0], 'main');
       await d.evaluate(`api.fill("", ${q(PROJECT)})`);
       await click('Create project', 'main');
       await waitText('Your material and your rules');
@@ -253,14 +264,14 @@ async function openPlaywright() {
 
       // ------------------------------------------------------------ step 3: data & rules
       await click('Try the sample data', 'main');
-      await click('amount must be positive', 'main');
+      await click(GOAL[1], 'main');
       await waitFor('the rule to be checked', () => d.evaluate('api.enabled("Build practice exam", "main")'), 120000);
       await click('Build practice exam', 'main');
       await waitFor('the practice exam', async () => { const t = await text(); return t.includes('Your practice exam') || t.includes('could not be built'); }, 300000, 1000);
       const exam = await text();
       await shot('03-exam');
       check('the practice exam is built from the bundled samples', exam.includes('hidden final-exam questions') && exam.includes('No final-exam question appears in training') && !exam.includes('could not be built'), exam.slice(exam.indexOf('Your practice exam'), exam.indexOf('Your practice exam') + 220));
-      await waitFor('sample questions', async () => (await text()).includes('from expenses.csv'), 120000);
+      await waitFor('sample questions', async () => (await text()).includes(GOAL[2]), 120000);
       check('sample practice questions are shown', true);
       await click('Continue to training', 'main');
 

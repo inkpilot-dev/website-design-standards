@@ -26,6 +26,12 @@ interface Props {
   onEditData: () => void;
 }
 
+/** A question about a document starts with a long excerpt; on a small card show the question itself. */
+function cardQuestion(prompt: string): string {
+  const cut = prompt.lastIndexOf('"""\n\n');
+  return prompt.startsWith("Excerpt from ") && cut > 0 ? prompt.slice(cut + 5) : prompt;
+}
+
 export function TrainingArena({ project, training, trainingName, onStart, onStop, onDismissError, onDeploy, onEditData }: Props) {
   const mine = training.projectId === project.id;
   const t = mine ? training : null;
@@ -256,7 +262,7 @@ export function TrainingArena({ project, training, trainingName, onStart, onStop
 function Duel({ d }: { d: Bench }) {
   return (
     <div className="py-4 text-[15px]">
-      <div className="mb-3 line-clamp-2 break-words font-medium leading-relaxed">{d.prompt}</div>
+      <div className="mb-3 line-clamp-2 break-words font-medium leading-relaxed">{cardQuestion(d.prompt)}</div>
       <div className="grid gap-3 sm:grid-cols-2">
         {([["Original", d.baseline], ["Yours", d.trained]] as const).map(([name, side]) => (
           <div key={name} className={`min-w-0 rounded-xl px-3.5 py-3 ${side.pass ? "bg-good-soft" : side.pass === false ? "bg-bad-soft" : "bg-canvas"}`}>
