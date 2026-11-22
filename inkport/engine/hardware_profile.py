@@ -301,6 +301,10 @@ def make_plan(project: dict, report: dict, preset: str = "standard", overrides: 
             quant = "bf16"
     if project.get("quant"):
         quant = project["quant"]
+    if backend == "mlx":
+        # MLX weights are what they are on disk (the bundled starter: 4-bit); the tier's label for
+        # the other backends ("fp32") would only be wrong in the log and the report.
+        quant = project["base_model"].get("quant") or "mlx4"
 
     r = fitted["lora_r"]
     plan: dict[str, Any] = {

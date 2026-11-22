@@ -193,9 +193,12 @@ class MlxBackend(Backend):
     def _encode(self, ex: dict) -> Optional[tuple[list[int], int]]:
         msgs = ex["messages"]
         prefix = self.render(msgs[:-1], add_generation_prompt=True)
-        full = self.render(msgs, add_generation_prompt=False)
-        if not full.startswith(prefix):
-            full = prefix + msgs[-1]["content"] + (self.tok.eos_token or "")
+        if ex.get("open_end"):
+            full = prefix + msgs[-1]["content"]  # the answer alone, without what marks its end
+        else:
+            full = self.render(msgs, add_generation_prompt=False)
+            if not full.startswith(prefix):
+                full = prefix + msgs[-1]["content"] + (self.tok.eos_token or "")
         p = self.tok.encode(prefix, add_special_tokens=False)
         f = self.tok.encode(full, add_special_tokens=False)
         max_seq = int(self.plan["sft"]["max_seq"])

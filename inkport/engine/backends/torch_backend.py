@@ -148,9 +148,12 @@ class TorchBackend(Backend):
     def _encode_example(self, ex: dict, max_seq: int) -> Optional[tuple[list[int], list[int]]]:
         msgs = ex["messages"]
         prefix = self.render(msgs[:-1], add_generation_prompt=True)
-        full = self.render(msgs, add_generation_prompt=False)
-        if not full.startswith(prefix):
-            full = prefix + msgs[-1]["content"] + (self.tok.eos_token or "")
+        if ex.get("open_end"):
+            full = prefix + msgs[-1]["content"]  # the answer alone, without what marks its end
+        else:
+            full = self.render(msgs, add_generation_prompt=False)
+            if not full.startswith(prefix):
+                full = prefix + msgs[-1]["content"] + (self.tok.eos_token or "")
         p_ids = self.tok(prefix, add_special_tokens=False)["input_ids"]
         f_ids = self.tok(full, add_special_tokens=False)["input_ids"]
         labels = [-100] * len(p_ids) + f_ids[len(p_ids) :]

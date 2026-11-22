@@ -99,7 +99,7 @@ def eval_general(backend: Backend, n: int, use_adapter: bool = True) -> dict:
     items = general.suite(n)
     outs = backend.generate([it["messages"] for it in items], max_new_tokens=24, temperature=0.0, use_adapter=use_adapter)
     passes = [general.check(it, o[0]) for it, o in zip(items, outs)]
-    return {"pass": passes, "n": len(items), "passed": sum(passes)}
+    return {"pass": passes, "n": len(items), "passed": sum(passes), "outputs": [o[0] for o in outs]}
 
 
 def emit_eval(split: str, model: str, res: dict) -> None:
@@ -377,6 +377,17 @@ class Trainer:
         if base_nll is None:
             base_nll = b.nll(holdout)
             st["base_nll"] = base_nll
+        # A second reading of the same thing, on the answers alone. The first also counts the
+        # tokens that mark the end of an answer; every real-model run so far reported a "drift" of
+        # -0.8 to -1.8 nats/token, which can only mean those end tokens cost the original model a
+        # lot and are learned at once, hiding any real forgetting behind them. Logged next to the
+        # first so that the limit can be set on real figures; the guard still uses the first.
+        answers_only = [{**row, "open_end": True} for row in holdout]
+        base_answers = st.get("base_nll_answers")
+        if base_answers is None:
+            base_answers = b.nll(answers_only)
+            st["base_nll_answers"] = base_answers
+            events.log(f"Before {stage}: {len(holdout)} answers to general questions, written by the original model, cost {base_answers:.3f} nats/token ({base_nll:.3f} with the end of each answer counted)", "info")
         prog = events.Progress(stage, total, overall[0], overall[1])
         prog.update(step, force=True)
         tokens, t_last, loss_ema = 0, time.monotonic(), None
@@ -407,8 +418,9 @@ class Trainer:
                 dev_res = self._dev_eval(baseline, step)
                 last_dev = dev_res["passed"] / max(dev_res["n"], 1)
                 last_dnll = b.nll(holdout) - base_nll
+                answers_dnll = b.nll(answers_only) - base_answers
                 metrics.update(dev_pass=last_dev, replay_dnll=round(last_dnll, 4) if math.isfinite(last_dnll) else None)
-                events.log(f"{stage} step {step}/{total}: dev pass {last_dev:.0%}, drift {last_dnll:+.3f} nats/token", "info")
+                events.log(f"{stage} step {step}/{total}: dev pass {last_dev:.0%}, drift {last_dnll:+.3f} nats/token (answers alone {answers_dnll:+.3f})", "info")
                 # Forgetting can only be judged when it could be measured before training started.
                 why = gone_wrong(base_dev_pass, base_dev_format, dev_res, last_dnll if math.isfinite(base_nll) else 0.0, float(cfg["dnll_limit"]))
                 if why:
@@ -580,6 +592,14 @@ class Trainer:
         delta = 100 * (cand_rate - base_rate)
         g_n = cand_gen["n"]
         g_b, g_c = discordant(ref_gen["pass"], cand_gen["pass"])
+        # What exactly was lost: the general questions the reference answered and this model no
+        # longer does, with what it says now (these are stock questions, nothing of the user's).
+        lost_general = [i for i, (was, now) in enumerate(zip(ref_gen["pass"], cand_gen["pass"])) if was and not now]
+        if lost_general:
+            stock = general.suite(g_n)
+            for i in lost_general[:8]:
+                said = " ".join(str((cand_gen.get("outputs") or [""] * g_n)[i]).split())
+                events.log(f"General question no longer answered correctly: {stock[i]['messages'][-1]['content'][:90]} -> {said[:90]}", "info")
         g_drop = 100 * (ref_gen["passed"] - cand_gen["passed"]) / max(1, g_n)
         g_p = mcnemar_exact(g_b, g_c)
         f_ref, f_cand = ref.get("format_rate"), format_rate(cand)
@@ -687,7 +707,9 @@ class Trainer:
                 events.emit("artifact", kind="merged", path=str(mdir), sha256=sha256_dir(mdir))
             except Exception as exc:  # noqa: BLE001
                 events.log(f"Merged export skipped: {exc}", "warn")
-        gguf = try_export_gguf(self.plan, adir, vdir / "gguf")
+        # (Not for MLX: the converter needs PyTorch and a model in the Hugging Face layout, neither of
+        # which a Mac build has. Trying anyway put a Python traceback into the log of every run.)
+        gguf = None if self.plan["backend"] == "mlx" else try_export_gguf(self.plan, adir, vdir / "gguf")
         if gguf:
             out["gguf"] = str(gguf)
             events.emit("artifact", kind="gguf", path=str(gguf), sha256=sha256_dir(gguf.parent))

@@ -15,6 +15,10 @@ on:
         description: Run the long command-line training checks too (about 40 minutes more per platform)
         type: boolean
         default: true
+      probe:
+        description: 'Measure a training recipe on the build machines (macOS, Linux): plan overrides as JSON, several separated by ";;"; "{}" is a run with the settings a user gets'
+        type: string
+        default: ""
   push:
     branches: [claude/busy-goodall-wyjcg6]
     paths: ["inkport/**", ".github/workflows/inkport-installers.yml"]
@@ -80,6 +84,11 @@ jobs:
       - name: Clean-machine check (offline)
         if: ${{ !cancelled() && steps.build.outcome == 'success' && (github.event_name == 'push' || inputs.long_checks) }}
         run: scripts/clean_machine_check.sh build/installers/macos-aarch64-mlx/*.dmg
+      - name: Training probes (only when asked for - what a recipe does on this machine)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && inputs.probe != '' }}
+        env:
+          PROBE: ${{ inputs.probe }}
+        run: scripts/train_probe.sh "$(ls -d target/aarch64-apple-darwin/release/bundle/macos/*.app | head -1)/Contents/MacOS/inkport-cli" "$PROBE"
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}   # a failed check turns the job red but keeps the download
         with:
@@ -267,6 +276,14 @@ jobs:
       - name: Clean-machine check (offline)
         if: ${{ !cancelled() && steps.build.outcome == 'success' && (github.event_name == 'push' || inputs.long_checks) }}
         run: scripts/clean_machine_check.sh build/installers/linux-x86_64-cpu/*.AppImage
+      - name: Training probes (only when asked for - what a recipe does on this machine)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && inputs.probe != '' }}
+        env:
+          PROBE: ${{ inputs.probe }}
+        run: |
+          APPIMAGE="$(ls "$PWD"/build/installers/linux-x86_64-cpu/*.AppImage | head -1)"
+          mkdir -p "$RUNNER_TEMP/probe" && cd "$RUNNER_TEMP/probe" && chmod +x "$APPIMAGE" && "$APPIMAGE" --appimage-extract >/dev/null
+          "$GITHUB_WORKSPACE/inkport/scripts/train_probe.sh" "$(find "$RUNNER_TEMP/probe/squashfs-root" -name inkport-cli -type f | head -1)" "$PROBE"
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}   # a failed check turns the job red but keeps the download
         with:
