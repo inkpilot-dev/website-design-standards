@@ -90,19 +90,43 @@ pub fn select_tier(gpus: &[GpuInfo], apple_silicon: bool, ram_gb: f64) -> Recomm
     }
 }
 
+/// Run a system probe (nvidia-smi, PowerShell, sysctl) and return what it printed.
+/// A probe that hangs (a broken graphics driver can freeze nvidia-smi for minutes) is ended after
+/// 20 seconds and treated as "nothing found", so the start-up check can never wait on it forever.
 fn run(cmd: &str, args: &[&str]) -> Option<String> {
+    use std::io::Read;
+    use std::process::Stdio;
     let mut c = Command::new(cmd);
-    c.args(args);
+    c.args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         c.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     }
-    let out = c.output().ok()?;
-    if !out.status.success() {
+    let mut child = c.spawn().ok()?;
+    let mut stdout = child.stdout.take()?;
+    let reader = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = stdout.read_to_end(&mut buf);
+        buf
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Some(status),
+            Ok(None) if std::time::Instant::now() < deadline => std::thread::sleep(std::time::Duration::from_millis(40)),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                break None;
+            }
+        }
+    };
+    let out = reader.join().ok()?;
+    if !status?.success() {
         return None;
     }
-    Some(String::from_utf8_lossy(&out.stdout).to_string())
+    Some(String::from_utf8_lossy(&out).to_string())
 }
 
 /// Parse `nvidia-smi --query-gpu=name,memory.total,memory.free,driver_version,compute_cap --format=csv,noheader,nounits`.

@@ -238,7 +238,7 @@ jobs:
         with: { node-version: 22, cache: pnpm, cache-dependency-path: inkport/pnpm-lock.yaml }
       - name: Unit tests - engine, supervisor, interface types (fail in minutes instead of after the build)
         run: |
-          uv run pytest tests/python -q --ignore=tests/python/test_e2e_engine.py
+          uv run --python 3.12 --extra dev pytest tests/python -q --ignore=tests/python/test_e2e_engine.py
           (cd src-tauri && cargo test --no-default-features)
           pnpm install --frozen-lockfile
           pnpm exec tsc --noEmit
