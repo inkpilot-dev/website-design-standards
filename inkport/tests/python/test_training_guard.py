@@ -164,7 +164,7 @@ def trained(project, tmp_path, monkeypatch):
         report = {"gpus": [], "ram_gb": 16, "apple_silicon": False}
         report["recommendation"] = select_tier(report)
         meta = json.loads((project / "project.json").read_text())
-        overrides = {"sft": {"max_steps": 40, "eval_every": 20, "checkpoint_every": 20, "micro_batch": 4, "grad_accum": 1, **((plan or {}).get("sft") or {})}, "stage2": {"mode": "none"}, "gate": {"general_suite_n": 12, **((plan or {}).get("gate") or {})}}
+        overrides = {"sft": {"max_steps": 40, "eval_every": 20, "checkpoint_every": 20, "micro_batch": 4, "grad_accum": 1, **((plan or {}).get("sft") or {})}, "stage2": {"mode": "none", **((plan or {}).get("stage2") or {})}, "gate": {"general_suite_n": 12, **((plan or {}).get("gate") or {})}}
         result = tg.run_train(project, make_plan(meta, report, preset="fast", overrides=overrides))
         text = [f.get("message") or f.get("detail") or "" for kind, f in lines if kind in ("log", "stage")]
         return result, text, json.loads(Path(result["report_path"]).read_text())
@@ -295,10 +295,35 @@ def test_a_model_still_learning_the_task_keeps_its_pace_and_only_rehearses_more(
 
 def test_when_rehearsal_is_as_high_as_it_goes_a_slow_learner_is_slowed_after_all(trained):
     # Rehearsal does not help this one, and it is still learning: two checks of more rehearsal at
-    # the same pace, then (the third time) more gently too.
-    result, text, report = trained(forgets_above=1e-9, rehearsal_cures=99, learns=0.006, base=0.3, plan={"sft": {"max_steps": 60}})
+    # the same pace (half as many micro-batches again, then as many), then more gently too.
+    result, text, report = trained(forgets_above=1e-9, rehearsal_cures=99, learns=0.006, base=0.3, plan={"sft": {"max_steps": 60, "grad_accum": 2}})
     assert report["training"]["rehearsed_more"] == 3 and report["training"]["lr_mult"] == 0.5, report["training"]
-    assert sum("and learning more gently" in line for line in text) == 1, text
+    assert sum("rehearsing them more from here on." in line for line in text) == 2, text
+    assert sum("rehearsal is already as high as it goes, and learning more gently." in line for line in text) == 1, text
+    assert set(Stand.scales[:40]) == {0.5} and 1 / 3 in Stand.scales and Stand.scales[-1] == 0.25, sorted(set(Stand.scales))
+
+
+def test_a_refinement_round_starts_from_the_rehearsal_its_first_stage_needed(trained):
+    """Seen on the SQL sample of the real model: the first stage lost general questions, got more
+    rehearsal and kept them. The refinement round after it started without that rehearsal and
+    answered 15 of the 60 watched questions at its only check; such a round has no steps left in
+    which to do better, and is thrown away after minutes of work."""
+    result, text, report = trained(forgets_above=1e-9, plan={"stage2": {"mode": "rft", "rounds": 1, "k": 2}})
+    assert report["training"]["rehearsed_more"] == 1  # the first stage: once, at step 20
+    assert _has(text, "Round 1: "), text  # the round ran
+    after = text[next(i for i, line in enumerate(text) if line.startswith("Round 1: ")):]
+    assert not any("It no longer answers" in line for line in after), after
+    assert not _has(text, "cost general skills")
+    assert any("rft1 step" in line and "general questions 60/60" in line for line in after), after
+    assert result["decision"] == "PROMOTE", (result, text)
+
+
+def test_refinement_runs_at_half_the_rate_of_the_first_stage(project):
+    report = {"gpus": [], "ram_gb": 16, "apple_silicon": False}
+    report["recommendation"] = select_tier(report)
+    meta = json.loads((project / "project.json").read_text())
+    plan = make_plan(meta, report, preset="fast")
+    assert plan["stage2"]["lr"] == plan["sft"]["lr"] / 2 == 5e-5
 
 
 def test_a_version_that_lost_them_is_never_chosen_while_one_that_kept_them_exists(trained):

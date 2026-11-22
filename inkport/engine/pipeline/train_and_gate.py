@@ -383,7 +383,9 @@ class Trainer:
             )
         return res
 
-    def sft(self, examples: list[dict], replay_rows: list[dict], baseline: dict, *, stage: str, lr: float, epochs: float, overall: tuple[float, float], resume: bool) -> dict:
+    def sft(self, examples: list[dict], replay_rows: list[dict], baseline: dict, *, stage: str, lr: float, epochs: float, overall: tuple[float, float], resume: bool, start_extra: int = 0, start_lr_mult: float = 1.0) -> dict:
+        """One stage of training. ``start_extra`` and ``start_lr_mult``: the extra rehearsal and the
+        gentler rate an earlier stage of the same run found necessary, to start from (see ``rft``)."""
         b = self.backend
         cfg = self.plan["sft"]
         # Held back from training: with enough of them, as many as the final exam asks (60), so that
@@ -414,11 +416,11 @@ class Trainer:
         # between two versions that pass as many practice questions, the one that kept more wins.
         best_general, spare_general = st.get("best_general", -1), st.get("spare_general", -1)
         patience = st.get("patience", 0)
-        lr_mult = st.get("lr_mult", 1.0)
+        lr_mult = st.get("lr_mult", float(start_lr_mult))
         guard_trips = st.get("guard_trips", 0)
         general_trips = st.get("general_trips", 0)
         general_slowed = st.get("general_slowed", 0)  # how often that also halved the learning rate
-        extra = st.get("extra_rehearsal", 0)  # rehearsal micro-batches added to every step
+        extra = st.get("extra_rehearsal", int(start_extra))  # rehearsal micro-batches added to every step
         rehearsed = 0
         if resume and ckpt.is_dir() and st.get("step"):
             b.load_checkpoint(ckpt)
@@ -546,7 +548,9 @@ class Trainer:
                     # questions (more of them each time this happens), and this version is not one
                     # of those the final choice is made from.
                     general_trips += 1
-                    extra = min(ga, max(1, math.ceil(ga / 2)) * general_trips) if replay_train else 0
+                    was_max = extra >= ga or not replay_train  # rehearsal cannot be raised any further
+                    if not was_max:
+                        extra = min(ga, extra + max(1, math.ceil(ga / 2)))
                     # Moving more gently as well costs nothing once the task is learned. A model
                     # that is still learning it keeps its pace and only rehearses more, until
                     # rehearsal has been raised as far as it goes. (Seen on the customer-replies
@@ -554,11 +558,11 @@ class Trainer:
                     # questions, it ended with 26% of the hidden exam and 56 of 60 general questions
                     # where the original answers 45; a run of the same goal that was not slowed
                     # had reached 56% of the exam with 44 of 60.)
-                    gentler = general_slowed < 2 and (last_dev >= LEARNED or general_trips > 2)
+                    gentler = general_slowed < 2 and (last_dev >= LEARNED or was_max)
                     if gentler:
                         lr_mult *= 0.5
                         general_slowed += 1
-                    events.log(f"It no longer answers {general_lost} of the {len(watch)} general questions it is checked on (more than {general_limit(len(watch)) - 1} is too close to what the final exam refuses): rehearsing them more from here on{', and learning more gently' if gentler else ''}.", "warn")
+                    events.log(f"It no longer answers {general_lost} of the {len(watch)} general questions it is checked on (more than {general_limit(len(watch)) - 1} is too close to what the final exam refuses): {'rehearsal is already as high as it goes' if was_max else 'rehearsing them more from here on'}{', and learning more gently' if gentler else ''}.", "warn")
                     events.stage("sft" if stage == "sft" else "rft", "started", "Rehearsing general skills more while it learns your task")
                     if last_dev > spare + 1e-9 or (abs(last_dev - spare) <= 1e-9 and kept_now > spare_general):
                         spare, spare_general = last_dev, kept_now
@@ -596,7 +600,7 @@ class Trainer:
             events.log("No version of this stage kept its general skills within the limit; the one that learned your task best goes to the final exam.", "warn")
         st.update(step=step, best_dev=best, stopped=stopped, guard_trips=guard_trips, general_trips=general_trips)
         self.state.save()
-        return {"best_dev": best, "steps": step, "total": total, "stopped": stopped, "examples": len(examples), "replay": n_replay, "went_wrong": guard_trips, "lr_mult": lr_mult, "why": st.get("why"), "rehearsed_more": general_trips, "kept_general": kept_general, "general_answered": best_general if watch_general else None, "general_watched": len(watch) if watch_general else None}
+        return {"best_dev": best, "steps": step, "total": total, "stopped": stopped, "examples": len(examples), "replay": n_replay, "went_wrong": guard_trips, "lr_mult": lr_mult, "why": st.get("why"), "rehearsed_more": general_trips, "extra_rehearsal": extra, "kept_general": kept_general, "general_answered": best_general if watch_general else None, "general_watched": len(watch) if watch_general else None}
 
     # ---------------------------------------------------------------- stage 2 --------------
     def rft(self, replay_rows: list[dict], baseline: dict, best_dev: float, placebo: bool = False) -> dict:
@@ -607,6 +611,13 @@ class Trainer:
         history = []
         current = best_dev
         keep_dir = self.run_dir / "best-sft"
+        # A round starts from what the stage before it found necessary to keep general skills
+        # (more rehearsal in every step, a gentler rate). A round is short, often with a single
+        # check at its end: it has no time to find that out again. (Seen on the SQL sample: its
+        # first stage needed more rehearsal; the round after it started without, and answered 15
+        # of the 60 watched general questions at its only check.)
+        carry = self.training_info or {}
+        carry_extra, carry_mult = int(carry.get("extra_rehearsal") or 0), float(carry.get("lr_mult") or 1.0)
         for rnd in range(int(s2["rounds"])):
             if current >= 0.999 or self.over_budget(0.85):
                 break
@@ -639,7 +650,8 @@ class Trainer:
                 break
             b.save_checkpoint(self.run_dir / "pre-rft")
             b.reset_optimizer()
-            res = self.sft(accepted, replay_rows, baseline, stage=f"rft{rnd + 1}{'-placebo' if placebo else ''}", lr=float(s2["lr"]), epochs=1, overall=(o0 + (o1 - o0) * rnd / max(1, s2["rounds"]), o0 + (o1 - o0) * (rnd + 1) / max(1, s2["rounds"])), resume=False)
+            res = self.sft(accepted, replay_rows, baseline, stage=f"rft{rnd + 1}{'-placebo' if placebo else ''}", lr=float(s2["lr"]), epochs=1, overall=(o0 + (o1 - o0) * rnd / max(1, s2["rounds"]), o0 + (o1 - o0) * (rnd + 1) / max(1, s2["rounds"])), resume=False, start_extra=carry_extra, start_lr_mult=carry_mult)
+            carry_extra, carry_mult = int(res.get("extra_rehearsal") or carry_extra), float(res.get("lr_mult") or carry_mult)
             gain = 100 * (res["best_dev"] - current)
             history.append({"round": rnd + 1, "accept_rate": accept_rate, "dev": res["best_dev"], "gain_pts": gain})
             if not res.get("kept_general", True):

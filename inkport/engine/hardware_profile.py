@@ -350,7 +350,11 @@ def make_plan(project: dict, report: dict, preset: str = "standard", overrides: 
             "k": rec["rft_k"],
             "rounds": 2,
             "temperature": 0.8,
-            "lr": 1e-4,
+            # Half the first stage's rate, as it was before that one was halved: a refinement round
+            # starts from a trained model with a fresh optimizer. (At 1e-4 a round of the SQL sample
+            # answered 15 of the 60 watched general questions; at 5e-5 it answered 48, at 2.5e-5
+            # 51, with the same gain on the practice questions each time.)
+            "lr": 5e-5,
             "min_gain_pts": 1.0,
             "placebo": False,
         },
