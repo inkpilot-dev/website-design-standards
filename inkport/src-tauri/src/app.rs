@@ -349,8 +349,12 @@ impl App {
         if let Some(r) = &req.resume_run_id {
             args.extend(["--resume".into(), r.clone()]);
         }
-        args.extend(self.hardware_args(req.preset.as_deref().unwrap_or("standard")));
-        if let Some(o) = &req.overrides {
+        // Test hooks for the automated window tests (scripts/gui_e2e.cjs): the window only offers the
+        // two real run types, which take hours with a real model. Never set for users.
+        let test_preset = std::env::var("INKPORT_TEST_PRESET").ok().filter(|v| !v.trim().is_empty());
+        let test_overrides = std::env::var("INKPORT_TEST_OVERRIDES").ok().and_then(|v| serde_json::from_str::<Value>(&v).ok());
+        args.extend(self.hardware_args(test_preset.as_deref().or(req.preset.as_deref()).unwrap_or("standard")));
+        if let Some(o) = req.overrides.as_ref().or(test_overrides.as_ref()) {
             args.extend(["--overrides".into(), o.to_string()]);
         }
         let sp = self.sup.spawn(JobSpec { kind: JobKind::Train, args, project_id: Some(req.project_id.clone()), env: vec![] })?;

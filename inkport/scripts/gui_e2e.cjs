@@ -1,0 +1,329 @@
+#!/usr/bin/env node
+// Drives the real Inkport window through all five steps with the real engine behind it, the way a
+// person would: click, type, wait, read what is on screen. One script, three ways to reach a window:
+//
+//   --mode=webdriver --driver=http://127.0.0.1:4444 --app=/path/to/inkport      Linux (WebKitWebDriver)
+//   --mode=cdp --cdp=http://127.0.0.1:9222                                      Windows (WebView2 started with
+//                                                                               WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9222)
+//   --mode=preview --url=http://127.0.0.1:1420/?speed=3                         a browser tab with the simulated engine
+//
+//   --out=DIR        screenshots (01-ready.png, ...)
+//   --phase=first    create a project, build the exam, train, use it   (default)
+//   --phase=smoke    the same up to "training is running", then Stop (minutes instead of a full run)
+//   --phase=reopen   after restarting the app: the project is still there and opens on "Use it"
+//   --train-timeout=SECONDS   how long training may take (default 900)
+//   --expect=promote|any      "promote": the run must save a version (default); "any": a verdict is enough
+//
+// Set INKPORT_TEST_PRESET / INKPORT_TEST_OVERRIDES in the app's environment to keep training short.
+// Exit code 0 = every check passed.
+'use strict';
+const fs = require('fs');
+const path = require('path');
+const http = require('http');
+
+const arg = (name, dflt) => { const a = process.argv.find((x) => x.startsWith(`--${name}=`)); return a ? a.slice(name.length + 3) : dflt; };
+const MODE = arg('mode', 'preview');
+const OUT = arg('out', 'gui-e2e');
+const PHASE = arg('phase', 'first');
+const EXPECT = arg('expect', 'promote');
+const TRAIN_TIMEOUT = Number(arg('train-timeout', '900')) * 1000;
+const PROJECT = arg('project', 'Window test');
+fs.mkdirSync(OUT, { recursive: true });
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const results = [];
+const t0 = Date.now();
+const stamp = () => `[${String(Math.round((Date.now() - t0) / 1000)).padStart(4)}s]`;
+const check = (name, ok, detail = '') => { results.push([!!ok, name]); console.log(`${stamp()} ${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? '  — ' + detail : ''}`); return !!ok; };
+const note = (msg) => console.log(`${stamp()}       ${msg}`);
+
+// ---- in-page helpers: everything the test does to the page goes through these ----
+const HELPERS = `
+  const norm = (s) => (s || '').replace(/\\s+/g, ' ').trim();
+  const visible = (el) => !!(el && el.getClientRects().length);
+  const buttons = (scope) => [...document.querySelectorAll((scope || '') + ' button')].filter(visible);
+  const findButton = (text, scope) => buttons(scope).find((b) => norm(b.textContent) === text) || buttons(scope).find((b) => norm(b.textContent).includes(text));
+  const api = {
+    text: () => norm(document.querySelector('main') ? document.querySelector('main').innerText : document.body.innerText),
+    aside: () => norm(document.querySelector('aside') ? document.querySelector('aside').innerText : ''),
+    has: (text, scope) => !!findButton(text, scope),
+    enabled: (text, scope) => { const b = findButton(text, scope); return !!b && !b.disabled; },
+    click: (text, scope) => { const b = findButton(text, scope); if (!b) return 'missing'; if (b.disabled) return 'disabled'; b.scrollIntoView({ block: 'center' }); b.click(); return 'ok'; },
+    fill: (label, value) => {
+      const el = [...document.querySelectorAll('main input, main textarea')].filter(visible).find((i) => i.getAttribute('aria-label') === label || i.placeholder === label) || (label === '' ? [...document.querySelectorAll('main input')].filter(visible)[0] : null);
+      if (!el) return 'missing';
+      const proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+      Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, value);
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      return 'ok';
+    },
+    enter: (label) => {
+      const el = [...document.querySelectorAll('main input')].filter(visible).find((i) => i.getAttribute('aria-label') === label || i.placeholder === label);
+      if (!el) return 'missing';
+      el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+      return 'ok';
+    },
+    scrollTop: () => { const m = document.querySelector('main'); if (m) m.scrollTop = 0; return true; },
+    fonts: () => document.fonts ? [...document.fonts].filter((f) => f.status === 'loaded').map((f) => f.family).filter((v, i, a) => a.indexOf(v) === i).join(',') : '',
+    ua: () => navigator.userAgent,
+  };
+`;
+const call = (expr) => `(function(){ ${HELPERS} return (${expr}); })()`;
+
+// ---- drivers ----
+function request(method, url, body) {
+  return new Promise((resolve, reject) => {
+    const u = new URL(url);
+    const data = body === undefined ? null : Buffer.from(JSON.stringify(body));
+    const req = http.request({ method, hostname: u.hostname, port: u.port, path: u.pathname + u.search, headers: data ? { 'Content-Type': 'application/json; charset=utf-8', 'Content-Length': data.length } : {} }, (res) => {
+      const chunks = [];
+      res.on('data', (c) => chunks.push(c));
+      res.on('end', () => { const text = Buffer.concat(chunks).toString('utf8'); try { resolve(JSON.parse(text)); } catch { reject(new Error(`driver said: ${text.slice(0, 300)}`)); } });
+    });
+    req.on('error', reject);
+    req.setTimeout(120000, () => req.destroy(new Error('driver request timed out')));
+    if (data) req.write(data);
+    req.end();
+  });
+}
+
+async function openWebDriver() {
+  const base = arg('driver', 'http://127.0.0.1:4444');
+  const app = arg('app');
+  if (!app) throw new Error('--app=/path/to/inkport is required in webdriver mode');
+  const caps = { capabilities: { alwaysMatch: { 'webkitgtk:browserOptions': { binary: app, args: [] } } } };
+  const created = await request('POST', `${base}/session`, caps);
+  const id = created.value && created.value.sessionId;
+  if (!id) throw new Error('could not start a session: ' + JSON.stringify(created).slice(0, 400));
+  const s = `${base}/session/${id}`;
+  return {
+    evaluate: async (expr) => { const r = await request('POST', `${s}/execute/sync`, { script: `return ${call(expr)};`, args: [] }); if (r.value && r.value.error) throw new Error(r.value.message || r.value.error); return r.value; },
+    screenshot: async (file) => { const r = await request('GET', `${s}/screenshot`); if (typeof r.value === 'string') fs.writeFileSync(file, Buffer.from(r.value, 'base64')); },
+    close: async () => { await request('DELETE', s).catch(() => {}); },
+  };
+}
+
+async function openPlaywright() {
+  const { chromium } = require(MODE === 'cdp' ? arg('playwright', 'playwright-core') : 'playwright');
+  let browser, page;
+  if (MODE === 'cdp') {
+    const endpoint = arg('cdp', 'http://127.0.0.1:9222');
+    for (let i = 0; ; i++) {
+      try { browser = await chromium.connectOverCDP(endpoint); break; } catch (e) { if (i > 60) throw new Error(`no window to attach to at ${endpoint}: ${e.message.split('\n')[0]}`); await sleep(1000); }
+    }
+    for (let i = 0; i < 60 && !page; i++) { page = browser.contexts().flatMap((c) => c.pages()).find((p) => !p.url().startsWith('devtools:')); if (!page) await sleep(500); }
+    if (!page) throw new Error('the app has no page to drive');
+    note(`attached to ${page.url()}`);
+  } else {
+    browser = await chromium.launch();
+    page = await (await browser.newContext({ viewport: { width: 1240, height: 860 } })).newPage();
+    await page.goto(arg('url', 'http://127.0.0.1:1420/?speed=3'));
+  }
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
+  return {
+    evaluate: (expr) => page.evaluate(call(expr)),
+    screenshot: (file) => page.screenshot({ path: file }).catch((e) => note(`screenshot failed: ${e.message.split('\n')[0]}`)),
+    close: async () => { if (MODE === 'cdp') await browser.close().catch(() => {}); else await browser.close(); },
+    errors,
+  };
+}
+
+(async () => {
+  const d = MODE === 'webdriver' ? await openWebDriver() : await openPlaywright();
+  const q = JSON.stringify;
+  const text = () => d.evaluate('api.text()');
+  const shot = async (name) => { await d.evaluate('api.scrollTop()'); await sleep(250); await d.screenshot(path.join(OUT, name + '.png')); };
+  const waitFor = async (what, fn, timeout = 30000, every = 500) => {
+    const end = Date.now() + timeout;
+    let last;
+    for (;;) {
+      try { last = await fn(); if (last) return last; } catch (e) { last = `error: ${e.message}`; }
+      if (Date.now() > end) throw new Error(`timed out waiting for: ${what}`);
+      await sleep(every);
+    }
+  };
+  const click = async (label, scope) => {
+    const r = await d.evaluate(`api.click(${q(label)}${scope ? ', ' + q(scope) : ''})`);
+    if (r !== 'ok') throw new Error(`button "${label}" is ${r}`);
+    await sleep(300);
+  };
+  const nav = (label) => click(label, 'aside nav');
+  const waitText = (needle, timeout) => waitFor(`text "${needle}"`, async () => (await text()).includes(needle), timeout);
+
+  try {
+    // ---------------------------------------------------------------- step 1: your computer
+    await waitFor('the start-up check to finish', () => d.evaluate('api.has("Continue", "main") || api.text().includes("Needs repair") || api.text().includes("could not finish")'), 600000, 1000);
+    const ready = await text();
+    await shot('01-ready');
+    note(`browser engine: ${await d.evaluate('api.ua()')}`);
+    note(`fonts loaded: ${await d.evaluate('api.fonts()')}`);
+    if (!check('start-up check passes and the window shows the ready screen', ready.includes('Inkport is ready') && ready.includes('files verified'), ready.slice(0, 200))) throw new Error('the app did not become ready');
+    check('the ready screen names the included model and where things run', ready.includes('Included model') && ready.includes('Training runs on') && ready.includes('Answers run on'));
+    check('the bundled typeface is loaded', (await d.evaluate('api.fonts()')).includes('Inter'));
+    await click('Continue', 'main');
+
+    if (PHASE === 'reopen') {
+      // ------------------------------------------------------------ after a restart
+      await waitText('What do you want your AI to master?');
+      const list = await text();
+      await shot('20-reopened-list');
+      check('after a restart the project is listed as trained', list.includes('Continue a project') && list.includes(PROJECT) && /trained, version v\d+/.test(list), list.slice(0, 260));
+      await click('Open', 'main');
+      await waitText('Use your AI anywhere on this computer');
+      const use = await text();
+      check('opening it lands on "Use it" with the API stopped and ready to start', use.includes('Stopped') && (await d.evaluate('api.enabled("Start local API", "main")')));
+      await nav('Train & prove');
+      await sleep(500);
+      const tr = await text();
+      await shot('21-reopened-train');
+      check('"Train & prove" shows the version in use and offers a newer run', /Version v\d+ is in use/.test(tr) && tr.includes('Train a newer version') && tr.includes('Ask both models yourself'), tr.slice(0, 260));
+      await nav('Data & rules');
+      await waitFor('the saved exam to be restored', async () => (await text()).includes('Your practice exam'), 60000);
+      const data = await text();
+      await shot('22-reopened-data');
+      check('"Data & rules" restores the files, the rule and the exam', data.includes('expenses.csv') && data.includes('amount must be positive') && (await d.evaluate('api.enabled("Continue to training", "main")')), data.slice(0, 200));
+      await nav('Use it');
+      await click('Start local API', 'main');
+      await waitFor('the local API to start', async () => (await text()).includes('Running · version'), 300000, 1000);
+      await click('Open test chat', 'main');
+      await d.evaluate(`api.fill("Message", "Paid $19 at Costco for printer ink")`);
+      await d.evaluate('api.enter("Message")');
+      await waitFor('an answer in the test chat', async () => { const t = await text(); return /\{[^}]*\}/.test(t.split('Type a message')[0].split('Try it here')[1] || '') || t.includes('The model did not answer'); }, 300000, 1000);
+      const chat = await text();
+      await shot('23-reopened-chat');
+      check('the trained model answers again after the restart', !chat.includes('The model did not answer'), chat.slice(chat.indexOf('Try it here'), chat.indexOf('Try it here') + 200));
+      await click('Stop local API', 'main');
+      await waitFor('the local API to stop', async () => (await text()).includes('Stopped'), 60000);
+    } else {
+      // ------------------------------------------------------------ step 2: choose a goal
+      await waitText('What do you want your AI to master?');
+      await shot('02-goal');
+      await click('Small Business & Finance Rules', 'main');
+      await d.evaluate(`api.fill("", ${q(PROJECT)})`);
+      await click('Create project', 'main');
+      await waitText('Your material and your rules');
+      check('a project can be created', true);
+      check('a new project has training and "Use it" locked', !(await d.evaluate('api.enabled("Train & prove", "aside nav")')) && !(await d.evaluate('api.enabled("Use it", "aside nav")')));
+
+      // ------------------------------------------------------------ step 3: data & rules
+      await click('Try the sample data', 'main');
+      await click('amount must be positive', 'main');
+      await waitFor('the rule to be checked', () => d.evaluate('api.enabled("Build practice exam", "main")'), 120000);
+      await click('Build practice exam', 'main');
+      await waitFor('the practice exam', async () => { const t = await text(); return t.includes('Your practice exam') || t.includes('could not be built'); }, 300000, 1000);
+      const exam = await text();
+      await shot('03-exam');
+      check('the practice exam is built from the bundled samples', exam.includes('hidden final-exam questions') && exam.includes('No final-exam question appears in training') && !exam.includes('could not be built'), exam.slice(exam.indexOf('Your practice exam'), exam.indexOf('Your practice exam') + 220));
+      await waitFor('sample questions', async () => (await text()).includes('from expenses.csv'), 120000);
+      check('sample practice questions are shown', true);
+      await click('Continue to training', 'main');
+
+      // ------------------------------------------------------------ step 4: train & prove
+      await waitText('What happens');
+      await shot('04-train-idle');
+      await click('Quick run', 'main');
+      await waitFor('training to start', () => d.evaluate('api.has("Stop training", "main")'), 120000);
+      check('training starts and shows a Stop button', true);
+      await waitFor('first progress', async () => /\d+%/.test(await text()), 300000, 1000);
+      // Leave the step and come back while it runs.
+      await nav('Data & rules');
+      await sleep(800);
+      const locked = await text();
+      check('while training, "Data & rules" explains that the exam cannot be rebuilt', locked.includes('Training is running for this project'));
+      check('the sidebar shows training progress from another step', /Training \d+%/.test(await d.evaluate('api.aside()')), await d.evaluate('api.aside()'));
+      await nav('Train & prove');
+      await sleep(800);
+      await shot('05-training');
+      const still = (await d.evaluate('api.has("Stop training", "main")')) || /saved|Not better yet|Need more examples/.test(await text());
+      check('coming back to "Train & prove" still shows the run', still);
+      if (PHASE === 'smoke') {
+        await click('Stop training', 'main');
+        await waitFor('the run to stop', async () => (await text()).includes('Training was stopped'), 180000, 1000);
+        const stoppedEarly = await text();
+        await shot('06-stopped');
+        check('Stop ends the run with a plain note and the start cards return', stoppedEarly.includes('Nothing was saved from that run') && (await d.evaluate('api.enabled("Quick run", "main")')) && !stoppedEarly.includes('Finished'));
+        await nav('Choose a goal');
+        await waitText('Continue a project');
+        const projects = await text();
+        check('the project appears in the list with its state', projects.includes(PROJECT) && projects.includes('practice exam built'));
+        if (d.errors) check('no errors in the page console', d.errors.length === 0, d.errors.slice(0, 3).join(' | '));
+        await d.close();
+        const bad = results.filter((r) => !r[0]);
+        console.log(`\n${results.length - bad.length}/${results.length} window checks passed (${PHASE}, ${MODE})`);
+        process.exit(bad.length ? 1 : 0);
+      }
+      note('waiting for the final exam…');
+      await waitFor('a verdict', async () => { const t = await text(); return /new version v\d+ saved|Not better yet|Need more examples|Training did not finish|ran out of memory|Training was stopped/.test(t) && !(await d.evaluate('api.has("Stop training", "main")')); }, TRAIN_TIMEOUT, 2000);
+      const verdict = await text();
+      await shot('06-verdict');
+      const promoted = /new version v\d+ saved/.test(verdict);
+      note(verdict.slice(Math.max(0, verdict.search(/Better:|Not better yet|Need more examples|Training did not finish|ran out of memory/)), Math.max(0, verdict.search(/Better:|Not better yet|Need more examples|Training did not finish|ran out of memory/)) + 330));
+      check('training ends with a verdict (not an error)', /new version v\d+ saved|Not better yet|Need more examples/.test(verdict));
+      if (EXPECT === 'promote') check('the trained model beat the original and a version was saved', promoted);
+      if (promoted) {
+        check('all six steps of the run are ticked and it reads "Finished"', verdict.includes('Finished') && verdict.includes('100%'));
+        await waitFor('"Use it" to unlock', () => d.evaluate('api.enabled("Use it", "aside nav")'), 30000);
+        // Ask both models (a separate short job).
+        await d.evaluate(`api.fill("Question for both models", "Paid $64 at Shell for the delivery van")`);
+        await click('Compare', 'main');
+        await waitFor('the comparison', async () => { const t = await text(); return (t.split('Ask both models yourself')[1] || '').includes('Original') || t.includes('could not run'); }, 600000, 1000);
+        const cmp = await text();
+        await shot('07-compare');
+        check('"Ask both models yourself" answers with both models', !cmp.includes('could not run') && (cmp.split('Ask both models yourself')[1] || '').includes('Yours'));
+
+        // ---------------------------------------------------------- step 5: use it
+        await click('Use it in your apps', 'main');
+        await waitText('Use your AI anywhere on this computer');
+        await click('Start local API', 'main');
+        await waitFor('the local API to start', async () => { const t = await text(); return t.includes('Running · version') || t.includes('could not be started'); }, 300000, 1000);
+        const api1 = await text();
+        await shot('08-api');
+        check('the local API starts and shows its address, model name and a hidden key', api1.includes('Running · version v') && /http:\/\/127\.0\.0\.1:\d+\/v1/.test(api1) && api1.includes('inkport/') && api1.includes('ik_•'), api1.slice(0, 260));
+        note(api1.slice(api1.indexOf('Answering with'), api1.indexOf('Answering with') + 120));
+        await click('Open test chat', 'main');
+        await d.evaluate(`api.fill("Message", "Paid $58 at Shell for the delivery van")`);
+        await d.evaluate('api.enter("Message")');
+        await waitFor('an answer in the test chat', async () => { const t = await text(); const area = (t.split('Try it here')[1] || '').split('Type a message')[0]; return /\{[^}]*\}/.test(area) || t.includes('The model did not answer') || (area.includes('for the delivery van') && !area.includes('thinking') && area.replace('Paid $58 at Shell for the delivery van', '').replace(/Send a message.*?use\./, '').trim().length > 3); }, 300000, 1000);
+        const chat = await text();
+        await shot('09-chat');
+        check('the test chat gets an answer from the trained model', !chat.includes('The model did not answer'), (chat.split('Try it here')[1] || '').slice(0, 220));
+        // Leave and return: the API must still be shown as running.
+        await nav('Train & prove');
+        await sleep(600);
+        await nav('Use it');
+        await sleep(600);
+        check('after leaving and returning, "Use it" still shows the running API', (await text()).includes('Running · version v') && (await d.evaluate('api.has("Stop local API", "main")')));
+        await click('Stop local API', 'main');
+        await waitFor('the local API to stop', async () => (await text()).includes('Stopped'), 60000);
+        check('the local API stops', true);
+      }
+      // ---------------------------------------------------------- stop a second run
+      await nav('Train & prove');
+      await sleep(500);
+      await click('Best results', 'main');
+      await waitFor('the second run to start', () => d.evaluate('api.has("Stop training", "main")'), 120000);
+      await sleep(4000);
+      await click('Stop training', 'main');
+      await waitFor('the run to stop', async () => (await text()).includes('Training was stopped'), 120000, 1000);
+      const stopped = await text();
+      await shot('10-stopped');
+      check('Stop ends the run with a plain note and the start cards return', stopped.includes('Nothing was saved from that run') && (await d.evaluate('api.enabled("Quick run", "main")')) && !stopped.includes('Finished'));
+      // ---------------------------------------------------------- the project list
+      await nav('Choose a goal');
+      await waitText('Continue a project');
+      const list = await text();
+      await shot('11-projects');
+      check('the project appears in the list with its state', list.includes(PROJECT) && (promoted ? /trained, version v\d+/.test(list) : list.includes('practice exam built')));
+    }
+    if (d.errors) check('no errors in the page console', d.errors.length === 0, d.errors.slice(0, 3).join(' | '));
+  } catch (e) {
+    check(`run completed`, false, e.message);
+    try { await d.screenshot(path.join(OUT, '99-failure.png')); note('on screen: ' + (await d.evaluate('api.text()')).slice(0, 700)); } catch { /* the window is gone */ }
+  }
+  await d.close();
+  const failed = results.filter((r) => !r[0]);
+  console.log(`\n${results.length - failed.length}/${results.length} window checks passed (${PHASE}, ${MODE})`);
+  process.exit(failed.length ? 1 : 0);
+})().catch((e) => { console.log('could not run the window test: ' + e.message); process.exit(2); });

@@ -266,6 +266,46 @@ On Linux it also masks the host's python/pip/node/cargo/uv/cmake/gcc/git. It the
 5. A full re-verification.
 6. That nothing was written inside the installation.
 
+### Window check (the real window, used like a person would)
+
+The clean-machine check drives the engine through the command line. The window check opens the
+real app window and uses it, with the real engine behind it: create a project, build the exam from
+the bundled samples, start training, leave the step and come back, read the verdict, start the
+local API, chat with the trained model, stop a second run; then it closes the app, opens it again
+and checks that the project, its exam and its trained version are still there.
+
+```bash
+# Linux: needs Xvfb, WebKitWebDriver (package webkit2gtk-driver), dbus-run-session and node
+scripts/window_check.sh build/installers/linux-x86_64-cpu/Inkport_0.1.0_amd64.AppImage
+WINDOW_PHASES="first reopen" scripts/window_check.sh ...     # a full training run and a restart
+```
+
+```powershell
+# Windows: needs node; drives WebView2 through its remote debugging port
+pwsh scripts\window_check.ps1 -Installer .\Inkport_0.1.0_x64-setup.exe
+```
+
+On Windows it also installs into, and keeps its data in, folders with spaces and non-Latin
+characters, starts Inkport a second time (which must not open a second copy), ends a serving
+process abruptly (no helper may be left running), and re-verifies the installation afterwards.
+Both scripts run `scripts/gui_e2e.cjs`, which also works against the browser preview
+(`--mode=preview`). Training in the window offers only the two real run types, which take hours
+with a real model; for tests, `INKPORT_TEST_PRESET` and `INKPORT_TEST_OVERRIDES` (read by the
+supervisor when a run starts) shorten it. macOS has no way to drive its webview from outside, so
+CI only checks there that the window opens, runs its start-up check and stays open.
+
+### Interface flow tests
+
+```bash
+pnpm dev --host 127.0.0.1 &
+node scripts/ui_flows_test.cjs      # needs the playwright package with a Chromium
+```
+
+33 checks against the browser preview, whose simulated engine follows the real backend's rules:
+leaving a step while training runs, Stop, a crash, a rejected run, too little data, an adapter
+from an unknown publisher, reopening a trained project, a second project. Other outcomes can be
+reviewed by hand with `?outcome=reject`, `?outcome=fail`, `?outcome=few` and `?untrusted=1`.
+
 ### Verify everything end to end
 
 On Linux or macOS:

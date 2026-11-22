@@ -1,5 +1,6 @@
 # Builds the Inkport one-and-done installers (real Qwen3 1.7B starter included), proves each one
-# works offline with scripts/clean_machine_check.*, and uploads them as downloadable artifacts.
+# works offline with scripts/clean_machine_check.*, opens the real window and uses it
+# (scripts/window_check.*), and uploads the installers as downloadable artifacts.
 name: Inkport installers
 
 on:
@@ -10,6 +11,10 @@ on:
         type: choice
         default: all
         options: [all, windows, macos, linux]
+      long_checks:
+        description: Run the long command-line training checks too (about 40 minutes more per platform)
+        type: boolean
+        default: true
   push:
     branches: [claude/busy-goodall-wyjcg6]
     paths: ["inkport/**", ".github/workflows/inkport-installers.yml"]
@@ -38,10 +43,40 @@ jobs:
         with: { version: 10 }
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: pnpm, cache-dependency-path: inkport/pnpm-lock.yaml }
+      - name: Supervisor tests
+        continue-on-error: true   # reported, but a platform-specific test must not hide whether the installer works
+        working-directory: inkport/src-tauri
+        run: cargo test --no-default-features
       - name: Build installer
         id: build
         run: scripts/build_all_in_one.sh
+      - name: Open the app window (it must start, check itself and stay open)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          APP="$(ls -d target/aarch64-apple-darwin/release/bundle/macos/*.app | head -1)"
+          export INKPORT_HOME="$RUNNER_TEMP/Inkport window é 日本語/Inkport"
+          mkdir -p "$INKPORT_HOME" window-check
+          "$APP/Contents/MacOS/inkport" > window-check/app.log 2>&1 &
+          PID=$!
+          # The window's own code asks for the start-up check and the hardware report; their files
+          # appearing proves the page loaded, ran, and reached the engine.
+          for i in $(seq 1 120); do
+            [ -f "$INKPORT_HOME/state/bundle-verified.json" ] && [ -f "$INKPORT_HOME/hardware.json" ] && break
+            kill -0 $PID 2>/dev/null || { echo "the app exited"; cat window-check/app.log; exit 1; }
+            sleep 2
+          done
+          sleep 8
+          screencapture -x window-check/macos-window.png || echo "no screenshot (screen recording is not permitted on this runner)"
+          ls -la "$INKPORT_HOME" "$INKPORT_HOME/state" || true
+          [ -f "$INKPORT_HOME/state/bundle-verified.json" ] || { echo "FAIL: the window never ran its start-up check"; cat window-check/app.log; kill $PID; exit 1; }
+          [ -f "$INKPORT_HOME/hardware.json" ] || { echo "FAIL: the window never asked for the hardware report"; kill $PID; exit 1; }
+          kill -0 $PID || { echo "FAIL: the app did not stay open"; cat window-check/app.log; exit 1; }
+          echo "PASS the window opened, ran its start-up check from a folder with spaces and non-Latin characters, and stayed open"
+          kill $PID; sleep 3
+          ! pgrep -f "llama-server|python.* -m engine" || { echo "FAIL: helper processes left behind"; exit 1; }
+          echo "PASS closing the app left no helper process behind"
       - name: Clean-machine check (offline)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && (github.event_name == 'push' || inputs.long_checks) }}
         run: scripts/clean_machine_check.sh build/installers/macos-aarch64-mlx/*.dmg
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}   # a failed check turns the job red but keeps the download
@@ -52,6 +87,13 @@ jobs:
             inkport/build/installers/macos-aarch64-mlx/SHA256SUMS
           compression-level: 0
           retention-days: 30
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: Inkport-macOS-window
+          path: inkport/window-check/
+          if-no-files-found: ignore
+          retention-days: 14
 
   windows:
     name: Windows (x64)
@@ -79,6 +121,10 @@ jobs:
         with: { version: 10 }
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: pnpm, cache-dependency-path: inkport/pnpm-lock.yaml }
+      - name: Supervisor tests
+        continue-on-error: true   # reported, but a platform-specific test must not hide whether the installer works
+        working-directory: inkport/src-tauri
+        run: cargo test --no-default-features
       - name: Vulkan SDK (build machine only; lets answers use any graphics card)
         continue-on-error: true   # without it the build falls back to processor-only answers
         shell: pwsh
@@ -110,7 +156,7 @@ jobs:
             ./scripts/clean_machine_check.ps1 -Installer $f.FullName -Quick
             if ($LASTEXITCODE -ne 0) { exit 1 }
           }
-      # Uploaded as soon as the installer exists, so the download never waits for the long training test.
+      # Uploaded as soon as the installer exists, so the download never waits for the long tests.
       - name: Upload the installer (.exe)
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         uses: actions/upload-artifact@v4
@@ -129,7 +175,25 @@ jobs:
           path: inkport/build/installers/windows-x86_64-cpu/*.zip
           compression-level: 0
           retention-days: 30
-      - name: Full clean-machine check (adds training + the hidden-test gate on the processor)
+      - name: Window check (the real window - project, exam, training, verdict, local API, chat, restart)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        shell: pwsh
+        timeout-minutes: 120
+        run: |
+          $f = Get-ChildItem build/installers/windows-x86_64-cpu/*.exe | Select-Object -First 1
+          if (-not $f) { throw "there is no .exe installer to open" }
+          ./scripts/window_check.ps1 -Installer $f.FullName -Out window-check
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+      - name: Upload the window screenshots
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: Inkport-Windows-window
+          path: inkport/window-check/
+          if-no-files-found: ignore
+          retention-days: 14
+      - name: Full clean-machine check (adds training + the hidden-test gate through the command line)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && (github.event_name == 'push' || inputs.long_checks) }}
         shell: pwsh
         timeout-minutes: 100
         run: |
@@ -154,10 +218,10 @@ jobs:
         working-directory: .
         run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL && df -h /
       - uses: actions/checkout@v4
-      - name: System packages (build machine only)
+      - name: System packages (build and test machine only)
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf libvulkan-dev zstd file xz-utils
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf libvulkan-dev zstd file xz-utils xvfb webkit2gtk-driver dbus
       - name: Vulkan SDK (glslc + headers, build machine only)
         working-directory: .
         run: |
@@ -172,10 +236,29 @@ jobs:
         with: { version: 10 }
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: pnpm, cache-dependency-path: inkport/pnpm-lock.yaml }
+      - name: Unit tests - engine, supervisor, interface types (fail in minutes instead of after the build)
+        run: |
+          uv run pytest tests/python -q --ignore=tests/python/test_e2e_engine.py
+          (cd src-tauri && cargo test --no-default-features)
+          pnpm install --frozen-lockfile
+          pnpm exec tsc --noEmit
+      - name: Interface flow tests (simulated engine - stop, crash, rejected run, too little data, reopen, ...)
+        run: |
+          npm install --no-audit --no-fund --silent --prefix "$RUNNER_TEMP/pw" playwright@1
+          NODE_PATH="$RUNNER_TEMP/pw/node_modules" "$RUNNER_TEMP/pw/node_modules/.bin/playwright" install --with-deps chromium
+          (pnpm dev --host 127.0.0.1 > "$RUNNER_TEMP/vite.log" 2>&1 &)
+          for i in $(seq 1 60); do curl -s -o /dev/null http://127.0.0.1:1420/ && break; sleep 1; done
+          NODE_PATH="$RUNNER_TEMP/pw/node_modules" node scripts/ui_flows_test.cjs ui-flows
+          pkill -f "vite" || true
       - name: Build installers
         id: build
         run: scripts/build_all_in_one.sh
+      - name: Window check (the real window from the AppImage - project, exam, start and stop a run)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        timeout-minutes: 30
+        run: scripts/window_check.sh build/installers/linux-x86_64-cpu/*.AppImage window-check
       - name: Clean-machine check (offline)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && (github.event_name == 'push' || inputs.long_checks) }}
         run: scripts/clean_machine_check.sh build/installers/linux-x86_64-cpu/*.AppImage
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}   # a failed check turns the job red but keeps the download
@@ -188,3 +271,12 @@ jobs:
             inkport/build/installers/linux-x86_64-cpu/SHA256SUMS
           compression-level: 0
           retention-days: 30
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: Inkport-Linux-window
+          path: |
+            inkport/window-check/
+            inkport/ui-flows/
+          if-no-files-found: ignore
+          retention-days: 14
