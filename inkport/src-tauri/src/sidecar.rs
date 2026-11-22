@@ -220,10 +220,10 @@ impl Supervisor {
                 break false;
             }
             tokio::select! {
-                line = next_line_lossy(&mut out_r, &mut out_buf), if stdout_open => match line {
+                line = next_line_lossy(&mut out_r, &mut out_buf, false, MAX_EVENT_BYTES), if stdout_open => match line {
                     Ok(Some(line)) => {
                         last = Instant::now();
-                        let trimmed = line.trim();
+                        let trimmed = line.text.trim();
                         if trimmed.is_empty() { continue; }
                         match serde_json::from_str::<Value>(trimmed) {
                             Ok(v) => {
@@ -239,14 +239,19 @@ impl Supervisor {
                                 }
                                 self.forward(spec, job_id, v);
                             }
-                            Err(_) => self.sink.emit("training://log", &json!({"type":"log","level":"debug","message":trimmed,"job_id":job_id})),
+                            // Not an event: something printed straight to the output. Keep it short.
+                            Err(_) => self.sink.emit("training://log", &json!({"type":"log","level":"debug","message":clip(trimmed, 2000),"job_id":job_id})),
                         }
                     }
                     _ => stdout_open = false,
                 },
-                line = next_line_lossy(&mut err_r, &mut err_buf), if stderr_open => match line {
+                line = next_line_lossy(&mut err_r, &mut err_buf, true, MAX_TEXT_LINE_BYTES), if stderr_open => match line {
                     Ok(Some(line)) => {
                         last = Instant::now();
+                        // A progress bar redrawing itself, or the blank between "\r" and "\n": the
+                        // engine is alive (noted above), but there is nothing to keep or show.
+                        if line.redrawn || line.text.trim().is_empty() { continue; }
+                        let line = clip(&line.text, 2000);
                         if stderr_tail.len() >= 40 { stderr_tail.remove(0); }
                         stderr_tail.push(line.clone());
                         if stderr_window.elapsed() > Duration::from_secs(1) { stderr_window = Instant::now(); stderr_budget = 0; }
@@ -391,16 +396,139 @@ fn crash_report(kind: JobKind, status: Option<std::process::ExitStatus>, stderr_
         retryable: true,
     }
 }
-/// Next line from a child pipe, decoded leniently (invalid UTF-8 becomes U+FFFD). Cancel-safe:
-/// bytes read before a `select!` cancellation stay in `buf` and are continued by the next call.
-async fn next_line_lossy<R: tokio::io::AsyncBufRead + Unpin>(reader: &mut R, buf: &mut Vec<u8>) -> std::io::Result<Option<String>> {
-    use tokio::io::AsyncBufReadExt;
-    let n = reader.read_until(b'\n', buf).await?;
-    if n == 0 && buf.is_empty() {
-        return Ok(None);
+/// At most `max` characters of a line of free text (with a mark where it was cut).
+fn clip(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_string();
     }
-    let line = String::from_utf8_lossy(buf).trim_end_matches(['\r', '\n']).to_string();
-    buf.clear();
-    Ok(Some(line))
+    let mut out: String = text.chars().take(max).collect();
+    out.push_str(" […]");
+    out
 }
 
+/// The longest protocol line (one JSON event) and the longest line of free text that is kept.
+const MAX_EVENT_BYTES: usize = 8 << 20;
+const MAX_TEXT_LINE_BYTES: usize = 16 << 10;
+
+/// One line of a child's output. `redrawn` marks text that ended in a carriage return only: a
+/// progress bar redrawing itself, which a terminal would overwrite with the next one.
+struct Line {
+    text: String,
+    redrawn: bool,
+}
+
+/// Next line from a child pipe, decoded leniently (invalid UTF-8 becomes U+FFFD). Cancel-safe:
+/// bytes read before a `select!` cancellation stay in `buf` and are continued by the next call.
+///
+/// Libraries draw progress bars by rewriting one line with carriage returns, for hours, without
+/// ever ending it. Read up to a newline only, that "line" grows for the whole run: in memory
+/// here, and then as one enormous message to the window. With `split_cr` a carriage return ends
+/// a line too, and no line is allowed to grow beyond `max` bytes (the rest follows as the next).
+async fn next_line_lossy<R: tokio::io::AsyncBufRead + Unpin>(reader: &mut R, buf: &mut Vec<u8>, split_cr: bool, max: usize) -> std::io::Result<Option<Line>> {
+    use tokio::io::AsyncBufReadExt;
+    let mut redrawn = false;
+    loop {
+        let available = reader.fill_buf().await?;
+        if split_cr && buf.last() == Some(&b'\r') {
+            // What follows a carriage return says what the line was: "\r\n" is an ordinary line
+            // end (Windows), the end of the stream ends the last line, anything else redraws it.
+            let (newline, more) = (available.first() == Some(&b'\n'), !available.is_empty());
+            if newline {
+                reader.consume(1);
+            }
+            redrawn = more && !newline;
+            break;
+        }
+        if available.is_empty() {
+            if buf.is_empty() {
+                return Ok(None);
+            }
+            break; // end of the stream: what is left is the last line
+        }
+        match available.iter().position(|&b| b == b'\n' || (split_cr && b == b'\r')) {
+            Some(i) if available[i] == b'\n' => {
+                buf.extend_from_slice(&available[..i]);
+                reader.consume(i + 1);
+                break;
+            }
+            Some(i) => {
+                buf.extend_from_slice(&available[..=i]); // keep the "\r": the next byte decides
+                reader.consume(i + 1);
+            }
+            None => {
+                let n = available.len();
+                buf.extend_from_slice(available);
+                reader.consume(n);
+                if buf.len() >= max {
+                    break;
+                }
+            }
+        }
+    }
+    let text = String::from_utf8_lossy(buf).trim_end_matches(['\r', '\n']).to_string();
+    buf.clear();
+    Ok(Some(Line { text, redrawn }))
+}
+
+#[cfg(test)]
+mod line_tests {
+    use super::*;
+
+    async fn lines(input: &[u8], split_cr: bool, max: usize, chunk: usize) -> Vec<(String, bool)> {
+        // A reader that hands the bytes over in small pieces, as a pipe does.
+        let (mut tx, rx) = tokio::io::duplex(64);
+        let data = input.to_vec();
+        let writer = tokio::spawn(async move {
+            use tokio::io::AsyncWriteExt;
+            for piece in data.chunks(chunk.max(1)) {
+                tx.write_all(piece).await.unwrap();
+                tx.flush().await.unwrap();
+                tokio::task::yield_now().await;
+            }
+        });
+        let mut reader = BufReader::with_capacity(8, rx);
+        let mut buf = Vec::new();
+        let mut out = vec![];
+        while let Some(line) = next_line_lossy(&mut reader, &mut buf, split_cr, max).await.unwrap() {
+            out.push((line.text, line.redrawn));
+        }
+        writer.await.unwrap();
+        out
+    }
+
+    #[tokio::test]
+    async fn progress_bars_are_separate_short_lived_lines() {
+        let input = b"loading\n\r 10%|#   |\r 50%|##  |\r100%|####|\ndone\n";
+        for chunk in [1, 2, 3, 5, 64] {
+            let got = lines(input, true, 1024, chunk).await;
+            let kept: Vec<&str> = got.iter().filter(|(t, redrawn)| !redrawn && !t.trim().is_empty()).map(|(t, _)| t.as_str()).collect();
+            assert_eq!(kept, vec!["loading", "100%|####|", "done"], "chunk size {chunk}: {got:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn windows_line_endings_are_ordinary_lines_however_the_bytes_arrive() {
+        for chunk in [1, 2, 3, 4, 7, 64] {
+            let got = lines(b"first\r\nsecond\r\nlast without an end", true, 1024, chunk).await;
+            assert_eq!(got, vec![("first".to_string(), false), ("second".to_string(), false), ("last without an end".to_string(), false)], "chunk size {chunk}");
+        }
+    }
+
+    #[tokio::test]
+    async fn an_endless_line_is_cut_into_pieces_instead_of_growing() {
+        let input = vec![b'x'; 10_000];
+        let got = lines(&input, true, 1000, 64).await;
+        assert!(got.len() >= 9 && got.iter().all(|(t, _)| t.len() <= 1100), "{} pieces", got.len());
+        assert_eq!(got.iter().map(|(t, _)| t.len()).sum::<usize>(), 10_000);
+    }
+
+    #[tokio::test]
+    async fn events_keep_carriage_returns_and_bad_bytes_do_not_stop_reading() {
+        let got = lines(b"{\"a\":\"x\\ry\"}\n\xff\xfe oops\n{\"b\":1}\n", false, 1 << 20, 3).await;
+        assert_eq!(got.len(), 3);
+        assert_eq!(got[0].0, "{\"a\":\"x\\ry\"}");
+        assert!(got[1].0.ends_with("oops") && got[2].0 == "{\"b\":1}");
+        assert_eq!(clip("abcdef", 3), "abc […]");
+        assert_eq!(clip("abc", 3), "abc");
+    }
+}
