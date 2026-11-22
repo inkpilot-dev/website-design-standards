@@ -205,3 +205,15 @@ def test_column_names_with_digits_or_symbols():
     assert compile_rule('"Amount ($)" must be positive').expr == "number(output.amount) > 0"
     r = compile_rule("net total must be positive")
     assert evaluate(r.expr, {"Net Total ($)": 3}, "") and not evaluate(r.expr, {"Net-Total": -3}, "")
+
+
+def test_every_rule_shown_in_the_readme_is_understood():
+    import re
+    from pathlib import Path
+
+    readme = (Path(__file__).resolve().parents[2] / "README.md").read_text(encoding="utf-8")
+    section = readme[readme.index("## Writing rules") : readme.index("## Setup")]
+    shown = [r for line in section.splitlines() if line.startswith("| ") for r in re.findall(r"`([^`]+)`", line)]
+    shown += re.findall(r"`(expr: [^`]+)`", section)
+    assert len(shown) >= 20
+    assert [r for r in shown if not compile_rule(r).ok] == []

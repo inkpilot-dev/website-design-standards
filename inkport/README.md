@@ -118,6 +118,32 @@ processor (roughly 20-40 minutes for a short run on 200 examples, about 9 GB of 
 use any Vulkan-capable graphics card and fall back to the processor on their own. Set
 `INKPORT_ANSWERS_ON_CPU=1` to keep answers off the graphics card.
 
+## Writing rules
+
+Rules are optional checks that every answer must pass. They are written as plain sentences, one
+check per rule, and each goal suggests a few that fit its sample data.
+
+| You want | Write |
+|---|---|
+| A value from a fixed list | `category must be one of fuel, meals, software` · `status must be open or closed` |
+| A number within limits | `amount must be positive` · `amount must be between 1 and 500` · `quantity must be a whole number` · `amount > 0` |
+| A filled-in value | `vendor is required` · `notes must not be empty` |
+| Arithmetic between columns | `total must equal subtotal plus tax` · `discount must be less than price` · `tax must equal 10% of subtotal` |
+| A rule that depends on something | `if category is travel then amount must be under 500` · `amount must be positive unless category is refund` · `if the description mentions Uber then category must be travel` |
+| Words in the answer | `must mention "thank you"` · `must not mention refunds or discounts` · `must start with SELECT` |
+| Length | `no more than 50 words` · `at most 280 characters` · `zip must be 5 digits` |
+
+Column names are matched to your own headers whatever their capitals and spaces (`total amount`
+finds a column titled `Total Amount ($)`), and "should", "has to", "can't", "never" and the like
+are read as "must" / "must not". "Mentions" looks for whole words and simple plural forms; put the
+words in quotes to look for them exactly as written. Sentences that cannot be checked ("be polite")
+are refused when you add them.
+
+When the practice exam is built, every rule is tried on your own examples. A rule about a column
+your files do not have, or one that none or many of your examples follow, is not used, and the
+reason is shown next to it. When only a few examples break a rule, those examples are left out
+and named. A rule can also be written as an expression: `expr: number(output.amount) < 1000`.
+
 ## Setup
 
 Prerequisites (all platforms): Rust ≥ 1.80, Node 22 + pnpm, [uv](https://docs.astral.sh/uv/), plus the Tauri v2 system dependencies:

@@ -201,6 +201,7 @@ export function DataRulesStudio({ project, template, draft, onDraft, trainingRun
               })}
             </ul>
           )}
+          <p className="text-sm leading-relaxed text-muted">One check per rule, in plain words; a rule can depend on a condition (“if … then …”). When the exam is built, each rule is tried on your own examples. A rule they do not follow is set aside, and you are told why.</p>
         </Card>
       </div>
 
