@@ -5,7 +5,8 @@
 //! * `Authorization: Bearer <token>` required on /v1/* (token file in the Inkport home dir,
 //!   created with 0600 permissions on Unix);
 //! * Host header must be 127.0.0.1/localhost/[::1] (blocks DNS-rebinding attacks);
-//! * browser Origins are rejected unless allow-listed (the desktop app, browser extensions);
+//! * browser Origins are rejected unless they are local (the desktop app, pages served from this
+//!   computer such as http://localhost:3000, browser extensions); websites cannot use the model;
 //! * the upstream Python worker has its own secret and listens on an ephemeral port.
 //! Streaming responses (SSE) are proxied byte-for-byte.
 
@@ -54,7 +55,6 @@ struct GwState {
 struct Shared {
     state: Arc<RwLock<GwState>>,
     token: Arc<String>,
-    port: u16,
     client: reqwest::Client,
     allowed_origins: Arc<Vec<String>>,
 }
@@ -103,18 +103,36 @@ impl Gateway {
     }
 
     /// Bind and serve in the background. Returns the bound port (pass 0 for an ephemeral port in tests).
-    pub async fn start(&self, port: u16) -> anyhow::Result<u16> {
+    /// `fallback`: when the port is taken (another program, or a range reserved by Windows), use
+    /// one of the next few ports instead of failing; the caller shows the address that was bound.
+    pub async fn start(&self, port: u16, fallback: bool) -> anyhow::Result<u16> {
         if let Some(p) = *self.port.read().await {
             return Ok(p);
         }
-        let listener = tokio::net::TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], port)))
-            .await
-            .map_err(|e| anyhow::anyhow!("PORT_IN_USE: could not listen on 127.0.0.1:{port} ({e}). Another app may be using it."))?;
+        let mut candidates = vec![port];
+        if fallback && port != 0 {
+            candidates.extend((1..=20u16).filter_map(|i| port.checked_add(i)));
+            candidates.push(0); // last resort: any free port
+        }
+        let mut listener = None;
+        let mut last_err = None;
+        for p in candidates {
+            match tokio::net::TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], p))).await {
+                Ok(l) => {
+                    listener = Some(l);
+                    break;
+                }
+                Err(e) => last_err = Some(e),
+            }
+        }
+        let Some(listener) = listener else {
+            let e = last_err.map(|e| e.to_string()).unwrap_or_default();
+            anyhow::bail!("PORT_IN_USE: The local API could not start because port {port} on this computer is being used by another program ({e}). Close that program and try again.");
+        };
         let bound = listener.local_addr()?.port();
         let shared = Shared {
             state: Arc::clone(&self.state),
             token: Arc::new(self.token.clone()),
-            port: bound,
             client: reqwest::Client::builder().no_proxy().build()?,
             allowed_origins: Arc::new(vec![
                 "tauri://localhost".into(),
@@ -130,6 +148,9 @@ impl Gateway {
             .route("/health", get(health))
             .route("/v1/models", get(models).options(preflight))
             .route("/v1/chat/completions", any(chat))
+            // Some apps are given the address without "/v1" and add only the last part themselves.
+            .route("/models", get(models).options(preflight))
+            .route("/chat/completions", any(chat))
             .fallback(not_found)
             .with_state(shared);
         let (tx, rx) = oneshot::channel::<()>();
@@ -167,13 +188,49 @@ fn check_origin(h: &HeaderMap, s: &Shared) -> Result<Option<HeaderValue>, Respon
     match h.get(header::ORIGIN).and_then(|v| v.to_str().ok()) {
         None => Ok(None),
         Some(o) if s.allowed_origins.iter().any(|a| if a.ends_with("://") { o.starts_with(a.as_str()) } else { o == a }) => Ok(HeaderValue::from_str(o).ok()),
-        Some(o) if o == format!("http://127.0.0.1:{}", s.port) || o == format!("http://localhost:{}", s.port) => Ok(HeaderValue::from_str(o).ok()),
-        Some(_) => Err(err(StatusCode::FORBIDDEN, "forbidden_origin", "This website is not allowed to use your local model")),
+        // Pages served from this computer (a local web app such as http://localhost:3000).
+        Some(o) if is_loopback_origin(o) => Ok(HeaderValue::from_str(o).ok()),
+        Some(_) => Err(err(StatusCode::FORBIDDEN, "forbidden_origin", "This website is not allowed to use your local model. Only apps and pages running on this computer can.")),
     }
 }
 
+/// `http://localhost[:port]`, `http://127.0.0.1[:port]`, `http://[::1][:port]` (also https).
+fn is_loopback_origin(o: &str) -> bool {
+    let Some(rest) = o.strip_prefix("http://").or_else(|| o.strip_prefix("https://")) else { return false };
+    let host = if let Some(v6) = rest.strip_prefix('[') {
+        match v6.split_once(']') {
+            Some((h, tail)) if tail.is_empty() || tail.strip_prefix(':').map(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit())).unwrap_or(false) => h,
+            _ => return false,
+        }
+    } else {
+        match rest.split_once(':') {
+            Some((h, p)) if !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()) => h,
+            Some(_) => return false,
+            None => rest,
+        }
+    };
+    matches!(host, "localhost" | "127.0.0.1" | "::1")
+}
+
+/// The key as `Authorization: Bearer <key>` (the scheme in any letter case), or in the
+/// `x-api-key` / `api-key` headers some client libraries use.
+fn presented_key(h: &HeaderMap) -> &str {
+    if let Some(v) = h.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()) {
+        let v = v.trim();
+        if v.len() > 7 && v[..7].eq_ignore_ascii_case("bearer ") {
+            return v[7..].trim();
+        }
+    }
+    for name in ["x-api-key", "api-key"] {
+        if let Some(v) = h.get(name).and_then(|v| v.to_str().ok()) {
+            return v.trim();
+        }
+    }
+    ""
+}
+
 fn check_auth(h: &HeaderMap, s: &Shared) -> Result<(), Response> {
-    let got = h.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()).and_then(|v| v.strip_prefix("Bearer ")).unwrap_or("");
+    let got = presented_key(h);
     if constant_time_eq(got.as_bytes(), s.token.as_bytes()) {
         Ok(())
     } else {
@@ -192,9 +249,22 @@ fn with_cors(mut resp: Response, origin: Option<HeaderValue>) -> Response {
     if let Some(o) = origin {
         let h = resp.headers_mut();
         h.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, o);
-        h.insert(header::ACCESS_CONTROL_ALLOW_HEADERS, HeaderValue::from_static("authorization, content-type"));
+        h.insert(header::ACCESS_CONTROL_ALLOW_HEADERS, HeaderValue::from_static("authorization, content-type, x-api-key, api-key"));
         h.insert(header::ACCESS_CONTROL_ALLOW_METHODS, HeaderValue::from_static("GET, POST, OPTIONS"));
+        h.insert(header::ACCESS_CONTROL_MAX_AGE, HeaderValue::from_static("600"));
         h.insert(header::VARY, HeaderValue::from_static("Origin"));
+    }
+    resp
+}
+
+/// Answer a CORS preflight. Client libraries add their own headers (the OpenAI JavaScript SDK sends
+/// several `x-stainless-*` ones), so the headers the browser asks for are allowed as requested.
+fn preflight_response(req_headers: &HeaderMap, origin: Option<HeaderValue>) -> Response {
+    let mut resp = with_cors(StatusCode::NO_CONTENT.into_response(), origin.clone());
+    if origin.is_some() {
+        if let Some(asked) = req_headers.get(header::ACCESS_CONTROL_REQUEST_HEADERS) {
+            resp.headers_mut().insert(header::ACCESS_CONTROL_ALLOW_HEADERS, asked.clone());
+        }
     }
     resp
 }
@@ -209,7 +279,7 @@ async fn health(State(s): State<Shared>, h: HeaderMap) -> Response {
 
 async fn preflight(State(s): State<Shared>, h: HeaderMap) -> Response {
     match check_origin(&h, &s) {
-        Ok(o) => with_cors(StatusCode::NO_CONTENT.into_response(), o),
+        Ok(o) => preflight_response(&h, o),
         Err(r) => r,
     }
 }
@@ -235,7 +305,7 @@ async fn chat(State(s): State<Shared>, req: Request) -> Response {
         Err(r) => return r,
     };
     if parts.method == Method::OPTIONS {
-        return with_cors(StatusCode::NO_CONTENT.into_response(), origin);
+        return preflight_response(&parts.headers, origin);
     }
     if parts.method != Method::POST {
         return with_cors(err(StatusCode::METHOD_NOT_ALLOWED, "method_not_allowed", "use POST"), origin);
@@ -252,8 +322,11 @@ async fn chat(State(s): State<Shared>, req: Request) -> Response {
     };
     let mut payload: Value = match serde_json::from_slice(&bytes) {
         Ok(v) => v,
-        Err(_) => return with_cors(err(StatusCode::BAD_REQUEST, "invalid_json", "body must be JSON"), origin),
+        Err(_) => return with_cors(err(StatusCode::BAD_REQUEST, "invalid_json", "The request body must be JSON"), origin),
     };
+    if !payload.is_object() {
+        return with_cors(err(StatusCode::BAD_REQUEST, "invalid_request_error", "The request body must be a JSON object with \"model\" and \"messages\""), origin);
+    }
     // Map friendly aliases onto the served model ids.
     let requested = payload.get("model").and_then(Value::as_str).unwrap_or("").to_string();
     let model = if requested.is_empty() || requested == "inkport" || requested == "default" { up.models[0].clone() } else { requested };
@@ -285,6 +358,17 @@ async fn chat(State(s): State<Shared>, req: Request) -> Response {
     };
     let status = StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
     let ctype = resp.headers().get(reqwest::header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or("application/json").to_string();
+    if status == StatusCode::BAD_REQUEST && ctype.starts_with("application/json") {
+        // llama.cpp's advice ("try increasing it") is not something the user can act on here.
+        let raw = resp.bytes().await.unwrap_or_default();
+        let mut body: Value = serde_json::from_slice(&raw).unwrap_or_else(|_| json!({"error": {"message": String::from_utf8_lossy(&raw), "type": "invalid_request_error"}}));
+        if body["error"]["type"] == "exceed_context_size_error" {
+            let (n, max) = (body["error"]["n_prompt_tokens"].as_u64().unwrap_or(0), body["error"]["n_ctx"].as_u64().unwrap_or(0));
+            body["error"]["message"] = json!(format!("This message is too long for the model: it is about {n} tokens and the limit is {max}. Shorten it (or split it into parts) and try again."));
+            body["error"]["code"] = json!("context_length_exceeded");
+        }
+        return with_cors((status, Json(body)).into_response(), origin);
+    }
     let stream = resp.bytes_stream();
     let mut out = Response::new(Body::from_stream(stream));
     *out.status_mut() = status;
@@ -325,7 +409,7 @@ mod tests {
     #[tokio::test]
     async fn auth_host_origin_and_proxy() {
         let gw = Gateway::new("tok_0123456789abcdef0123456789abcdef".into());
-        let port = gw.start(0).await.unwrap();
+        let port = gw.start(0, false).await.unwrap();
         let base = format!("http://127.0.0.1:{port}");
         let c = reqwest::Client::builder().no_proxy().build().unwrap();
         let tok = "Bearer tok_0123456789abcdef0123456789abcdef";
@@ -363,6 +447,42 @@ mod tests {
         let r: Value = c.post(format!("{base}/v1/chat/completions")).header("Authorization", tok).json(&json!({"model":"inkport/x","messages":[{"role":"system","content":"mine"},{"role":"user","content":"hi"}]})).send().await.unwrap().json().await.unwrap();
         assert_eq!(r["echo"]["messages"][0]["content"], "mine");
         assert!(r["echo"].get("lora").is_none());
+        // Bodies that are JSON but not an object get a 400, not a dropped connection.
+        for body in ["[1,2,3]", "\"hello\"", "42", "null"] {
+            let r = c.post(format!("{base}/v1/chat/completions")).header("Authorization", tok).header("Content-Type", "application/json").body(body).send().await.unwrap();
+            assert_eq!(r.status(), 400, "{body}");
+        }
+        // The address without /v1 works too; so do other ways of presenting the key.
+        assert_eq!(c.get(format!("{base}/models")).header("Authorization", tok).send().await.unwrap().status(), 200);
+        assert_eq!(c.get(format!("{base}/v1/models")).header("Authorization", tok.replace("Bearer", "bearer")).send().await.unwrap().status(), 200);
+        assert_eq!(c.get(format!("{base}/v1/models")).header("x-api-key", &tok[7..]).send().await.unwrap().status(), 200);
+        assert_eq!(c.get(format!("{base}/v1/models")).header("x-api-key", "nope").send().await.unwrap().status(), 401);
+        // Local pages may call the API from a browser (any port); their preflight is answered
+        // with the headers they ask for. Look-alike hosts are still refused.
+        let r = c.request(Method::OPTIONS, format!("{base}/v1/chat/completions")).header("Origin", "http://localhost:3000").header("Access-Control-Request-Method", "POST").header("Access-Control-Request-Headers", "authorization,content-type,x-stainless-os").send().await.unwrap();
+        assert_eq!(r.status(), 204);
+        assert_eq!(r.headers()["access-control-allow-origin"], "http://localhost:3000");
+        assert_eq!(r.headers()["access-control-allow-headers"], "authorization,content-type,x-stainless-os");
+        for bad in ["http://localhost.evil.example", "http://127.0.0.1.evil.example:80", "http://localhost:3000@evil.example", "ftp://localhost", "http://localhost:"] {
+            assert_eq!(c.get(format!("{base}/v1/models")).header("Authorization", tok).header("Origin", bad).send().await.unwrap().status(), 403, "{bad}");
+        }
+        for good in ["http://127.0.0.1:8080", "https://localhost", "http://[::1]:5173"] {
+            assert_eq!(c.get(format!("{base}/v1/models")).header("Authorization", tok).header("Origin", good).send().await.unwrap().status(), 200, "{good}");
+        }
+        gw.stop().await;
+    }
+
+    #[tokio::test]
+    async fn falls_back_to_a_nearby_port_when_the_default_is_taken() {
+        let taken = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = taken.local_addr().unwrap().port();
+        let strict = Gateway::new("tok_0123456789abcdef0123456789abcdef".into());
+        let e = strict.start(port, false).await.unwrap_err().to_string();
+        assert!(e.starts_with("PORT_IN_USE: "), "{e}");
+        let gw = Gateway::new("tok_0123456789abcdef0123456789abcdef".into());
+        let got = gw.start(port, true).await.unwrap();
+        assert_ne!(got, port);
+        assert_eq!(gw.start(port, true).await.unwrap(), got, "a running gateway keeps its port");
         gw.stop().await;
     }
 }

@@ -22,6 +22,7 @@ import subprocess
 import sys
 import time
 import zipfile
+import zlib
 from pathlib import Path
 from typing import Any, Optional
 
@@ -259,8 +260,18 @@ def import_inkpatch(root: Path, patch: Path, trust: bool = False) -> dict:
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey  # noqa: WPS433
 
     project = load_project(root)
+    if not patch.is_file():
+        raise PatchRejected(f"the file was not found: {patch}")
     if not zipfile.is_zipfile(patch):
-        raise PatchRejected("this file is not a Inkport adapter package")
+        raise PatchRejected("this file is not an Inkport adapter package")
+    try:
+        return _import_checked(root, patch, trust, project, InvalidSignature, Ed25519PublicKey)
+    except (zipfile.BadZipFile, zlib.error, EOFError, json.JSONDecodeError, UnicodeDecodeError, KeyError, TypeError, AttributeError) as exc:
+        # A truncated download, a file edited by hand, a zip that only looks like a package.
+        raise PatchRejected("this adapter file is damaged or incomplete (it may have been cut short while copying or downloading)") from exc
+
+
+def _import_checked(root: Path, patch: Path, trust: bool, project: dict, InvalidSignature, Ed25519PublicKey) -> dict:  # noqa: N803
     with zipfile.ZipFile(patch) as z:
         infos = z.infolist()
         names = [i.filename for i in infos]

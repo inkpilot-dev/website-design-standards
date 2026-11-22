@@ -23,7 +23,8 @@ path = "src/bin/inkport-cli.rs"
 [features]
 default = ["desktop"]
 # The desktop shell (Tauri + WebView). Build the headless supervisor/CLI with --no-default-features.
-desktop = ["dep:tauri", "dep:tauri-plugin-dialog", "dep:tauri-build"]
+desktop = ["dep:tauri", "dep:tauri-plugin-dialog", "dep:tauri-plugin-single-instance", "dep:tauri-build"]
+tauri-plugin-single-instance = ["dep:tauri-plugin-single-instance"]
 
 [build-dependencies]
 tauri-build = { version = "2", optional = true, features = [] }
@@ -46,9 +47,15 @@ dirs = "6"
 clap = { version = "4", features = ["derive"] }
 sha2 = "0.10"
 sha1 = "0.10"
+deunicode = "1"
+tauri-plugin-single-instance = { version = "2", optional = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+# Job objects: helper processes must not outlive the app (see src/procguard.rs).
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects"] }
 
 [dev-dependencies]
 tempfile = "3"

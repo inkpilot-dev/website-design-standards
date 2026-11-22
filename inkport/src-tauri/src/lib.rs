@@ -11,6 +11,7 @@ pub mod contract;
 pub mod events;
 pub mod hardware;
 pub mod packs;
+pub mod procguard;
 pub mod project;
 pub mod runtime;
 pub mod sidecar;

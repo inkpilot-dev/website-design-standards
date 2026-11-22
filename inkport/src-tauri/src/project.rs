@@ -9,10 +9,15 @@ pub fn projects_dir(home: &Path) -> PathBuf {
     home.join("projects")
 }
 
+/// Folder-safe, URL-safe name: lower-case ASCII letters, digits and single dashes.
+/// Accents and other scripts are transliterated ("Résumé" -> "resume", "経費" -> "jing-fei") so
+/// names that are not written in Latin letters still get distinct, readable folders.
 pub fn slugify(name: &str) -> String {
     let mut s = String::new();
     let mut dash = false;
-    for ch in name.to_lowercase().chars() {
+    // Only letters and digits are transliterated; punctuation, symbols and emoji separate words.
+    let latin: String = name.chars().map(|c| if c.is_alphanumeric() { deunicode::deunicode_char(c).unwrap_or("").to_string() } else { " ".to_string() }).collect::<Vec<_>>().join("");
+    for ch in latin.to_lowercase().chars() {
         if ch.is_ascii_alphanumeric() {
             s.push(ch);
             dash = false;
@@ -21,12 +26,19 @@ pub fn slugify(name: &str) -> String {
             dash = true;
         }
     }
-    let s = s.trim_matches('-').chars().take(48).collect::<String>();
+    let s = s.chars().take(48).collect::<String>().trim_matches('-').to_string();
     if s.is_empty() {
         "project".into()
+    } else if is_reserved_on_windows(&s) {
+        format!("{s}-project")
     } else {
         s
     }
+}
+
+/// Device names Windows refuses as file or folder names (CON, NUL, COM1, ...), in any letter case.
+fn is_reserved_on_windows(s: &str) -> bool {
+    matches!(s, "con" | "prn" | "aux" | "nul") || ((s.starts_with("com") || s.starts_with("lpt")) && s.len() == 4 && s.as_bytes()[3].is_ascii_digit())
 }
 
 pub fn project_dir(home: &Path, id_or_slug: &str) -> Result<PathBuf> {
@@ -47,12 +59,32 @@ pub fn create(home: &Path, name: &str, template: &str, base_model: Value, backen
     if !crate::contract::templates().iter().any(|t| t.id == template) {
         bail!("unknown template '{template}'");
     }
-    let slug = slugify(name);
-    let dir = projects_dir(home).join(&slug);
-    if dir.join("project.json").exists() {
-        bail!("A project named '{name}' already exists");
+    let name = name.trim();
+    if name.is_empty() {
+        bail!("BAD_INPUT: Give the project a name");
     }
-    std::fs::create_dir_all(&dir)?;
+    // Two different names can shorten to the same folder name ("My Books" / "my-books!"); those get
+    // a numbered folder. Only a project with the same name (ignoring case) is a real duplicate.
+    let base_slug = slugify(name);
+    let mut slug = base_slug.clone();
+    let mut n = 1;
+    loop {
+        let dir = projects_dir(home).join(&slug);
+        if !dir.exists() {
+            break;
+        }
+        let existing = read_json(&dir.join("project.json")).and_then(|p| p["name"].as_str().map(|s| s.trim().to_lowercase()));
+        if existing.as_deref() == Some(name.to_lowercase().as_str()) {
+            bail!("PROJECT_EXISTS: A project named '{name}' already exists. Open it from the list of projects, or choose another name.");
+        }
+        n += 1;
+        if n > 200 {
+            bail!("PROJECT_EXISTS: Too many projects with names like '{name}'. Choose a different name.");
+        }
+        slug = format!("{base_slug}-{n}");
+    }
+    let dir = projects_dir(home).join(&slug);
+    std::fs::create_dir_all(&dir).with_context(|| format!("could not create the project folder {}", dir.display()))?;
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_secs_f64();
     let project = json!({
         "id": uuid::Uuid::new_v4().simple().to_string()[..12],
@@ -121,6 +153,42 @@ mod tests {
         assert_eq!(slugify("Expense Sorter"), "expense-sorter");
         assert_eq!(slugify("  Ohio PT -- Claims!! "), "ohio-pt-claims");
         assert_eq!(slugify("***"), "project");
+    }
+
+    #[test]
+    fn slugify_other_scripts_accents_and_reserved_names() {
+        assert_eq!(slugify("Résumé – été"), "resume-ete");
+        assert_ne!(slugify("経費"), "project");
+        assert_ne!(slugify("Расходы"), "project");
+        assert_ne!(slugify("経費"), slugify("Расходы"));
+        assert_eq!(slugify("Expenses 💸 2026"), "expenses-2026");
+        for reserved in ["CON", "nul", "Aux", "COM1", "lpt9", "PRN"] {
+            let s = slugify(reserved);
+            assert!(s.ends_with("-project"), "{reserved} -> {s}");
+        }
+        assert_eq!(slugify("command"), "command");
+        assert_eq!(slugify("a/b\\c:d*e?"), "a-b-c-d-e");
+        assert!(slugify(&"long name ".repeat(30)).len() <= 48);
+        assert!(!slugify(&"x ".repeat(40)).ends_with('-'));
+    }
+
+    #[test]
+    fn similar_names_get_their_own_folders_and_true_duplicates_are_refused() {
+        let home = tempfile::tempdir().unwrap();
+        let base = json!({"id": "m", "path": "/m", "chat_kwargs": {}});
+        let a = create(home.path(), "My Books", "custom", base.clone(), None, None).unwrap();
+        let b = create(home.path(), "MY-BOOKS!", "custom", base.clone(), None, None).unwrap();
+        assert_eq!((a.slug.as_str(), b.slug.as_str()), ("my-books", "my-books-2"));
+        let dup = create(home.path(), "  my books ", "custom", base.clone(), None, None).unwrap_err().to_string();
+        assert!(dup.starts_with("PROJECT_EXISTS: "), "{dup}");
+        assert!(create(home.path(), "   ", "custom", base.clone(), None, None).unwrap_err().to_string().starts_with("BAD_INPUT: "));
+        let c = create(home.path(), "経費", "custom", base.clone(), None, None).unwrap();
+        let d = create(home.path(), "Расходы", "custom", base.clone(), None, None).unwrap();
+        assert_ne!(c.slug, d.slug);
+        assert_eq!(c.name, "経費");
+        assert_eq!(list(home.path()).unwrap().len(), 4);
+        assert_eq!(project_dir(home.path(), &b.id).unwrap(), PathBuf::from(&b.dir));
+        assert_eq!(project_dir(home.path(), "my-books-2").unwrap(), PathBuf::from(&b.dir));
     }
 
     #[test]

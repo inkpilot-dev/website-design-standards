@@ -48,6 +48,19 @@ struct Running {
     pid: Option<u32>,
     cancel: watch::Sender<bool>,
     kind: JobKind,
+    project_id: Option<String>,
+    /// The events a window needs to redraw this job's screen after it was away (stages, results,
+    /// the latest progress and side-by-side answers). Bounded; kept only while the job runs.
+    history: Vec<Value>,
+}
+
+/// A running job as reported to the UI: enough to re-attach to it and replay what happened so far.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RunningJob {
+    pub job_id: String,
+    pub kind: JobKind,
+    pub project_id: Option<String>,
+    pub events: Vec<Value>,
 }
 
 pub struct Supervisor {
@@ -69,6 +82,42 @@ impl Supervisor {
 
     pub fn running(&self) -> Vec<(String, JobKind)> {
         self.jobs.lock().unwrap().iter().map(|(k, v)| (k.clone(), v.kind)).collect()
+    }
+
+    /// The running job of this kind, if any, with its replayable events.
+    pub fn running_job(&self, kind: JobKind) -> Option<RunningJob> {
+        self.jobs.lock().unwrap().iter().find(|(_, v)| v.kind == kind).map(|(k, v)| RunningJob { job_id: k.clone(), kind: v.kind, project_id: v.project_id.clone(), events: v.history.clone() })
+    }
+
+    /// Is a job of one of these kinds running for this project (or for any project if `None`)?
+    pub fn busy(&self, kinds: &[JobKind], project_id: Option<&str>) -> bool {
+        self.jobs.lock().unwrap().values().any(|v| kinds.contains(&v.kind) && (project_id.is_none() || v.project_id.as_deref() == project_id))
+    }
+
+    fn remember(&self, job_id: &str, v: &Value) {
+        let kind = v.get("type").and_then(Value::as_str).unwrap_or("");
+        if !matches!(kind, "stage" | "progress" | "eval" | "gate" | "benchmark" | "error") {
+            return;
+        }
+        let mut jobs = self.jobs.lock().unwrap();
+        let Some(job) = jobs.get_mut(job_id) else { return };
+        if !matches!(job.kind, JobKind::Train | JobKind::Import) {
+            return;
+        }
+        // One progress event is enough (the latest); a handful of the most recent comparisons.
+        if kind == "progress" {
+            job.history.retain(|e| e["type"] != "progress");
+        } else if kind == "benchmark" {
+            let n = job.history.iter().filter(|e| e["type"] == "benchmark").count();
+            if n >= 8 {
+                if let Some(i) = job.history.iter().position(|e| e["type"] == "benchmark") {
+                    job.history.remove(i);
+                }
+            }
+        }
+        if job.history.len() < 400 {
+            job.history.push(v.clone());
+        }
     }
 
     fn command(&self, job_id: &str, spec: &JobSpec) -> Command {
@@ -109,7 +158,8 @@ impl Supervisor {
             .with_context(|| format!("could not start the Inkport engine ({}). Run setup first.", self.cfg.python.display()))?;
         let pid = child.id();
         let (cancel_tx, cancel_rx) = watch::channel(false);
-        self.jobs.lock().unwrap().insert(job_id.clone(), Running { pid, cancel: cancel_tx, kind: spec.kind });
+        crate::procguard::adopt_tokio(&child);
+        self.jobs.lock().unwrap().insert(job_id.clone(), Running { pid, cancel: cancel_tx, kind: spec.kind, project_id: spec.project_id.clone(), history: vec![] });
         let (ready_tx, ready_rx) = oneshot::channel();
         let me = Arc::clone(self);
         let jid = job_id.clone();
@@ -141,6 +191,7 @@ impl Supervisor {
             "benchmark" => "benchmark://result",
             _ => spec.kind.channel(),
         };
+        self.remember(job_id, &v);
         self.sink.emit(channel, &v);
     }
 
@@ -156,6 +207,7 @@ impl Supervisor {
         let mut ready_tx = Some(ready_tx);
         let mut done: Option<(bool, Value)> = None;
         let mut error: Option<EngineError> = None;
+        let mut error_was_sent = false; // the engine's own `error` event already reached the UI
         let mut last = Instant::now();
         let mut stderr_tail: Vec<String> = vec![];
         let mut stderr_budget: u32 = 0;
@@ -178,7 +230,10 @@ impl Supervisor {
                                 match serde_json::from_value::<EngineEvent>(v.clone()) {
                                     Ok(EngineEvent::Ready { .. }) => { if let Some(tx) = ready_tx.take() { let _ = tx.send(v.clone()); } }
                                     Ok(EngineEvent::Done { ok, result }) => done = Some((ok, result)),
-                                    Ok(EngineEvent::Error { code, message, retryable }) => error = Some(EngineError { code, message, retryable }),
+                                    Ok(EngineEvent::Error { code, message, retryable }) => {
+                                        error = Some(EngineError { code, message, retryable });
+                                        error_was_sent = true;
+                                    }
                                     Ok(_) => {}
                                     Err(e) => self.sink.emit("training://log", &json!({"type":"log","level":"warn","message":format!("protocol: unexpected event shape ({e})"),"job_id":job_id})),
                                 }
@@ -205,7 +260,8 @@ impl Supervisor {
                 _ = cancel.changed() => break true,
                 _ = tokio::time::sleep(Duration::from_secs(5)) => {
                     if last.elapsed() > stall && spec.kind != JobKind::Serve {
-                        error = Some(EngineError { code: "ENGINE_STALLED".into(), message: format!("The engine stopped responding for {}s; it was stopped and can be resumed.", stall.as_secs()), retryable: true });
+                        error = Some(EngineError { code: "ENGINE_STALLED".into(), message: format!("Inkport's engine stopped responding for {} minutes, so it was stopped. Try again; if it happens again, restart the computer first.", stall.as_secs() / 60), retryable: true });
+                        error_was_sent = false;
                         break true;
                     }
                 }
@@ -213,18 +269,29 @@ impl Supervisor {
         };
         if cancelled {
             kill_tree(child).await;
-            if error.is_none() {
-                error = Some(EngineError { code: "CANCELLED".into(), message: "Stopped by the user".into(), retryable: true });
+            if error.is_none() || error_was_sent {
+                // A stop request wins over whatever the engine printed while it was being stopped.
+                if error.as_ref().map(|e| e.code != "ENGINE_STALLED").unwrap_or(true) {
+                    error = Some(EngineError { code: "CANCELLED".into(), message: "Stopped. Nothing was saved from this run.".into(), retryable: true });
+                    error_was_sent = false;
+                }
             }
         }
         let status = child.wait().await.ok();
         let had_done = done.is_some();
         let (ok, result) = done.unwrap_or_else(|| (false, json!({})));
         if !ok && error.is_none() {
-            let tail = stderr_tail.iter().rev().take(6).rev().cloned().collect::<Vec<_>>().join("\n");
-            error = Some(EngineError { code: "ENGINE_CRASHED".into(), message: format!("The engine exited unexpectedly ({}).\n{tail}", status.map(|s| s.to_string()).unwrap_or_default()), retryable: true });
+            error = Some(crash_report(spec.kind, status, &stderr_tail, &self.cfg.home, job_id));
+            error_was_sent = false;
         }
         let outcome = JobOutcome { job_id: job_id.to_string(), ok: ok && !cancelled, result, error };
+        if !outcome.ok && !error_was_sent {
+            // Jobs started in the background (training) have nobody waiting for the outcome, so the
+            // reason must travel as an event: a stop, a crash, running out of memory, a stall.
+            if let Some(e) = &outcome.error {
+                self.forward(spec, job_id, json!({"v":1,"type":"error","ts":0,"code":e.code,"message":e.message,"retryable":e.retryable}));
+            }
+        }
         if cancelled || !had_done {
             // The engine could not report; synthesize a terminal event so the UI never hangs.
             self.forward(spec, job_id, json!({"v":1,"type":"done","ts":0,"ok":false,"result":{"code": outcome.error.as_ref().map(|e| e.code.clone())}}));
@@ -270,9 +337,59 @@ async fn kill_tree(child: &mut Child) {
     }
     #[cfg(windows)]
     if let Some(pid) = child.id() {
-        let _ = std::process::Command::new("taskkill").args(["/PID", &pid.to_string(), "/T", "/F"]).output();
+        use std::os::windows::process::CommandExt;
+        // CREATE_NO_WINDOW: without it a console window flashes on screen when the user presses Stop.
+        let _ = std::process::Command::new("taskkill").args(["/PID", &pid.to_string(), "/T", "/F"]).creation_flags(0x0800_0000).stdin(Stdio::null()).output();
     }
     let _ = child.kill().await;
+}
+
+/// What to tell the user when the engine process died without reporting an error itself.
+/// Running out of memory is by far the most common cause, and the only one they can act on.
+fn crash_report(kind: JobKind, status: Option<std::process::ExitStatus>, stderr_tail: &[String], home: &std::path::Path, job_id: &str) -> EngineError {
+    // Progress bars redraw one line with carriage returns; they are noise in an error report.
+    let lines: Vec<String> = stderr_tail
+        .iter()
+        .flat_map(|l| l.split('\r').map(str::trim).filter(|p| !p.is_empty()).map(String::from).collect::<Vec<_>>())
+        .filter(|l| !(l.contains("it/s]") || l.contains("s/it]") || (l.contains('%') && l.contains('|') && l.contains('['))))
+        .collect();
+    let text = lines.join("\n");
+    let lower = text.to_lowercase();
+    let status_text = status.map(|s| s.to_string()).unwrap_or_else(|| "unknown exit".into());
+    #[cfg(unix)]
+    let killed = {
+        use std::os::unix::process::ExitStatusExt;
+        status.and_then(|s| s.signal()) == Some(9)
+    };
+    #[cfg(not(unix))]
+    // STATUS_NO_MEMORY, STATUS_COMMITMENT_LIMIT, and the C++ runtime's abort after std::bad_alloc.
+    let killed = matches!(status.and_then(|s| s.code()).map(|c| c as u32), Some(0xC000_0017) | Some(0xC000_012D));
+    let memory_words = ["memoryerror", "out of memory", "not enough memory", "cannot allocate memory", "bad_alloc", "paging file is too small", "unable to allocate", "alloc_cpu", "defaultcpuallocator"];
+    let out_of_memory = killed || memory_words.iter().any(|w| lower.contains(w));
+    let doing = match kind {
+        JobKind::Train => "training",
+        JobKind::Serve => "loading the model",
+        JobKind::Ingest => "reading your files",
+        JobKind::Import => "checking the adapter",
+        JobKind::Arena => "comparing the models",
+        _ => "working",
+    };
+    let log_path = home.join("logs").join("last-engine-error.log");
+    let saved = std::fs::create_dir_all(home.join("logs")).and_then(|_| std::fs::write(&log_path, format!("job {job_id} ({kind:?}) ended with {status_text}\n\n{}\n", stderr_tail.join("\n")))).is_ok();
+    let where_ = if saved { format!(" Technical details were saved to {}.", log_path.display()) } else { String::new() };
+    if out_of_memory {
+        return EngineError {
+            code: "OUT_OF_MEMORY".into(),
+            message: format!("Your computer ran out of memory while {doing}. Close other programs (web browsers use a lot of memory) and try again. If it keeps happening, restart the computer first, or use Quick run.{where_}"),
+            retryable: true,
+        };
+    }
+    let detail = lines.iter().rev().take(4).rev().cloned().collect::<Vec<_>>().join("\n");
+    EngineError {
+        code: "ENGINE_CRASHED".into(),
+        message: format!("Inkport's engine stopped unexpectedly while {doing} ({status_text}). Try again.{where_}{}", if detail.is_empty() { String::new() } else { format!("\n\n{detail}") }),
+        retryable: true,
+    }
 }
 /// Next line from a child pipe, decoded leniently (invalid UTF-8 becomes U+FFFD). Cancel-safe:
 /// bytes read before a `select!` cancellation stay in `buf` and are continued by the next call.

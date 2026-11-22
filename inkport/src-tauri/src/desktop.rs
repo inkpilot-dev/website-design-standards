@@ -1,13 +1,15 @@
 //! Tauri v2 shell: typed commands + event streaming to the WebView.
 
-use crate::app::{App, AppError, AppResult, CreateProjectRequest, TrainRequest};
+use crate::app::{ApiStatus, App, AppError, AppResult, CreateProjectRequest, TrainRequest};
 use crate::bootstrap::PreflightReport;
 use crate::contract::{ApiInfo, HardwareReport, ProjectInfo, RuntimeStatus, Template};
 use crate::packs::PackState;
 use crate::events::EventSink;
+use crate::sidecar::RunningJob;
 use serde_json::Value;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager, State};
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
 struct TauriSink(AppHandle);
 
@@ -117,6 +119,13 @@ async fn cancel_training_job(s: State<'_, AppState>, job_id: String) -> AppResul
     s.0.cancel_training_job(&job_id).await
 }
 
+/// The training run in progress (if any) with the events needed to redraw its screen, so a window
+/// that was showing another step, or another project, can pick the run up again.
+#[tauri::command]
+fn training_status(s: State<'_, AppState>) -> Option<RunningJob> {
+    s.0.training_status()
+}
+
 #[tauri::command]
 async fn run_benchmark_arena(s: State<'_, AppState>, project_id: String, prompt: Option<String>, n: Option<u32>) -> AppResult<Value> {
     s.0.run_benchmark_arena(&project_id, prompt, n.unwrap_or(4)).await
@@ -132,6 +141,18 @@ async fn stop_local_api(s: State<'_, AppState>) -> AppResult<()> {
     s.0.stop_local_api().await
 }
 
+/// Whether the local API is up and for which project (also notices a model process that died).
+#[tauri::command]
+async fn api_status(s: State<'_, AppState>) -> AppResult<ApiStatus> {
+    Ok(s.0.api_status().await)
+}
+
+/// One chat turn through the local API, the same way another app on this computer would call it.
+#[tauri::command]
+async fn chat_local_api(s: State<'_, AppState>, messages: Value, use_base: Option<bool>) -> AppResult<String> {
+    s.0.chat_local_api(messages, use_base.unwrap_or(false)).await
+}
+
 #[tauri::command]
 async fn export_adapter(s: State<'_, AppState>, project_id: String, dest: String) -> AppResult<Value> {
     s.0.export_adapter(&project_id, &dest).await
@@ -143,22 +164,69 @@ async fn import_adapter(s: State<'_, AppState>, project_id: String, file: String
 }
 
 pub fn run() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
+        // A second launch (double-clicking the icon again while the first window is busy) brings
+        // the existing window forward instead of starting a second copy that would fight over the
+        // same projects and the same port.
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.unminimize();
+                let _ = w.show();
+                let _ = w.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let handle = app.handle().clone();
             let resource_dir = app.path().resource_dir().ok();
-            let core = App::new(crate::runtime::home_dir(), resource_dir, Arc::new(TauriSink(handle))).map_err(|e| Box::<dyn std::error::Error>::from(e.to_string()))?;
-            app.manage(AppState(core));
+            let home = crate::runtime::home_dir();
+            match App::new(home.clone(), resource_dir, Arc::new(TauriSink(handle))) {
+                Ok(core) => {
+                    app.manage(AppState(core));
+                }
+                Err(e) => {
+                    // Without its data folder the app cannot do anything; say why instead of
+                    // showing a window whose every button fails (or no window at all).
+                    if let Some(w) = app.get_webview_window("main") {
+                        let _ = w.hide();
+                    }
+                    app.dialog()
+                        .message(format!("Inkport could not start.\n\n{e:#}\n\nInkport keeps your projects in:\n{}\n\nMake sure that folder exists and can be written to, then open Inkport again.", home.display()))
+                        .title("Inkport")
+                        .kind(MessageDialogKind::Error)
+                        .show(|_| std::process::exit(1));
+                }
+            }
             Ok(())
         })
-        .on_window_event(|window, event| {
-            if let tauri::WindowEvent::Destroyed = event {
+        .on_window_event(|window, event| match event {
+            tauri::WindowEvent::CloseRequested { api, .. } => {
+                // Training can take hours; closing the window by accident must not silently end it.
+                let training = window.try_state::<AppState>().map(|s| s.0.training_status().is_some()).unwrap_or(false);
+                if training {
+                    api.prevent_close();
+                    let w = window.clone();
+                    window
+                        .app_handle()
+                        .dialog()
+                        .message("Training is still running. If you close Inkport now, training stops and this run's progress is lost.")
+                        .title("Close Inkport?")
+                        .kind(MessageDialogKind::Warning)
+                        .buttons(MessageDialogButtons::OkCancelCustom("Stop training and close".into(), "Keep training".into()))
+                        .show(move |close| {
+                            if close {
+                                let _ = w.destroy();
+                            }
+                        });
+                }
+            }
+            tauri::WindowEvent::Destroyed => {
                 if let Some(state) = window.try_state::<AppState>() {
                     let core = Arc::clone(&state.0);
                     tauri::async_runtime::block_on(async move { core.shutdown().await });
                 }
             }
+            _ => {}
         })
         .invoke_handler(tauri::generate_handler![
             detect_hardware,
@@ -180,14 +248,27 @@ pub fn run() {
             compile_rules,
             start_training_job,
             cancel_training_job,
+            training_status,
             run_benchmark_arena,
             start_local_api,
             stop_local_api,
+            api_status,
+            chat_local_api,
             export_adapter,
             import_adapter
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running Inkport");
+        .build(tauri::generate_context!())
+        .expect("error while starting Inkport");
+    app.run(|handle, event| {
+        // Quitting from the menu or the dock (macOS) does not always destroy the window first;
+        // stopping the helpers here as well is harmless (it does nothing the second time).
+        if let tauri::RunEvent::Exit = event {
+            if let Some(state) = handle.try_state::<AppState>() {
+                let core = Arc::clone(&state.0);
+                tauri::async_runtime::block_on(async move { core.shutdown().await });
+            }
+        }
+    });
 }
 
 #[allow(dead_code)]

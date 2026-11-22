@@ -8,7 +8,7 @@ use crate::events::EventSink;
 use crate::hardware;
 use crate::project;
 use crate::runtime;
-use crate::sidecar::{EngineConfig, JobSpec, Supervisor};
+use crate::sidecar::{EngineConfig, JobSpec, RunningJob, Supervisor};
 use anyhow::{anyhow, bail, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -78,6 +78,22 @@ pub struct App {
     llama: Mutex<Option<tokio::process::Child>>,
     hardware: Mutex<Option<HardwareReport>>,
     preflight_cache: Mutex<Option<PreflightReport>>,
+    /// Serialises starting and stopping the local API (two quick clicks must not load two models).
+    api_lock: Mutex<()>,
+    /// What the local API is serving right now: (project id, connection details).
+    api_info: Mutex<Option<(String, ApiInfo)>>,
+}
+
+/// The local API as the window should show it.
+#[derive(Debug, Clone, Serialize)]
+pub struct ApiStatus {
+    pub running: bool,
+    pub project_id: Option<String>,
+    pub info: Option<ApiInfo>,
+}
+
+fn busy(message: &str) -> AppError {
+    AppError { code: "BUSY".into(), message: message.into(), retryable: true }
 }
 
 fn engine_err(o: &JobOutcome) -> AppError {
@@ -107,7 +123,7 @@ impl App {
         let packs = Arc::new(Packs::new(&home, catalog, Arc::clone(&sink))?);
         let sup = Arc::new(Supervisor::new(cfg, Arc::clone(&sink)));
         let gateway = Arc::new(Gateway::new(load_or_create_token(&home)?));
-        Ok(Arc::new(Self { home, resource_dir, sink, sup, gateway, bundle, bundle_error, packs, serve_job: Mutex::new(None), llama: Mutex::new(None), hardware: Mutex::new(None), preflight_cache: Mutex::new(None) }))
+        Ok(Arc::new(Self { home, resource_dir, sink, sup, gateway, bundle, bundle_error, packs, serve_job: Mutex::new(None), llama: Mutex::new(None), hardware: Mutex::new(None), preflight_cache: Mutex::new(None), api_lock: Mutex::new(()), api_info: Mutex::new(None) }))
     }
 
     fn pythonpath(&self) -> Option<PathBuf> {
@@ -280,6 +296,13 @@ impl App {
         if paths.is_empty() {
             return Err(AppError { code: "BAD_INPUT".into(), message: "Add at least one file".into(), retryable: false });
         }
+        // Rebuilding the exam replaces the files a running job is reading.
+        if self.sup.busy(&[JobKind::Train, JobKind::Import], Some(project_id)) {
+            return Err(busy("Training is running for this project. Stop it, or wait for it to finish, before rebuilding the practice exam."));
+        }
+        if self.sup.busy(&[JobKind::Ingest], Some(project_id)) {
+            return Err(busy("The practice exam is already being built."));
+        }
         let mut args = vec!["ingest".into(), "--project".into(), self.dir(project_id)?, "--inputs".into()];
         args.extend(paths);
         args.extend(["--rules".into(), serde_json::to_string(&rules).unwrap()]);
@@ -309,8 +332,15 @@ impl App {
     }
 
     pub async fn start_training_job(&self, req: TrainRequest) -> AppResult<String> {
-        if self.sup.running().iter().any(|(_, k)| *k == JobKind::Train) {
-            return Err(AppError { code: "BUSY".into(), message: "A training job is already running".into(), retryable: true });
+        if let Some(job) = self.sup.running_job(JobKind::Train) {
+            let other = job.project_id.as_deref() != Some(req.project_id.as_str());
+            return Err(busy(if other { "Training is already running for another project. Stop it there, or wait for it to finish, then start this one." } else { "Training is already running for this project." }));
+        }
+        if self.sup.busy(&[JobKind::Import], None) {
+            return Err(busy("An imported adapter is being tested right now. Wait for that to finish, then start training."));
+        }
+        if self.sup.busy(&[JobKind::Ingest], Some(&req.project_id)) {
+            return Err(busy("The practice exam is still being built. Start training when it is ready."));
         }
         if self.hardware.lock().await.is_none() {
             self.detect_hardware().await?;
@@ -341,10 +371,20 @@ impl App {
     }
 
     pub async fn cancel_training_job(&self, job_id: &str) -> AppResult<()> {
-        Ok(self.sup.cancel(job_id).await?)
+        // Pressing Stop just as the run finishes is not an error.
+        let _ = self.sup.cancel(job_id).await;
+        Ok(())
+    }
+
+    /// The training run in progress, if any, with the events needed to redraw its screen.
+    pub fn training_status(&self) -> Option<RunningJob> {
+        self.sup.running_job(JobKind::Train)
     }
 
     pub async fn run_benchmark_arena(&self, project_id: &str, prompt: Option<String>, n: u32) -> AppResult<Value> {
+        if self.sup.busy(&[JobKind::Train, JobKind::Import], None) {
+            return Err(busy("Training is running. You can compare the two models when it has finished."));
+        }
         let mut args = vec!["arena".into(), "--project".into(), self.dir(project_id)?, "--n".into(), n.to_string()];
         if let Some(p) = prompt.filter(|p| !p.trim().is_empty()) {
             args.extend(["--prompt".into(), p]);
@@ -354,6 +394,25 @@ impl App {
 
     // ------------------------------------------------------------------ serving -------
     pub async fn start_local_api(&self, project_id: &str, port: Option<u16>) -> AppResult<ApiInfo> {
+        let _guard = self.api_lock.lock().await;
+        match self.start_local_api_inner(project_id, port).await {
+            Ok(info) => {
+                *self.api_info.lock().await = Some((project_id.to_string(), info.clone()));
+                self.sink.emit("api://status", &json!({"type": "api", "running": true, "project_id": project_id, "info": info}));
+                Ok(info)
+            }
+            Err(e) => {
+                // Never leave a half-started model in memory or a port bound with nothing behind it.
+                self.stop_worker().await;
+                self.gateway.stop().await;
+                *self.api_info.lock().await = None;
+                self.sink.emit("api://status", &json!({"type": "api", "running": false}));
+                Err(e)
+            }
+        }
+    }
+
+    async fn start_local_api_inner(&self, project_id: &str, port: Option<u16>) -> AppResult<ApiInfo> {
         self.stop_worker().await;
         let info = self.get_project(project_id)?;
         let worker_token = format!("wk_{}", uuid::Uuid::new_v4().simple());
@@ -363,10 +422,9 @@ impl App {
             Ok(Some((lport, has_lora))) => {
                 let default_system = default_system_prompt(Path::new(&info.dir));
                 self.gateway.set_upstream(Some(Upstream { base_url: format!("http://127.0.0.1:{lport}"), worker_token, models: vec![model.clone(), format!("{model}@base")], project_id: project_id.into(), version: version.clone(), kind: UpstreamKind::Llama { has_lora }, default_system })).await;
-                let gport = self.gateway.start(port.unwrap_or(DEFAULT_PORT)).await?;
+                let gport = self.gateway.start(port.unwrap_or(DEFAULT_PORT), port.is_none()).await?;
                 let devices = self.preflight_cache.lock().await.as_ref().map(|p| p.inference_devices.join(", ")).unwrap_or_default();
                 let info = ApiInfo { url: format!("http://127.0.0.1:{gport}/v1/chat/completions"), base_url: format!("http://127.0.0.1:{gport}/v1"), token: self.gateway.token.clone(), model: model.clone(), base_model: format!("{model}@base"), version, engine: format!("llama.cpp{}", if devices.is_empty() { String::new() } else { format!(" ({devices})") }) };
-                self.sink.emit("api://status", &json!({"type": "api", "running": true, "info": info}));
                 return Ok(info);
             }
             Ok(None) => {}
@@ -385,11 +443,54 @@ impl App {
         };
         let wport = ready["port"].as_u64().ok_or_else(|| anyhow!("worker did not report a port"))? as u16;
         self.gateway.set_upstream(Some(Upstream { base_url: format!("http://127.0.0.1:{wport}"), worker_token, models: vec![model.clone(), format!("{model}@base")], project_id: project_id.into(), version: version.clone(), kind: UpstreamKind::Python, default_system: None })).await;
-        let gport = self.gateway.start(port.unwrap_or(DEFAULT_PORT)).await?;
+        let gport = self.gateway.start(port.unwrap_or(DEFAULT_PORT), port.is_none()).await?;
         let engine = if info.base_model["format"] == "mlx" { "MLX (Apple GPU)" } else { "PyTorch" };
-        let info = ApiInfo { url: format!("http://127.0.0.1:{gport}/v1/chat/completions"), base_url: format!("http://127.0.0.1:{gport}/v1"), token: self.gateway.token.clone(), model: model.clone(), base_model: format!("{model}@base"), version, engine: engine.into() };
-        self.sink.emit("api://status", &json!({"type": "api", "running": true, "info": info}));
-        Ok(info)
+        Ok(ApiInfo { url: format!("http://127.0.0.1:{gport}/v1/chat/completions"), base_url: format!("http://127.0.0.1:{gport}/v1"), token: self.gateway.token.clone(), model: model.clone(), base_model: format!("{model}@base"), version, engine: engine.into() })
+    }
+
+    /// Is the local API up, and for which project? Also notices a model process that died on its
+    /// own (for example when the computer ran out of memory) and tidies up after it.
+    pub async fn api_status(&self) -> ApiStatus {
+        let _guard = self.api_lock.lock().await;
+        let current = self.api_info.lock().await.clone();
+        let Some((project_id, info)) = current else { return ApiStatus { running: false, project_id: None, info: None } };
+        let llama_alive = match self.llama.lock().await.as_mut() {
+            Some(child) => matches!(child.try_wait(), Ok(None)),
+            None => false,
+        };
+        let worker_alive = match self.serve_job.lock().await.as_ref() {
+            Some(id) => self.sup.running().iter().any(|(j, _)| j == id),
+            None => false,
+        };
+        if llama_alive || worker_alive {
+            return ApiStatus { running: true, project_id: Some(project_id), info: Some(info) };
+        }
+        self.stop_worker().await;
+        self.gateway.stop().await;
+        *self.api_info.lock().await = None;
+        self.sink.emit("api://status", &json!({"type": "api", "running": false}));
+        ApiStatus { running: false, project_id: None, info: None }
+    }
+
+    /// One chat turn through the local API, exactly as another app on this computer would call it
+    /// (same address, same key). Used by the "Try it here" chat in the window.
+    pub async fn chat_local_api(&self, messages: Value, use_base: bool) -> AppResult<String> {
+        let Some((_, info)) = self.api_info.lock().await.clone() else {
+            return Err(AppError { code: "API_STOPPED".into(), message: "The local API is not running. Press “Start local API” first.".into(), retryable: true });
+        };
+        if !messages.is_array() {
+            return Err(AppError { code: "BAD_INPUT".into(), message: "messages must be a list".into(), retryable: false });
+        }
+        let client = reqwest::Client::builder().no_proxy().timeout(std::time::Duration::from_secs(600)).build().map_err(|e| anyhow!(e))?;
+        let body = json!({"model": if use_base { &info.base_model } else { &info.model }, "messages": messages, "max_tokens": 512});
+        let resp = client.post(&info.url).bearer_auth(&info.token).json(&body).send().await.map_err(|e| AppError { code: "CHAT_FAILED".into(), message: format!("The local API did not answer ({e}). Stop it and start it again."), retryable: true })?;
+        let status = resp.status();
+        let v: Value = resp.json().await.unwrap_or_else(|_| json!({}));
+        if !status.is_success() {
+            let detail = v["error"]["message"].as_str().map(String::from).unwrap_or_else(|| format!("the model returned an error ({status})"));
+            return Err(AppError { code: "CHAT_FAILED".into(), message: detail, retryable: true });
+        }
+        Ok(v["choices"][0]["message"]["content"].as_str().unwrap_or_default().to_string())
     }
 
     /// Serve with the bundled llama.cpp when the base is GGUF and the active version has a GGUF
@@ -456,6 +557,7 @@ impl App {
         #[cfg(windows)]
         cmd.creation_flags(0x0800_0000);
         let mut child = cmd.spawn().with_context_msg("could not start the bundled llama-server")?;
+        crate::procguard::adopt_tokio(&child);
         let client = reqwest::Client::builder().no_proxy().build()?;
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(180);
         loop {
@@ -495,8 +597,10 @@ impl App {
     }
 
     pub async fn stop_local_api(&self) -> AppResult<()> {
+        let _guard = self.api_lock.lock().await;
         self.stop_worker().await;
         self.gateway.stop().await;
+        *self.api_info.lock().await = None;
         self.sink.emit("api://status", &json!({"type": "api", "running": false}));
         Ok(())
     }
@@ -507,6 +611,9 @@ impl App {
     }
 
     pub async fn import_adapter(&self, project_id: &str, file: &str, trust: bool, preset: Option<String>) -> AppResult<Value> {
+        if self.sup.busy(&[JobKind::Train, JobKind::Import], None) {
+            return Err(busy("Training is running. Import the adapter when it has finished."));
+        }
         let mut args = vec!["import".into(), "--project".into(), self.dir(project_id)?, "--file".into(), file.into()];
         if trust {
             args.push("--trust".into());

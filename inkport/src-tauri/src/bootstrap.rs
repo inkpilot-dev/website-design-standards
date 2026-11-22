@@ -381,7 +381,7 @@ pub async fn engine_hello(bundle: &Bundle, home: &Path) -> Result<(String, BTree
         c.env_remove(k);
     }
     c.envs(set);
-    let out = tokio::time::timeout(Duration::from_secs(90), c.output()).await.map_err(|_| anyhow!("the bundled engine took too long to start"))??;
+    let out = tokio::time::timeout(Duration::from_secs(300), c.output()).await.map_err(|_| anyhow!("the bundled engine took too long to start (an antivirus scan of a new installation can slow the first launch; try again in a minute)"))??;
     for line in String::from_utf8_lossy(&out.stdout).lines() {
         if let Ok(v) = serde_json::from_str::<Value>(line) {
             if v["type"] == "hello" {
