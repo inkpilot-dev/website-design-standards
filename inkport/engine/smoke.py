@@ -148,6 +148,65 @@ The rent is reviewed once a year, on January 15, and any change takes effect 90 
 """
 
 
+# Questions customers ask a small shop, each asked in several ways, with the reply the shop wants.
+# A sample for the "custom skill" goal: the replies are short, polite and always say thank you,
+# so the two suggested rules ("no more than 50 words", 'must mention "thank you"') hold.
+SUPPORT = [
+    (["What time do you open on weekdays?", "When are you open Monday to Friday?", "What are your weekday opening hours?", "How late are you open on a weekday?", "Until what time can I come by on a Tuesday?"],
+     "We are open from 8 am to 6 pm, Monday to Friday. Thank you for asking!"),
+    (["Are you open on Saturday?", "What are your Saturday hours?", "Can I shop with you on a Saturday?", "When do you close on Saturdays?", "Do you open at the weekend?"],
+     "Yes, we are open on Saturdays from 9 am to 4 pm, and closed on Sundays. Thank you for checking!"),
+    (["Are you open on public holidays?", "Do you close on bank holidays?", "Will the shop be open on a holiday?", "What are your holiday hours?", "Can I visit on a public holiday?"],
+     "We are closed on public holidays and reopen the next working day at 8 am. Thank you for your patience!"),
+    (["How long do I have to return something?", "What is your return policy?", "Can I bring an item back?", "How many days do I have for a return?", "I changed my mind about a purchase, can I return it?"],
+     "You can return unused items within 30 days with your receipt for a full refund. Thank you for shopping with us!"),
+    (["Can I return something without a receipt?", "I lost my receipt, can I still return this?", "Do I need the receipt for a return?", "What if I have no proof of purchase?", "Is a return possible without the receipt?"],
+     "Without a receipt we can offer store credit for the current price of the item. Thank you for understanding!"),
+    (["Can I return a power tool I have used?", "Do you take back used tools?", "I used the drill once, can I return it?", "What is the return rule for opened power tools?", "Are used power tools refundable?"],
+     "Used power tools can be exchanged within 14 days if they are faulty, but not refunded. Thank you for asking first!"),
+    (["How much is delivery?", "What do you charge for shipping?", "Is there a delivery fee?", "What does it cost to have an order delivered?", "How much is shipping for a small order?"],
+     "Delivery costs $6 for orders under $75 and is free above that. Thank you for your order!"),
+    (["How long does delivery take?", "When will my order arrive?", "How fast do you ship?", "How many days does shipping take?", "What is the delivery time?"],
+     "Orders placed before 2 pm ship the same day and usually arrive within 3 working days. Thank you for your patience!"),
+    (["Do you deliver bulky items like timber?", "Can you deliver long lengths of wood?", "Do you ship heavy items?", "Is delivery available for sheet material?", "Can large orders be brought to my site?"],
+     "Yes, bulky items are delivered by our own van within 25 miles for a flat $20. Thank you for asking!"),
+    (["Can I collect my order from the shop?", "Do you offer click and collect?", "Is in-store pickup possible?", "Can I order online and pick it up?", "How does collection work?"],
+     "Yes, online orders are ready to collect within 2 hours during opening times. Thank you for choosing collection!"),
+    (["Which payment methods do you take?", "Can I pay by card?", "Do you accept contactless payments?", "How can I pay in the shop?", "Do you take cash?"],
+     "We accept cash, all major cards and contactless payments in the shop and online. Thank you for asking!"),
+    (["Do you offer trade accounts?", "Can my business open an account with you?", "Is there an account for contractors?", "How do I get a trade account?", "Do builders get an account?"],
+     "Yes, trade customers can open an account with 30 days to pay and 10% off list prices. Thank you for your interest!"),
+    (["Do you price match?", "Will you match a competitor's price?", "I found it cheaper elsewhere, can you match that?", "Is there a price promise?", "Do you beat other shops' prices?"],
+     "We match the price of any local shop on identical items that are in stock. Thank you for giving us the chance!"),
+    (["Do you cut keys?", "Can you copy a house key?", "Is there a key cutting service?", "How long does it take to cut a key?", "Can I get a spare key made?"],
+     "Yes, we cut most house keys while you wait, usually in about 5 minutes. Thank you for asking!"),
+    (["Can you mix paint to a colour?", "Do you offer paint mixing?", "Can you match a paint colour for me?", "I need a custom paint colour, can you help?", "Is colour matching available?"],
+     "Yes, we mix paint to any colour code and can match a sample you bring in. Thank you for thinking of us!"),
+    (["Do you cut timber to size?", "Can you cut wood for me?", "Is there a timber cutting service?", "Will you cut a sheet of plywood to my measurements?", "How much do you charge to cut wood?"],
+     "The first 3 cuts on timber bought from us are free, and extra cuts cost $1 each. Thank you for asking!"),
+    (["Do you sharpen tools?", "Can you sharpen my chisels?", "Is there a sharpening service?", "Can I get garden shears sharpened?", "How long does blade sharpening take?"],
+     "Yes, we sharpen blades and garden tools, and they are ready within 2 working days. Thank you for your custom!"),
+    (["Do you hire out tools?", "Can I rent a floor sander?", "Is tool hire available?", "How much is it to hire a tile cutter?", "Do you rent equipment by the day?"],
+     "Yes, we hire tools by the day or the week, with a refundable deposit taken at pickup. Thank you for asking!"),
+    (["What warranty do your tools have?", "How long is the guarantee on power tools?", "Is there a warranty on what I buy?", "What happens if a tool breaks?", "Are your tools guaranteed?"],
+     "Power tools carry a 2 year warranty, and hand tools are guaranteed for 10 years. Thank you for your trust!"),
+    (["Do you sell gift cards?", "Can I buy a voucher?", "Are gift vouchers available?", "I need a present, do you have gift cards?", "Can gift cards be used online?"],
+     "Yes, gift cards are available from $10 and can be used in the shop and online. Thank you for the kind thought!"),
+    (["Is there parking at the shop?", "Where can I park?", "Do you have a car park?", "Can I park a van outside?", "Is parking free?"],
+     "There is free parking for 20 cars behind the shop, with space for vans. Thank you for visiting!"),
+    (["Can you order an item you do not stock?", "Do you take special orders?", "Can you get in a part for me?", "I need something you do not have, can you order it?", "How long do special orders take?"],
+     "Yes, we can order most items within 5 working days with a 20% deposit. Thank you for asking!"),
+    (["Do you recycle old batteries?", "Can I drop off used batteries?", "Do you take old paint tins?", "Is there a recycling point in the shop?", "Where can I recycle light bulbs?"],
+     "Yes, you can leave used batteries and light bulbs at the recycling point by the door. Thank you for recycling!"),
+    (["How do I contact customer service?", "What is the best way to reach you?", "Do you have a phone number?", "Can I email you a question?", "Who do I speak to about an order?"],
+     "You can call us during opening hours or email at any time, and we reply within one working day. Thank you for getting in touch!"),
+    (["Do you have a loyalty scheme?", "Is there a rewards card?", "Do regular customers get a discount?", "How do I collect points?", "Do you offer a membership?"],
+     "Yes, our free loyalty card gives you 1 point per dollar and $5 off for every 100 points. Thank you for your loyalty!"),
+    (["Do you give advice on DIY projects?", "Can someone help me choose the right screws?", "Is there staff who can advise on plumbing?", "Can I ask for help planning a project?", "Do you offer free advice?"],
+     "Yes, our staff are happy to advise on any project, free of charge, in the shop or by phone. Thank you for asking!"),
+]
+
+
 def write_smoke_data(out: Path) -> dict:
     out.mkdir(parents=True, exist_ok=True)
     rows = expense_rows()
@@ -174,6 +233,12 @@ def write_smoke_data(out: Path) -> dict:
         encoding="utf-8",
     )
     (out / "lease.md").write_text(LEASE, encoding="utf-8")
+    with open(out / "support.csv", "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["question", "answer"])
+        for questions, answer in SUPPORT:
+            for question in questions:
+                w.writerow([question, answer])
     return {"dir": str(out), "files": sorted(p.name for p in out.iterdir())}
 
 

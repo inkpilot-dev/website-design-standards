@@ -47,7 +47,7 @@ def test_docs_reference_answers_pass_citation_check(project, tmp_path):
             assert not score_item(it, fake, vset, ctx)["pass"]
 
 
-SAMPLE_FILES = {"business_rules": ["expenses.csv", "policy.md"], "code_sql": ["orders.csv", "customers.csv", "helpers.py"], "docs_legal": ["lease.md"]}
+SAMPLE_FILES = {"business_rules": ["expenses.csv", "policy.md"], "code_sql": ["orders.csv", "customers.csv", "helpers.py"], "docs_legal": ["lease.md"], "custom": ["support.csv"]}
 
 
 @pytest.mark.parametrize("template", sorted(SAMPLE_FILES))

@@ -147,8 +147,13 @@ if (-not $samples -or -not (Test-Path -LiteralPath (Join-Path $samples "expenses
 
 $p = InkCli create-project --name "Clean Check" --template business_rules
 if (-not $p -or $p.slug -ne "clean-check") { Fail "create project" }
-$ing = InkCli ingest --project clean-check --inputs (Join-Path $samples "expenses.csv") (Join-Path $samples "policy.md") --rules (JsonArg '["amount must be positive"]')
+# The three rules the app suggests for this goal (contracts/templates.json): what a new user clicks.
+$rules = '["category must be one of fuel, meals, software, office_supplies, travel","amount must be positive","if the description mentions Uber then category must be travel"]'
+$ing = InkCli ingest --project clean-check --inputs (Join-Path $samples "expenses.csv") (Join-Path $samples "policy.md") --rules (JsonArg $rules)
 if (-not $ing -or -not $ing.leakage_free) { Fail "ingest" }
+if (-not $ing.ready) { Fail "the sample exam is not ready to train on: $($ing.blocker)" }
+$unused = @($ing.rules | Where-Object { -not $_.ok })
+if ($unused.Count -gt 0) { Fail "a suggested rule was not used with the sample data: $($unused[0].text) - $($unused[0].error)" }
 Pass "practice exam built from bundled samples (train $($ing.counts.train) / hidden test $($ing.counts.test), zero leakage)"
 
 # Answers from the bundled model before any training: the bundled answer engine starts and serves.

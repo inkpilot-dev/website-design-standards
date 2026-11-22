@@ -6,7 +6,7 @@ import type { DataDraft } from "../App";
 import { Badge, Button, Card, Drawer, ErrorNote, Icon, Note, PageHeader, SectionTitle, Spinner, TextInput } from "../components/ui";
 
 const basename = (p: string) => p.split(/[\\/]/).pop() ?? p;
-const SAMPLE_FILES: Record<Template["id"], string[]> = { business_rules: ["expenses.csv", "policy.md"], code_sql: ["orders.csv", "customers.csv", "helpers.py"], docs_legal: ["lease.md"], custom: [] };
+const SAMPLE_FILES: Record<Template["id"], string[]> = { business_rules: ["expenses.csv", "policy.md"], code_sql: ["orders.csv", "customers.csv", "helpers.py"], docs_legal: ["lease.md"], custom: ["support.csv"] };
 const EMPTY: DataDraft = { files: [], rules: [], checks: {}, summary: null, preview: null, stale: false };
 
 interface Props {

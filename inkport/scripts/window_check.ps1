@@ -182,7 +182,7 @@ $app = StartApp
 $code = Drive "goals"
 Screen "desktop-after-goals"
 $null = CloseApp $app
-if ($code -eq 0) { Pass "Small Business, Code & SQL and Personal Docs each build a usable exam from their samples" } else { Bad "a goal's sample data or suggested rules did not give a usable exam (see the lines above)" }
+if ($code -eq 0) { Pass "all four goals build a usable exam from their sample data with every suggested rule" } else { Bad "a goal's sample data or suggested rules did not give a usable exam (see the lines above)" }
 
 Say "Checking the installation is unchanged"
 $doctor = (& $Cli doctor --full 2>$null | Where-Object { $_ -like "RESULT *" } | Select-Object -Last 1)

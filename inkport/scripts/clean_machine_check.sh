@@ -84,9 +84,14 @@ S=$("$CLI" samples 2>>"$WORK/cli.log" | json | field samples)
 [ -f "$S/expenses.csv" ] || fail "bundled sample data missing"
 
 "$CLI" create-project --name "Clean Check" --template business_rules 2>>"$WORK/cli.log" | json | grep -q '"slug":"clean-check"' || fail "create project"
-I=$("$CLI" ingest --project clean-check --inputs "$S/expenses.csv" "$S/policy.md" --rules '["amount must be positive"]' 2>>"$WORK/cli.log" | json) || fail "ingest crashed"
+# The three rules the app suggests for this goal (contracts/templates.json): what a new user clicks.
+RULES='["category must be one of fuel, meals, software, office_supplies, travel","amount must be positive","if the description mentions Uber then category must be travel"]'
+I=$("$CLI" ingest --project clean-check --inputs "$S/expenses.csv" "$S/policy.md" --rules "$RULES" 2>>"$WORK/cli.log" | json) || fail "ingest crashed"
 echo "$I" | grep -q '"leakage_free":true' || fail "ingest: $I"
-pass "practice exam built from bundled samples (hidden test locked, zero leakage)"
+echo "$I" | grep -q '"ready":true' || fail "the sample exam is not ready to train on: $I"
+# A rule that is not used carries the reason in "error" (rules in use have an empty one).
+if echo "$I" | grep -Eq '"error":"[^"]'; then fail "a suggested rule was not used with the sample data: $I"; fi
+pass "practice exam built from bundled samples with the three suggested rules (hidden test locked, zero leakage)"
 
 if [ "$MODEL" = "smoke-tiny" ]; then
   T=$("$CLI" train --project clean-check --preset smoke 2>>"$WORK/cli.log" | json) || fail "training crashed"

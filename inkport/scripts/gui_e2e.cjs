@@ -205,7 +205,7 @@ async function openPlaywright() {
       // rules, build. Every goal that ships sample data has to end with an exam that can be trained on.
       const templates = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'contracts', 'templates.json'), 'utf8')).templates;
       let n = 0;
-      for (const id of ['business_rules', 'code_sql', 'docs_legal']) {
+      for (const id of ['business_rules', 'code_sql', 'docs_legal', 'custom']) {
         const t = templates.find((x) => x.id === id);
         n += 1;
         if (n > 1) await nav('Choose a goal');
@@ -239,7 +239,7 @@ async function openPlaywright() {
       await nav('Choose a goal');
       await waitText('Continue a project');
       const all = await text();
-      check('all three projects are listed with their exams built', ['Goal check 1', 'Goal check 2', 'Goal check 3'].every((x) => all.includes(x)) && (all.match(/practice exam built/g) || []).length >= 3, all.slice(0, 200));
+      check('all four projects are listed with their exams built', ['Goal check 1', 'Goal check 2', 'Goal check 3', 'Goal check 4'].every((x) => all.includes(x)) && (all.match(/practice exam built/g) || []).length >= 4, all.slice(0, 200));
     } else {
       // ------------------------------------------------------------ step 2: choose a goal
       await waitText('What do you want your AI to master?');
