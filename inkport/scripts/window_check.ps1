@@ -28,7 +28,11 @@ $Script = Join-Path $PSScriptRoot "gui_e2e.cjs"
 $jp = [string][char]0x65E5 + [char]0x672C + [char]0x8A9E      # Japanese
 $ru = [string][char]0x0414 + [char]0x0430 + [char]0x043D + [char]0x043D + [char]0x044B + [char]0x0435   # Russian
 $acc = [string][char]0x00E9 + [char]0x00FC                     # e-acute, u-umlaut
-$Root = Join-Path $env:TEMP ("inkport window " + [guid]::NewGuid().ToString("N").Substring(0, 6))
+# %TEMP% is often in its short form (C:\Users\RUNNER~1\...), while Windows reports a running program
+# by its long path. Use the long form here, and recognise our processes by this run's folder name.
+$Marker = "inkport window " + [guid]::NewGuid().ToString("N").Substring(0, 6)
+$TempLong = if ($env:LOCALAPPDATA -and (Test-Path -LiteralPath (Join-Path $env:LOCALAPPDATA "Temp"))) { Join-Path $env:LOCALAPPDATA "Temp" } else { $env:TEMP }
+$Root = Join-Path $TempLong $Marker
 $InstallDir = Join-Path $Root "Program files $jp $acc\Inkport"
 $DataDir = Join-Path $Root "$ru $acc data\Inkport"
 New-Item -ItemType Directory -Force -Path $Root, $DataDir | Out-Null
@@ -37,7 +41,7 @@ $script:failed = 0
 function Say($m) { Write-Host "==> $m" -ForegroundColor Cyan }
 function Pass($m) { Write-Host ("    PASS [{0:HH:mm:ss}] {1}" -f (Get-Date), $m) -ForegroundColor Green }
 function Bad($m) { Write-Host ("    FAIL [{0:HH:mm:ss}] {1}" -f (Get-Date), $m) -ForegroundColor Red; $script:failed++ }
-function Ours($name) { @(Get-CimInstance Win32_Process -Filter "Name = '$name'" -ErrorAction SilentlyContinue | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($InstallDir, [StringComparison]::OrdinalIgnoreCase) }) }
+function Ours($name) { @(Get-CimInstance Win32_Process -Filter "Name = '$name'" -ErrorAction SilentlyContinue | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.IndexOf($Marker, [StringComparison]::OrdinalIgnoreCase) -ge 0 }) }
 function StopOurs { foreach ($n in @("inkport.exe", "inkport-cli.exe", "llama-server.exe", "python.exe")) { Ours $n | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue } } }
 function Cleanup {
   StopOurs
@@ -101,6 +105,8 @@ if ($p.ExitCode -ne 0) { Die "installer exited with $($p.ExitCode)" }
 $Cli = Join-Path $InstallDir "inkport-cli.exe"
 if (-not (Test-Path -LiteralPath (Join-Path $InstallDir "inkport.exe"))) { Die "inkport.exe is not in $InstallDir" }
 Pass "installed"
+Start-Sleep -Seconds 2
+$installedAt = Get-Date
 $env:INKPORT_HOME = $DataDir
 $env:INKPORT_TEST_OVERRIDES = $TrainOverrides
 $env:INKPORT_BUNDLE_DIR = $null
@@ -153,7 +159,7 @@ Say "Starting Inkport a second time"
 $second = Start-Process -FilePath (Join-Path $InstallDir "inkport.exe") -PassThru
 $null = $second.Handle
 if ($second.WaitForExit(30000)) {
-  $copies = (Ours "inkport.exe").Count
+  $copies = @(Ours "inkport.exe").Count
   if ($copies -eq 1 -and -not $app.HasExited) { Pass "the second launch handed over to the open window and quit (one copy running)" } else { Bad "after a second launch $copies copies are running (first one alive: $(-not $app.HasExited))" }
 } else { Bad "a second copy of Inkport stayed open"; try { $second.Kill() } catch { } }
 
@@ -163,21 +169,22 @@ $serve = Start-Process -FilePath $Cli -ArgumentList @("serve", "--project", "win
 $null = $serve.Handle
 $deadline = (Get-Date).AddSeconds(240)
 while ((Get-Date) -lt $deadline -and -not $serve.HasExited -and -not ((Test-Path $serveOut) -and (Select-String -Path $serveOut -Pattern "^RESULT" -Quiet))) { Start-Sleep -Seconds 2 }
-$helpers = (Ours "llama-server.exe").Count
+$helpers = @(Ours "llama-server.exe").Count
 if ($serve.HasExited -or $helpers -lt 1) {
   Bad "the command-line server did not come up (helpers: $helpers)"
   if (Test-Path (Join-Path $Root "serve.err")) { Get-Content (Join-Path $Root "serve.err") -Tail 15 | ForEach-Object { Write-Host "    $_" } }
 } else {
   Stop-Process -Id $serve.Id -Force
   $gone = $false
-  foreach ($i in 1..20) { Start-Sleep -Seconds 1; if ((Ours "llama-server.exe").Count -eq 0) { $gone = $true; break } }
+  foreach ($i in 1..20) { Start-Sleep -Seconds 1; if (@(Ours "llama-server.exe").Count -eq 0) { $gone = $true; break } }
   if ($gone) { Pass "the answer engine ended with the app that started it (no orphan process)" } else { Bad "llama-server.exe kept running after its app was ended"; StopOurs }
 }
 
 Say "Closing Inkport with the window's close button"
 $closed = CloseApp $app
 Start-Sleep -Seconds 3
-$left = @((Ours "inkport.exe") + (Ours "llama-server.exe") + (Ours "python.exe"))
+# @(...) around each call: a function that finds nothing returns nothing at all, and nothing + nothing is not an empty list.
+$left = @(@(Ours "inkport.exe") + @(Ours "llama-server.exe") + @(Ours "python.exe"))
 if ($closed -and $left.Count -eq 0) { Pass "the app closed and left no process behind" } else { Bad "after closing: closed by itself = $closed, processes left = $(($left | ForEach-Object { $_.Name }) -join ', ')"; StopOurs }
 
 Say "Opening Inkport again: the project, its exam and its trained version must still be there"
@@ -198,8 +205,9 @@ if ($code -eq 0) { Pass "all four goals build a usable exam from their sample da
 Say "Checking the installation is unchanged"
 $doctor = (& $Cli doctor --full 2>$null | Where-Object { $_ -like "RESULT *" } | Select-Object -Last 1)
 if ($doctor -and ($doctor.Substring(7) | ConvertFrom-Json).ok) { Pass "every installed file still matches the manifest" } else { Bad "the installation no longer verifies: $doctor" }
-$strays = @(Get-ChildItem -LiteralPath $InstallDir -Recurse -File | Where-Object { $_.LastWriteTime -gt (Get-Date).AddHours(-3) -and $_.Extension -in ".pyc", ".log", ".tmp" })
-if ($strays.Count -eq 0) { Pass "nothing was written into the installation folder" } else { Bad "$($strays.Count) new file(s) in the installation folder, e.g. $($strays[0].FullName)" }
+# Anything created or changed after the installer finished was written by Inkport while it ran.
+$strays = @(Get-ChildItem -LiteralPath $InstallDir -Recurse -File | Where-Object { $_.CreationTime -gt $installedAt -or $_.LastWriteTime -gt $installedAt })
+if ($strays.Count -eq 0) { Pass "nothing was written into the installation folder" } else { Bad "$($strays.Count) file(s) were written into the installation folder, e.g. $($strays[0].FullName)" }
 
 Cleanup
 Write-Host ""
