@@ -33,6 +33,22 @@ def adapted_modules(weight_names: Any) -> list[str]:
     return sorted(found)
 
 
+def answer_mask(length: int, start: int, padded: int) -> list[int]:
+    """Which next-token predictions count, for one example padded to ``padded`` tokens.
+
+    The answer is tokens ``start`` .. ``length - 1``. Position ``j`` of the input predicts token
+    ``j + 1``, so the answer's first token is predicted at position ``start - 1`` and its last at
+    ``length - 2``; the result has ``padded - 1`` entries (inputs are all tokens but the last).
+
+    This used to begin one position late, at ``start``: the first token of every answer was never
+    trained, here and nowhere else (the other backend marks the answer by its tokens and lets the
+    library shift). What the model then wrote first was left to chance, a model that scored 95%
+    with a handful of malformed answers in one run and 0% in the next.
+    """
+    first = max(start - 1, 0)
+    return [1 if first <= j < length - 1 else 0 for j in range(padded - 1)]
+
+
 class MlxBackend(Backend):
     name = "mlx"
 
@@ -188,8 +204,8 @@ class MlxBackend(Backend):
             cut = len(f) - max_seq
             f = f[cut:]
             start = max(0, start - cut)
-        if start >= len(f) - 1:
-            return None
+        if start >= len(f):
+            return None  # nothing of the answer is left to learn
         return f, start
 
     def _arrays(self, examples: list[dict]) -> Optional[tuple[Any, Any, Any]]:
@@ -199,7 +215,7 @@ class MlxBackend(Backend):
         L = max(len(ids) for ids, _ in enc)
         pad = self.tok.pad_token_id if getattr(self.tok, "pad_token_id", None) is not None else 0
         ids = [x + [pad] * (L - len(x)) for x, _ in enc]
-        mask = [[1 if (start <= j < len(x) - 1) else 0 for j in range(L - 1)] for x, start in enc]
+        mask = [answer_mask(len(x), start, L) for x, start in enc]
         a = self.mx.array(ids)
         return a[:, :-1], a[:, 1:], self.mx.array(mask)
 

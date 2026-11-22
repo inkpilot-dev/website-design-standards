@@ -68,15 +68,37 @@ def test_format_check_needs_a_real_drop():
     assert not format_check(1.0, 0.9, None, [True] * 88)  # old cached baseline: plain threshold
 
 
-def test_a_saved_mac_adapter_names_the_modules_it_adapts():
-    """Whoever loads the adapter must adapt exactly the modules it has weights for."""
+def _mac_backend_function(name: str):
+    """A plain function from the Mac backend (the module itself needs MLX to import)."""
     import ast
     from pathlib import Path
 
     src = (Path(__file__).resolve().parents[2] / "engine" / "backends" / "mlx_backend.py").read_text()
-    fn = next(n for n in ast.parse(src).body if isinstance(n, ast.FunctionDef) and n.name == "adapted_modules")
+    fn = next(n for n in ast.parse(src).body if isinstance(n, ast.FunctionDef) and n.name == name)
     scope: dict = {"Any": object}
-    exec(compile(ast.Module(body=[fn], type_ignores=[]), "mlx_backend", "exec"), scope)  # the module itself needs MLX to import
+    exec(compile(ast.Module(body=[fn], type_ignores=[]), "mlx_backend", "exec"), scope)
+    return scope[name]
+
+
+def test_mac_training_teaches_every_token_of_the_answer_including_the_first():
+    """The same tokens must count on the Mac as in the other backend (which marks the answer's
+    tokens and lets the library shift them): every answer token, from the first to the last."""
+    answer_mask = _mac_backend_function("answer_mask")
+    # 9 tokens, the answer is tokens 5..8, padded to 12: inputs are tokens 0..10.
+    mask = answer_mask(9, 5, 12)
+    assert len(mask) == 11
+    taught = [j + 1 for j, on in enumerate(mask) if on]  # position j predicts token j + 1
+    assert taught == [5, 6, 7, 8], taught
+    # The other backend's labels for the same example: -100 for the prompt, then the answer.
+    labels = [-100] * 5 + [50, 60, 70, 80] + [-100] * 3
+    assert taught == [i for i, lab in enumerate(labels) if lab != -100]
+    assert answer_mask(6, 5, 6) == [0, 0, 0, 0, 1]  # an answer of one token is still taught
+    assert answer_mask(4, 0, 4) == [1, 1, 1]  # cut so short that only answer is left: no position before its first token
+
+
+def test_a_saved_mac_adapter_names_the_modules_it_adapts():
+    """Whoever loads the adapter must adapt exactly the modules it has weights for."""
+    scope = {"adapted_modules": _mac_backend_function("adapted_modules")}
     names = ["model.layers.0.self_attn.q_proj.lora_a", "model.layers.0.self_attn.q_proj.lora_b", "model.layers.27.mlp.down_proj.lora_b", "language_model.model.layers.3.mlp.up_proj.m", "model.embed_tokens.weight"]
     assert scope["adapted_modules"](names) == ["mlp.down_proj", "mlp.up_proj", "self_attn.q_proj"]
     assert scope["adapted_modules"]([]) == []
