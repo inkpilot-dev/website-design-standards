@@ -108,3 +108,57 @@ def test_generated_sql_questions_read_naturally(project, tmp_path):
     assert any("highest total?" in p for p in prompts)
     sources = {c["source"] for c in preview(project, 12)["items"]}
     assert sources <= {"your tables", "helpers.py"}, sources
+
+
+STYLE = [
+    ("How are you today?", "I am as merry as a lark at dawn, good friend. And how dost thou fare this day?"),
+    ("Good night.", "Good night, sweet friend. May soft sleep wrap thee till thou wakest with the lark."),
+    ("I am tired.", "Then lay thee down and rest. Sleep knits up the ravelled sleeve of care, and thou hast earned it."),
+    ("What is love?", "Love is a fire that warms yet may burn. Guard it well, and thou shalt never want for light."),
+]
+
+
+def _style_file(tmp_path, n=60):
+    import csv
+
+    path = tmp_path / "style.csv"
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["question", "answer"])
+        for i in range(n):
+            q, a = STYLE[i % len(STYLE)]
+            w.writerow([f"{q} (asked on day {i})", f"{a} So say I on day {i}, and thou mayst mark it well."])
+    return path
+
+
+def test_a_style_is_judged_by_the_rules_not_by_the_wording_of_one_expected_answer(project, tmp_path):
+    """Seen with 120 Shakespeare-style examples and the rules 'must mention "thou"' and 'no more
+    than 50 words': every answer of the trained model was marked wrong, also "Good morrow, thou
+    hast a kind heart. May the day be fair to thee.", because it shared too few words with the one
+    expected answer. The verdict was 0% against 0%, whatever was trained."""
+    _retemplate(project, "custom")
+    summary = run_ingest(project, [str(_style_file(tmp_path))], ['must mention "thou"', "no more than 50 words"])
+    assert summary["ready"] and all(r["ok"] for r in summary["rules"]), summary
+    vset, ctx = load_verifier_set(project), Context(root=project)
+    item = next(iter(read_jsonl(project / "data" / "dev.jsonl")))
+    assert score_item(item, "Good morrow, thou hast a kind heart. May the day be fair to thee.", vset, ctx)["pass"]
+    assert not score_item(item, "Hello! How can I assist you today?", vset, ctx)["pass"]
+    assert not score_item(item, "thou " * 60, vset, ctx)["pass"]
+
+
+def test_a_style_without_any_rule_says_that_a_rule_is_needed(project, tmp_path):
+    _retemplate(project, "custom")
+    summary = run_ingest(project, [str(_style_file(tmp_path))], [])
+    assert any("Add at least one rule" in w for w in summary["warnings"]), summary["warnings"]
+
+
+def test_set_replies_asked_in_several_ways_still_have_to_say_the_same_thing(project, tmp_path):
+    # The bundled customer-replies sample: a handful of answers, each asked in many ways.
+    _retemplate(project, "custom")
+    data = tmp_path / "d"
+    write_smoke_data(data)
+    run_ingest(project, [str(data / "support.csv")], ["no more than 50 words"])
+    vset, ctx = load_verifier_set(project), Context(root=project)
+    item = next(iter(read_jsonl(project / "data" / "dev.jsonl")))
+    assert score_item(item, item["reference"], vset, ctx)["pass"]
+    assert not score_item(item, "Thank you, we will look into it.", vset, ctx)["pass"]

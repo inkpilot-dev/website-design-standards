@@ -864,6 +864,24 @@ def run_ingest(root: Path, inputs: list[str], rule_texts: list[str]) -> dict:
         it["verifiers"] = it["verifiers"] + [s["id"] for s in rule_specs]
     verifiers += rule_specs
     rule_warnings = []
+    # Free-form answers (a style, a tone: every expected answer different) cannot be judged by how
+    # many words they share with the one expected answer: a good answer in the same style shares
+    # few. Seen with 120 Shakespeare-style examples: "Good morrow, thou hast a kind heart. May the
+    # day be fair to thee." followed both of the user's rules and was marked wrong, as was every
+    # other answer, and the trained model "passed 0%". There the user's rules are the exam; the
+    # overlap is no longer part of the pass. (Examples that repeat their answers, like a list of
+    # set replies asked in several ways, keep the overlap check.)
+    if template == "custom" and info.get("answer_style") == "long":
+        refs = [str(it.get("reference") or "").strip().lower() for it in items]
+        open_ended = len(set(refs)) >= 0.9 * max(1, len(refs))
+        info["open_ended"] = open_ended
+        if open_ended and rule_specs:
+            for v in verifiers:
+                if v["id"] == "overlap":
+                    v["role"] = "eval_only"
+            events.log("Every example has its own answer, so the exam checks your rules and not the exact wording.", "info")
+        elif open_ended:
+            rule_warnings.append("Every example has its own answer, and there is no rule yet. The exam can then only compare wording with your expected answers, which a good answer in the same style rarely matches. Add at least one rule that says what a good answer must do (for example: must mention \"thou\").")
     for rep in rule_reports:
         events.log(("Rule ok: " + rep["explanation"]) if rep["ok"] else ("Rule not used: " + rep["text"] + " - " + rep["error"]), "info" if rep["ok"] else "warn")
         if not rep["ok"]:
