@@ -270,6 +270,8 @@ export interface LogLine {
 export interface GameConfig {
   seed: number;
   maxDays: number;
+  /** Edge length of the square map, in tiles. */
+  mapSize: number;
 }
 
 export interface GameState {

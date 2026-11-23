@@ -101,7 +101,7 @@ export class ClaudeBrain {
       response = await this.client.beta.messages.create({
         model: model.id,
         max_tokens: 8000,
-        system: [{ type: 'text', text: systemPrompt(b.team), cache_control: { type: 'ephemeral' } }],
+        system: [{ type: 'text', text: systemPrompt(b.team, state.map.width), cache_control: { type: 'ephemeral' } }],
         messages: [{ role: 'user', content: renderObservation(obs) }],
         output_config: {
           effort: this.options.effort,

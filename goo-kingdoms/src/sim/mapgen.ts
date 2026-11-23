@@ -7,7 +7,7 @@
 import type { City, TeamId, Terrain, Tile, WorldMap } from '../shared/types.ts';
 import { Rng, mixSeed } from '../shared/rng.ts';
 import { NEIGHBOURS, dist, idx, inBounds, isWalkable, isWater } from '../shared/geo.ts';
-import { ISLAND_VILLAGES, ISLAND_WARDEN_HP, MAP_SIZE, NEUTRAL_VILLAGES, WARDEN_HP } from '../shared/rules.ts';
+import { ISLAND_WARDEN_HP, WARDEN_HP, islandVillages, neutralVillages } from '../shared/rules.ts';
 
 export const CAPITAL_NAMES: Record<TeamId, string> = {
   crimson: 'Scarlet Keep',
@@ -88,15 +88,20 @@ export interface GeneratedWorld {
   capitals: Record<TeamId, City>;
 }
 
-export function generateWorld(seed: number): GeneratedWorld {
+export function generateWorld(seed: number, size: number): GeneratedWorld {
   const rng = new Rng(mixSeed(seed, 1));
-  const W = MAP_SIZE;
-  const H = MAP_SIZE;
+  const W = size;
+  const H = size;
+  const k = size / 20;
+  const ISLAND_VILLAGES = islandVillages(size);
+  const NEUTRAL_VILLAGES = neutralVillages(size);
 
-  const shape = valueNoise(rng, W, 5);
-  const detail = valueNoise(rng, W, 2.5);
-  const ridge = valueNoise(rng, W, 4);
-  const woods = valueNoise(rng, W, 3);
+  // Feature sizes grow with the map, with extra detail on big maps for bays and headlands.
+  const shape = valueNoise(rng, W, 5 * Math.sqrt(k) * 1.2);
+  const detail = valueNoise(rng, W, 2.5 * Math.sqrt(k));
+  const ridge = valueNoise(rng, W, 4 * Math.sqrt(k));
+  const woods = valueNoise(rng, W, 3 * Math.sqrt(k));
+  const bays = valueNoise(rng, W, 3.2 * Math.sqrt(k));
 
   // Island shape: noise plus a soft falloff from a slightly off-centre point.
   const cx = W / 2 - 0.5 + (rng.next() - 0.5) * 2;
@@ -107,7 +112,7 @@ export function generateWorld(seed: number): GeneratedWorld {
       const dx = (x - cx) / (W * 0.52);
       const dy = (y - cy) / (H * 0.52);
       const falloff = 1 - Math.sqrt(dx * dx + dy * dy);
-      height.push(falloff * 0.9 + shape(x, y) * 0.45 + detail(x, y) * 0.15);
+      height.push(falloff * 0.9 + shape(x, y) * 0.45 + detail(x, y) * 0.15 + (k > 1.2 ? (bays(x, y) - 0.5) * 0.25 : 0));
     }
   }
   // About 58% land: pick the threshold from the sorted heights.
@@ -133,7 +138,7 @@ export function generateWorld(seed: number): GeneratedWorld {
   // Make sure there are islets for the island villages.
   let groups = components(map);
   const islets = () => groups.slice(1).filter((g) => g.length >= 2);
-  for (let attempt = 0; islets().length < ISLAND_VILLAGES && attempt < 60; attempt++) {
+  for (let attempt = 0; islets().length < ISLAND_VILLAGES && attempt < 200; attempt++) {
     const x = rng.int(2, W - 4);
     const y = rng.int(2, H - 4);
     let clear = true;
@@ -143,7 +148,9 @@ export function generateWorld(seed: number): GeneratedWorld {
       }
     }
     if (!clear) continue;
-    for (const [dx, dy] of [[0, 0], [1, 0], [0, 1], [1, 1]]) {
+    const isletTiles = k > 1.5 ? [[0, 0], [1, 0], [0, 1], [1, 1], [2, 1], [1, 2]] : [[0, 0], [1, 0], [0, 1], [1, 1]];
+    for (const [dx, dy] of isletTiles) {
+      if (x + dx >= W - 1 || y + dy >= H - 1) continue;
       map.tiles[idx(map, x + dx, y + dy)] = { terrain: rng.next() < 0.3 ? 'forest' : 'grass', resource: null };
     }
     groups = components(map);
@@ -195,7 +202,8 @@ export function generateWorld(seed: number): GeneratedWorld {
   // Capitals: one per quarter, as close to each quarter's centre as possible,
   // on grass or sand, with some walkable land around them.
   const teamOrder = rng.shuffle<TeamId>(['crimson', 'cobalt', 'amber', 'emerald']);
-  const anchors: [number, number][] = [[5, 5], [14, 5], [14, 14], [5, 14]];
+  const anchors: [number, number][] = [[0.26, 0.26], [0.74, 0.26], [0.74, 0.74], [0.26, 0.74]].map(([ax, ay]) => [ax * (W - 1), ay * (H - 1)] as [number, number]);
+  const capitalGap = Math.max(8, Math.round(size * 0.38));
   const capitals = {} as Record<TeamId, City>;
   const cities: City[] = [];
   const okCapital = (i: number) => {
@@ -217,7 +225,7 @@ export function generateWorld(seed: number): GeneratedWorld {
       if (!okCapital(i)) continue;
       const x = i % W;
       const y = Math.floor(i / W);
-      if (cities.some((c) => dist(c.x, c.y, x, y) < 8)) continue;
+      if (cities.some((c) => dist(c.x, c.y, x, y) < capitalGap)) continue;
       const score = Math.hypot(x - ax, y - ay) + rng.next() * 0.5;
       if (score < bestScore) {
         bestScore = score;
@@ -289,7 +297,8 @@ export function generateWorld(seed: number): GeneratedWorld {
     return false;
   };
   for (let v = 0; v < NEUTRAL_VILLAGES; v++) {
-    if (!placeVillage(groups[0], 4, false)) placeVillage(groups[0], 3, false);
+    const gap = Math.max(4, Math.round(size / 9));
+    if (!placeVillage(groups[0], gap, false) && !placeVillage(groups[0], gap - 1, false)) placeVillage(groups[0], 3, false);
   }
   islets()
     .slice(0, ISLAND_VILLAGES)

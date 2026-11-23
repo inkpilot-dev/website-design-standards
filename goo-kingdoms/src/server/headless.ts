@@ -9,10 +9,11 @@ import { TEAM_IDS } from '../shared/types.ts';
 const matches = Number(process.argv[2] ?? 5);
 const maxDays = Number(process.argv[3] ?? 300);
 const firstSeed = Number(process.argv[4] ?? 1);
+const mapSize = Number(process.argv[5] ?? 48);
 
 for (let m = 0; m < matches; m++) {
   const seed = firstSeed + m;
-  const state = createGame({ seed, maxDays });
+  const state = createGame({ seed, maxDays, mapSize });
   const started = Date.now();
   while (!state.over) stepDay(state, decideAllLocal(state, state.blobs));
   const parts = TEAM_IDS.map((t) => {

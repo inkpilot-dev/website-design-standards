@@ -5,14 +5,14 @@
 import * as R from '../shared/rules.ts';
 import { FACTIONS } from '../agents/factions.ts';
 import { TEAM_IDS } from '../shared/types.ts';
-import { esc } from './util.ts';
+import { blobIcon, esc } from './util.ts';
 
 export function renderRulebook(): string {
   const sections: [string, string, string][] = [];
   const add = (id: string, title: string, body: string) => sections.push([id, title, body]);
 
   add('glance', 'At a glance', `
-    <p>Four factions of blobs share one ${R.MAP_SIZE} by ${R.MAP_SIZE} island. Every faction is played by Claude, and every blob is its own Claude agent: each day it reads a report of what it can see, what its team remembers and what it heard nearby, then picks one action. You watch.</p>
+    <p>Four factions of blobs share one island, ${R.DEFAULT_MAP_SIZE} by ${R.DEFAULT_MAP_SIZE} tiles by default (${R.MAP_SIZES.join(', ')} are available in Settings). Every faction is played by Claude, and every blob is its own Claude agent: each day it reads a report of what it can see, what its team remembers and what it heard nearby, then picks one action. You watch.</p>
     <ul>
       <li>Each team starts with a capital, ${R.START_BLOBS} blobs and ${R.START_COINS} coins.</li>
       <li>One day is one tick. A match lasts up to the day limit (default ${R.DEFAULT_MAX_DAYS}, at most ${R.MAX_DAYS_LIMIT}).</li>
@@ -33,7 +33,7 @@ export function renderRulebook(): string {
   const terrainRows = (Object.keys(R.TERRAIN_COST) as (keyof typeof R.TERRAIN_COST)[])
     .map((t) => `<tr><td>${esc(t)}</td><td>${R.TERRAIN_COST[t] ?? 'impassable on foot'}</td><td>${R.TERRAIN_COVER[t] ? `+${R.TERRAIN_COVER[t]}` : 'none'}</td></tr>`).join('');
   add('island', 'The island', `
-    <p>Each seed generates the same island: one large landmass with mountain ridges, forests and hills, plus islets that only boats can reach. Capitals sit one per quarter of the map, with ${R.NEUTRAL_VILLAGES} neutral villages on the mainland and up to ${R.ISLAND_VILLAGES} on islets.</p>
+    <p>Each seed generates the same island: one large landmass with mountain ridges, forests and hills, plus islets that only boats can reach. Capitals sit one per quarter of the map. Neutral villages scale with the map: ${R.MAP_SIZES.map((s) => `${R.neutralVillages(s)} on the mainland and up to ${R.islandVillages(s)} on islets at ${s} by ${s}`).join('; ')}.</p>
     <table><thead><tr><th>Terrain</th><th>Move cost</th><th>Armour for the defender</th></tr></thead><tbody>${terrainRows}</tbody></table>
     <p>Blobs have ${R.MOVE_POINTS} move points a day and always manage at least one step. They see ${R.VISION} tiles around them (${R.VISION + R.HILL_VISION_BONUS} from hills). Fruit grows on some grass and crystal shows in some hills; both make a development worth more.</p>`);
 
@@ -86,7 +86,7 @@ export function renderRulebook(): string {
 
   const factions = TEAM_IDS.map((t) => {
     const f = FACTIONS[t];
-    return `<div class="faction"><span class="bar" style="background:${f.color}"></span><div><h3>${esc(f.name)}, ${esc(f.epithet)}</h3><p>Capital: ${esc(f.capitalLabel)}.</p><p>${esc(f.doctrine)}</p><p class="muted">Voice: ${esc(f.voice)}</p></div></div>`;
+    return `<div class="faction">${blobIcon(f.color, f.colorDark, f.colorLight)}<div><h3>${esc(f.name)}, ${esc(f.epithet)}</h3><p>Capital: ${esc(f.capitalLabel)}.</p><p>${esc(f.doctrine)}</p><p class="muted">Voice: ${esc(f.voice)}</p></div></div>`;
   }).join('');
   add('factions', 'The four Claude factions', `
     <p>All four teams run on the same Claude model. They differ only in the identity and doctrine their system prompt gives them, so the stats tab shows how much a doctrine changes play.</p>${factions}`);
@@ -98,5 +98,5 @@ export function renderRulebook(): string {
 
   const toc = sections.map(([id, title]) => `<li><a href="#rb-${id}">${esc(title)}</a></li>`).join('');
   const body = sections.map(([id, title, html]) => `<h2 id="rb-${id}">${esc(title)}</h2>${html}`).join('');
-  return `<h1>Rulebook</h1><p class="lede">Everything here is generated from the game's own rule constants, so it always matches what the engine does.</p><ul class="toc">${toc}</ul>${body}`;
+  return `<h1 id="rulebook-title">Rulebook</h1><p class="lede">Everything here is generated from the game's own rule constants, so it always matches what the engine does.</p><ul class="toc">${toc}</ul>${body}`;
 }

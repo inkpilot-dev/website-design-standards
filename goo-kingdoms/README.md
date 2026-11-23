@@ -1,6 +1,6 @@
 # Goo Kingdoms
 
-A 4X strategy game you watch. Four factions of blobs fight over a 20 by 20 island in full 3D. Every faction is played by Claude, and every blob is its own Claude agent. Each day, each blob reads only what it can see, what its team remembers and what it heard nearby, then picks one action.
+A 4X strategy game you watch. Four factions of blobs fight over a large island in full 3D (48 by 48 tiles by default; 20, 32 and 64 are also available). Every faction is played by Claude, and every blob is its own Claude agent. Each day, each blob reads only what it can see, what its team remembers and what it heard nearby, then picks one action.
 
 | Faction | Doctrine |
 | --- | --- |
@@ -52,19 +52,23 @@ Prompt caching of each faction's system prompt brings these down. The status chi
 
 ## Watching
 
+The island fills the window. The side panel on the right holds the standings, the inspector and the chronicle, plus buttons for the Rulebook, Faction stats and Settings. Play controls float at the top left of the map and view and replay controls along the bottom.
+
+
 - **Camera:**
   - Drag to orbit, right-drag to pan, scroll to zoom.
   - W A S D fly over the island, and Q and E move down and up.
   - Double-click or press F to follow the selected unit. Home resets the view.
 - **Play controls:** play, pause, step one day, and speeds of 1x, 2x, 5x and Max. Space plays and pauses; the full stop key steps one day.
 - **Seed:** enter a seed and press New match. The same seed always gives the same island.
+- **Map size:** Small (20), Medium (32), Large (48, the default) or Huge (64) in Settings. Village counts and islets scale with the map.
 - **View:**
   - Spectator sees everything, including armed traps.
   - Each faction's fog of war.
   - A single blob's sight, with its hearing range marked.
 - **Inspector:** click any blob, city, building, loot pile or the boss. For a blob you see its stats, gear, rank, the day's action and whether it worked, Claude's reasoning, what it said, tokens used and its recent days.
 - **Replay:** drag the replay slider to any earlier day, or download the whole match as JSON.
-- **Rulebook:** every rule and number, generated from the engine's constants.
+- **Rulebook:** every rule and number, generated from the engine's constants (opens over the map).
 - **Faction stats:** per-faction wins, territory, kills and deaths, economy, payments, speech, alliances, valid-action rate, API errors and tokens per decision, across every finished match on this machine.
 
 ## Rules in brief
@@ -103,4 +107,4 @@ npm run typecheck
 npm run headless -- 10 300 1
 ```
 
-The second command plays 10 local-bot matches of up to 300 days from seed 1 and prints a summary.
+The second command plays 10 local-bot matches of up to 300 days from seed 1 on a 48 by 48 map and prints a summary. Add a fourth number to pick the map size, for example `npm run headless -- 10 300 1 64`.

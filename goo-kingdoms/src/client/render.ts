@@ -208,7 +208,7 @@ export class Renderer {
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.05;
 
-    this.camera = new THREE.PerspectiveCamera(45, 1, 0.1, 300);
+    this.camera = new THREE.PerspectiveCamera(45, 1, 0.1, 1200);
     this.controls = new OrbitControls(this.camera, canvas);
     this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.08;
@@ -255,8 +255,10 @@ export class Renderer {
 
   resetCamera(): void {
     this.follow = false;
-    this.camera.position.set(-4, 17, 17);
-    this.controls.target.set(0, 0, 1);
+    const s = this.map ? this.map.width : 20;
+    this.camera.position.set(-s * 0.18, s * 0.78, s * 0.78);
+    this.controls.target.set(0, 0, s * 0.04);
+    this.controls.maxDistance = Math.max(70, s * 2.2);
     this.controls.update();
   }
 
@@ -294,6 +296,25 @@ export class Renderer {
       const d = 0.4 - this.camera.position.y;
       this.camera.position.y += d;
       this.controls.target.y += d;
+    }
+  }
+
+  private sun: THREE.DirectionalLight | null = null;
+  private shadowSpan = 17;
+
+  /** Keep crisp shadows wherever the camera looks: the sun's shadow box follows the view. */
+  private aimSun(): void {
+    const sun = this.sun;
+    if (!sun) return;
+    const t = this.controls.target;
+    sun.target.position.copy(t);
+    sun.position.set(t.x - 24, t.y + 48, t.z - 16);
+    const want = Math.max(10, Math.min(45, this.camera.position.distanceTo(t) * 0.95));
+    if (Math.abs(want - this.shadowSpan) > 1.5) {
+      this.shadowSpan = want;
+      const sc = sun.shadow.camera;
+      sc.left = -want; sc.right = want; sc.top = want; sc.bottom = -want;
+      sc.updateProjectionMatrix();
     }
   }
 
@@ -341,13 +362,13 @@ export class Renderer {
   // -------------------------------------------------------------------------
 
   private buildSky(): void {
-    const skyGeo = new THREE.SphereGeometry(150, 32, 16);
+    const skyGeo = new THREE.SphereGeometry(500, 32, 16);
     const colors: number[] = [];
     const top = new THREE.Color(0x5d9ad0);
     const horizon = new THREE.Color(0xd9e9ef);
     const pos = skyGeo.attributes.position;
     for (let i = 0; i < pos.count; i++) {
-      const t = clamp01(pos.getY(i) / 150);
+      const t = clamp01(pos.getY(i) / 500);
       const c = horizon.clone().lerp(top, Math.pow(t, 0.6));
       colors.push(c.r, c.g, c.b);
     }
@@ -360,9 +381,10 @@ export class Renderer {
     const sun = new THREE.DirectionalLight(0xffefd2, 1.9);
     sun.position.set(-12, 24, -8);
     sun.castShadow = true;
-    sun.shadow.mapSize.set(2048, 2048);
+    sun.shadow.mapSize.set(4096, 4096);
     const sc = sun.shadow.camera;
-    sc.left = -17; sc.right = 17; sc.top = 17; sc.bottom = -17; sc.near = 1; sc.far = 60;
+    sc.left = -17; sc.right = 17; sc.top = 17; sc.bottom = -17; sc.near = 1; sc.far = 140;
+    this.sun = sun;
     sun.shadow.bias = -0.0004;
     sun.shadow.normalBias = 0.03;
     sun.shadow.radius = 3;
@@ -399,7 +421,7 @@ export class Renderer {
         m.position.set((Math.random() - 0.5) * 3, Math.random() * 0.4, (Math.random() - 0.5) * 1.6);
         g.add(m);
       }
-      g.position.set(Math.random() * 40 - 20, 21 + Math.random() * 4, Math.random() * 30 - 15);
+      g.position.set(Math.random() * 80 - 40, 60 + Math.random() * 8, Math.random() * 60 - 30);
       g.userData.speed = 0.25 + Math.random() * 0.25;
       const shade = new THREE.Mesh(shadeGeo, new THREE.MeshBasicMaterial({ map: shadeTex, transparent: true, depthWrite: false, opacity: 0.55 }));
       shade.scale.set(5 + Math.random() * 2, 1, 3.5 + Math.random() * 1.5);
@@ -436,6 +458,8 @@ export class Renderer {
 
     const hf = new Heightfield(map);
     this.hf = hf;
+    this.scene.fog = new THREE.Fog(0xcfe2ea, map.width * 1.6, map.width * 5 + 60);
+    this.resetCamera();
     const ground = buildGround(hf);
     this.ground = ground.mesh;
     this.groundBase = ground.base;
@@ -509,7 +533,8 @@ export class Renderer {
           if (hash(x, y, 7) < 0.12) spots.push({ x: cx + jit(71), y: cz + jit(81), s: 0.75, r: 0 });
           for (let k = 0; k < 5; k++) tufts.push({ x: cx + jit(300 + k) * 1.1, z: cz + jit(310 + k) * 1.1, s: 0.6 + hash(x, y, 320 + k) * 0.6, r: hash(x, y, 330 + k) * 6 });
         } else if (t.terrain === 'hills') {
-          for (let k = 0; k < 3; k++) boulders.push({ x: cx + jit(50 + k), z: cz + jit(60 + k), s: 0.09 + hash(x, y, 55 + k) * 0.1, h: 0.7 + hash(x, y, 56 + k) * 0.5, r: hash(x, y, 57 + k) * 6 });
+          const nb = hash(x, y, 58) < 0.5 ? 1 : 2;
+          for (let k = 0; k < nb; k++) boulders.push({ x: cx + jit(50 + k), z: cz + jit(60 + k), s: 0.09 + hash(x, y, 55 + k) * 0.1, h: 0.7 + hash(x, y, 56 + k) * 0.5, r: hash(x, y, 57 + k) * 6 });
           for (let k = 0; k < 3; k++) tufts.push({ x: cx + jit(340 + k), z: cz + jit(350 + k), s: 0.6, r: hash(x, y, 360 + k) * 6 });
         } else if (t.terrain === 'mountain') {
           peaks.push({ x: cx + jit(4) * 0.25, z: cz + jit(5) * 0.25, s: 0.4 + hash(x, y, 3) * 0.1, h: 2.1 + hash(x, y, 6) * 1.0, r: hash(x, y, 8) * 6 });
@@ -1591,6 +1616,7 @@ export class Renderer {
     const map = this.map;
 
     this.flyCamera(dt);
+    this.aimSun();
     if (this.follow) {
       const target = this.selectionPosition();
       if (target) {
@@ -1603,13 +1629,14 @@ export class Renderer {
 
     for (const c of this.clouds) {
       c.position.x += c.userData.speed * dt;
-      if (c.position.x > 30) {
-        c.position.x = -30;
-        c.position.z = Math.random() * 30 - 15;
+      const span = (this.map ? this.map.width : 20) * 0.75 + 8;
+      if (c.position.x > span) {
+        c.position.x = -span;
+        c.position.z = (Math.random() - 0.5) * span * 1.6;
       }
       // Shade falls where sunlight through the cloud would land.
       const shade = c.userData.shade as THREE.Mesh;
-      shade.position.set(c.position.x + c.position.y * 0.5, 0.72, c.position.z + c.position.y * 0.35);
+      shade.position.set(c.position.x + 3, 0.72, c.position.z + 2);
     }
 
     if (f && map) {

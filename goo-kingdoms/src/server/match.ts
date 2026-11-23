@@ -9,7 +9,7 @@ import { createGame, makeFrame, stepDay, territoryOf } from '../sim/engine.ts';
 import { decideAllLocal } from '../agents/localbot.ts';
 import { ClaudeBrain, DEFAULT_MODEL, FatalBrainError, MODELS } from '../agents/claude.ts';
 import type { Effort } from '../agents/claude.ts';
-import { DEFAULT_MAX_DAYS, MAX_DAYS_LIMIT } from '../shared/rules.ts';
+import { DEFAULT_MAP_SIZE, DEFAULT_MAX_DAYS, MAP_SIZES, MAX_DAYS_LIMIT } from '../shared/rules.ts';
 import { recordResult } from './results.ts';
 
 export type Brain = 'claude' | 'local';
@@ -25,6 +25,7 @@ export interface Settings {
   concurrency: number;
   budgetUsd: number;
   maxDays: number;
+  mapSize: number;
 }
 
 export interface PublicStatus {
@@ -71,6 +72,7 @@ export class MatchController {
       concurrency: 8,
       budgetUsd: Number(process.env.BUDGET_USD ?? 5),
       maxDays: DEFAULT_MAX_DAYS,
+      mapSize: DEFAULT_MAP_SIZE,
     };
     this.newMatch(Math.floor(Math.random() * 100000));
   }
@@ -115,7 +117,7 @@ export class MatchController {
     this.loopToken++;
     const days = Math.max(10, Math.min(MAX_DAYS_LIMIT, Math.floor(maxDays ?? this.settings.maxDays)));
     this.settings.maxDays = days;
-    this.state = createGame({ seed: Math.abs(Math.floor(seed)) % 1_000_000, maxDays: days });
+    this.state = createGame({ seed: Math.abs(Math.floor(seed)) % 1_000_000, maxDays: days, mapSize: this.settings.mapSize });
     this.frames = [makeFrame(this.state, [], [], {})];
     this.status = 'paused';
     this.thinking = null;
@@ -144,6 +146,7 @@ export class MatchController {
     if (patch.effort === 'low' || patch.effort === 'medium' || patch.effort === 'high') this.settings.effort = patch.effort;
     if (patch.concurrency !== undefined) this.settings.concurrency = Math.max(1, Math.min(32, Math.floor(Number(patch.concurrency) || 8)));
     if (patch.budgetUsd !== undefined) this.settings.budgetUsd = Math.max(0, Number(patch.budgetUsd) || 0);
+    if (patch.mapSize !== undefined && (MAP_SIZES as readonly number[]).includes(Number(patch.mapSize))) this.settings.mapSize = Number(patch.mapSize);
     if (patch.maxDays !== undefined) this.settings.maxDays = Math.max(10, Math.min(MAX_DAYS_LIMIT, Math.floor(Number(patch.maxDays) || DEFAULT_MAX_DAYS)));
     this.error = null;
     this.pushStatus();

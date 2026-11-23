@@ -45,8 +45,8 @@ export function renderObservation(o: Observation): string {
   lines.push('');
   lines.push('CITIES YOUR TEAM KNOWS:');
   if (o.knownCities.length === 0) lines.push('- none');
-  for (const c of o.knownCities.slice(0, 12)) {
-    lines.push(`- ${c.id} ${c.name} (${c.x},${c.y}) distance ${c.distance}, owner ${c.owner}${c.isCapital ? ', capital' : ''}, L${c.level}${c.walls ? ', walled' : ''}${c.wardenHp !== null ? `, warden ${c.wardenHp} HP` : ''}${c.visible ? '' : ' (last seen)'}`);
+  for (const c of o.knownCities.slice(0, 14)) {
+    lines.push(`- ${c.id} ${c.name} (${c.x},${c.y}) distance ${c.distance}, owner ${c.owner}${c.isCapital ? ', capital' : ''}${c.island ? ', on an islet (reach it by boat)' : ''}, L${c.level}${c.walls ? ', walled' : ''}${c.wardenHp !== null ? `, warden ${c.wardenHp} HP` : ''}${c.visible ? '' : ' (last seen)'}`);
   }
 
   if (o.seenDevs.length) {

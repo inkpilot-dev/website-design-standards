@@ -13,8 +13,8 @@ import { idx, inBounds, isWater } from '../shared/geo.ts';
 
 /** Extra tiles of scenery around the 20x20 board. */
 export const MARGIN = 5;
-/** Terrain vertices per tile. */
-const RES = 8;
+/** Terrain vertices per tile: finer on small maps, coarser on big ones. */
+const resFor = (size: number) => (size <= 24 ? 8 : size <= 36 ? 6 : size <= 52 ? 5 : 4);
 
 const BASE: Record<Terrain, number> = { sea: -0.6, shallows: -0.16, sand: 0.07, grass: 0.17, forest: 0.19, hills: 0.32, mountain: 0.42 };
 
@@ -174,7 +174,7 @@ export class Heightfield {
 /** The ground mesh, with base colours kept for territory tinting. */
 export function buildGround(hf: Heightfield): { mesh: THREE.Mesh; base: Float32Array } {
   const ext = hf.W + MARGIN * 2;
-  const seg = ext * RES;
+  const seg = ext * resFor(hf.W);
   const geo = new THREE.PlaneGeometry(ext, ext, seg, seg);
   geo.rotateX(-Math.PI / 2);
   const pos = geo.attributes.position as THREE.BufferAttribute;
@@ -201,7 +201,7 @@ export function buildGround(hf: Heightfield): { mesh: THREE.Mesh; base: Float32A
 /** A translucent sea coloured by depth: foam at the shore, turquoise shallows, deep blue beyond. */
 export function buildWater(hf: Heightfield, time: { value: number }): THREE.Mesh {
   const ext = hf.W + MARGIN * 2;
-  const seg = ext * 5;
+  const seg = ext * (hf.W <= 36 ? 5 : 3);
   const geo = new THREE.PlaneGeometry(ext, ext, seg, seg);
   const pos = geo.attributes.position as THREE.BufferAttribute;
   const colors = new Float32Array(pos.count * 4);
@@ -266,11 +266,11 @@ export function buildWater(hf: Heightfield, time: { value: number }): THREE.Mesh
 export function buildFarSea(hf: Heightfield): THREE.Mesh {
   const half = (hf.W + MARGIN * 2) / 2 - 0.02;
   const shape = new THREE.Shape();
-  shape.moveTo(-200, -200);
-  shape.lineTo(200, -200);
-  shape.lineTo(200, 200);
-  shape.lineTo(-200, 200);
-  shape.lineTo(-200, -200);
+  shape.moveTo(-600, -600);
+  shape.lineTo(600, -600);
+  shape.lineTo(600, 600);
+  shape.lineTo(-600, 600);
+  shape.lineTo(-600, -600);
   const hole = new THREE.Path();
   hole.moveTo(-half, -half);
   hole.lineTo(-half, half);
@@ -286,7 +286,7 @@ export function buildFarSea(hf: Heightfield): THREE.Mesh {
 
 /** Fog-of-war shroud: a dark veil hovering over the ground with per-vertex darkness. */
 export function buildShroud(hf: Heightfield): THREE.Mesh {
-  const seg = 4;
+  const seg = hf.W <= 36 ? 4 : 2;
   const geo = new THREE.PlaneGeometry(hf.W, hf.H, hf.W * seg, hf.H * seg);
   geo.rotateX(-Math.PI / 2);
   const pos = geo.attributes.position as THREE.BufferAttribute;

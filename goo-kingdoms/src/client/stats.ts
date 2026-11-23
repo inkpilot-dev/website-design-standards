@@ -82,7 +82,7 @@ export async function renderStats(el: HTMLElement, frame: Frame | null): Promise
   const chosen = records.filter((r) =>
     filter === 'all' ? true : filter === 'local' ? r.brain === 'local' : filter === 'claude' ? r.brain === 'claude' : r.model === filter.slice(6));
   el.innerHTML = `
-    <h1>Faction stats</h1>
+    <h1 id="stats-title">Faction stats</h1>
     <p class="lede">How the four Claude factions compare across every finished match on this machine. Same model, different doctrines: wins, territory, combat, economy, diplomacy, talk, and how often each faction's chosen actions were legal.</p>
     ${liveTable(frame)}
     <h2>All finished matches</h2>

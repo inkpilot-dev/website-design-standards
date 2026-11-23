@@ -14,7 +14,7 @@ import { Renderer } from './render.ts';
 import type { Selection } from './render.ts';
 import { renderRulebook } from './rulebook.ts';
 import { renderStats } from './stats.ts';
-import { $, cap, esc, post } from './util.ts';
+import { $, blobIcon, cap, esc, post } from './util.ts';
 
 interface InitPayload {
   map: WorldMap;
@@ -35,8 +35,10 @@ const app = {
   shown: null as Frame | null,
   live: true,
   log: [] as LogLine[],
-  tab: 'match',
+  statsOpen: false,
 };
+
+const icon = (t: TeamId) => blobIcon(FACTIONS[t].color, FACTIONS[t].colorDark, FACTIONS[t].colorLight);
 
 const renderer = new Renderer($('board') as HTMLCanvasElement, $('overlay'));
 const TEAM_NAME = (t: TeamId) => FACTIONS[t].name;
@@ -80,7 +82,7 @@ function onFrame(f: Frame): void {
   if (app.live) showFrame(f, true);
   updateReplay();
   renderChronicle();
-  if (app.tab === 'stats') void renderStats($('stats'), app.latest);
+  if (app.statsOpen) void renderStats($('stats'), app.latest);
 }
 
 function onStatus(s: PublicStatus): void {
@@ -119,7 +121,8 @@ function showFrame(f: Frame, animate: boolean): void {
   app.shown = f;
   const speed = app.status?.speed ?? '2x';
   renderer.setFrame(f, animate, Math.min(900, SPEED_MS[speed] * 0.85));
-  $('day').textContent = `Day ${f.day} of ${app.config?.maxDays ?? '?'}`;
+  $('day').textContent = `Day ${f.day}`;
+  $('day-of').textContent = `of ${app.config?.maxDays ?? '?'}`;
   renderStandings(f);
   renderInspector();
   renderVictory(f);
@@ -137,7 +140,7 @@ function renderVictory(f: Frame): void {
     : f.victory === 'supremacy' ? `Supremacy: held two thirds of the cities for ${R.SUPREMACY_DAYS} days`
       : f.victory === 'day_limit' ? 'Most cities at the day limit' : 'No single winner';
   el.innerHTML = f.winner
-    ? `<span style="color:${FACTIONS[f.winner].colorLight}">${esc(TEAM_NAME(f.winner))} wins</span><small>${esc(how)}, day ${f.day}. Start a new match from the top bar.</small>`
+    ? `${icon(f.winner)}<span style="color:${FACTIONS[f.winner].colorLight}">${esc(TEAM_NAME(f.winner))} wins</span><small>${esc(how)}, day ${f.day}. Start a new match from the side panel.</small>`
     : `The match is a draw<small>${esc(how)}, day ${f.day}.</small>`;
 }
 
@@ -156,7 +159,7 @@ function renderStandings(f: Frame): void {
       ...team.allies.map((a) => `<span class="tag" title="Allied">allied with ${esc(cap(a))}</span>`),
     ].join('');
     return `<li class="${team.eliminated ? 'out' : ''}" data-team="${t}" title="Show ${esc(fa.name)}'s fog of war">
-      <span class="swatch" style="background:${fa.color}"></span>
+      ${icon(t)}
       <span class="name">${esc(fa.name)} <span class="epithet">${esc(fa.epithet)}</span>${tags}</span>
       <span class="nums">${cities} cities · ${blobs} blobs</span>
       <span class="detail">${team.coins} coins · ${land} tiles · ${team.techs.length} techs · ${team.stats.kills} kills</span>
@@ -224,7 +227,7 @@ function renderInspector(): void {
     const last = b.memory[b.memory.length - 1];
     const src = d ? (d.source === 'claude' ? 'Claude' : d.source === 'local' ? 'Local bot' : 'No answer: idled') : null;
     el.innerHTML = `
-      <h3><span class="swatch" style="display:inline-block;width:12px;height:12px;border-radius:4px;background:${fa.color}"></span>${esc(b.name)} <span class="muted mono">${esc(b.id)}</span></h3>
+      <h3>${icon(b.team)}${esc(b.name)} <span class="muted mono">${esc(b.id)}</span></h3>
       <div>${esc(fa.name)} · ${esc(cap(b.rank))}${b.origin !== b.team ? ` · born ${esc(cap(b.origin))}` : ''}</div>
       ${hpBar(b.hp / b.maxHp, fa.color)}
       <dl>
@@ -349,6 +352,7 @@ function openSettings(): void {
   (form.elements.namedItem('concurrency') as HTMLInputElement).value = String(s.settings.concurrency);
   (form.elements.namedItem('budgetUsd') as HTMLInputElement).value = String(s.settings.budgetUsd);
   (form.elements.namedItem('maxDays') as HTMLInputElement).value = String(s.settings.maxDays);
+  (form.elements.namedItem('mapSize') as HTMLSelectElement).value = String(s.settings.mapSize);
   $('key-hint').textContent = s.hasKey
     ? `A key is set (from ${s.keySource === 'env' ? 'the ANTHROPIC_API_KEY environment variable or .env' : 'this dialog'}). Leave blank to keep it.`
     : 'No key set. Paste one to let Claude play. It is kept in the server\'s memory only.';
@@ -373,6 +377,7 @@ function openSettings(): void {
       concurrency: Number(data.get('concurrency')),
       budgetUsd: Number(data.get('budgetUsd')),
       maxDays: Number(data.get('maxDays')),
+      mapSize: Number(data.get('mapSize')),
     };
     const key = String(data.get('apiKey') ?? '').trim();
     if (key) body.apiKey = key;
@@ -443,20 +448,34 @@ function bindControls(): void {
     if (app.latest) showFrame(app.latest, false);
   });
 
-  // Tabs.
-  for (const tab of document.querySelectorAll<HTMLButtonElement>('.tabs button')) {
-    tab.addEventListener('click', () => {
-      app.tab = tab.dataset.tab!;
-      for (const t of document.querySelectorAll<HTMLButtonElement>('.tabs button')) t.setAttribute('aria-selected', String(t === tab));
-      for (const p of ['match', 'rulebook', 'stats']) ($(`tab-${p}`) as HTMLElement).hidden = p !== app.tab;
-      if (app.tab === 'stats') void renderStats($('stats'), app.latest);
+  // Rulebook and stats open as sheets over the map.
+  const openSheet = (id: string) => {
+    $(id).hidden = false;
+    if (id === 'sheet-stats') {
+      app.statsOpen = true;
+      void renderStats($('stats'), app.latest);
+    }
+    ($(id).querySelector('[data-close]') as HTMLButtonElement).focus();
+  };
+  const closeSheets = () => {
+    for (const id of ['sheet-rulebook', 'sheet-stats']) $(id).hidden = true;
+    app.statsOpen = false;
+  };
+  $('btn-rulebook').addEventListener('click', () => openSheet('sheet-rulebook'));
+  $('btn-stats').addEventListener('click', () => openSheet('sheet-stats'));
+  for (const sheet of document.querySelectorAll<HTMLElement>('.sheet')) {
+    sheet.addEventListener('click', (e) => {
+      if (e.target === sheet || (e.target as HTMLElement).closest('[data-close]')) closeSheets();
     });
   }
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeSheets();
+  });
 
   // Keyboard: space plays or pauses, period steps.
   document.addEventListener('keydown', (e) => {
     const target = e.target as HTMLElement;
-    if (target.closest('input, select, textarea, dialog')) return;
+    if (target.closest('input, select, textarea, dialog') || !$('sheet-rulebook').hidden || !$('sheet-stats').hidden) return;
     if (e.key === ' ') {
       e.preventDefault();
       $('btn-play').click();

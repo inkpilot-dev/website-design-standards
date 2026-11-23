@@ -27,8 +27,35 @@ function hash(s: string): number {
   return h >>> 0;
 }
 
+/** Tiles a blob can reach on foot from where it stands (flood fill over walkable land). */
+function reachableOnFoot(state: GameState, b: Blob): Set<number> {
+  const map = state.map;
+  const seen = new Set<number>();
+  if (b.vessel) return seen;
+  const start = idx(map, b.x, b.y);
+  const queue = [start];
+  seen.add(start);
+  for (let qi = 0; qi < queue.length; qi++) {
+    const cur = queue[qi];
+    const cx = cur % map.width;
+    const cy = Math.floor(cur / map.width);
+    for (const [dx, dy] of NEIGHBOURS) {
+      const nx = cx + dx;
+      const ny = cy + dy;
+      if (!inBounds(map, nx, ny)) continue;
+      const ni = idx(map, nx, ny);
+      if (seen.has(ni) || !isWalkable(terrainAt(map, nx, ny))) continue;
+      seen.add(ni);
+      queue.push(ni);
+    }
+  }
+  return seen;
+}
+
 export function decideLocal(state: GameState, b: Blob): Decision {
   const obs = observe(state, b);
+  const reach = reachableOnFoot(state, b);
+  const canReach = (x: number, y: number) => b.vessel !== null || reach.has(idx(state.map, x, y));
   const f = FACTIONS[b.team];
   const w = f.bot;
   const rng = new Rng(mixSeed(state.config.seed, state.day * 7919 + hash(b.id)));
@@ -129,7 +156,7 @@ export function decideLocal(state: GameState, b: Blob): Decision {
   }
 
   // 7. Choose somewhere to go.
-  const loot = obs.seenLoot.sort((p, q) => p.distance - q.distance)[0];
+  const loot = obs.seenLoot.filter((l) => canReach(l.x, l.y)).sort((p, q) => p.distance - q.distance)[0];
   if (loot && rng.next() < 0.3 + w.lootHunting * 0.7) {
     const d = goTo(loot.x, loot.y, `going for ${loot.coins} coins of loot.`, 0.05);
     if (d) return d;
@@ -139,7 +166,7 @@ export function decideLocal(state: GameState, b: Blob): Decision {
     if (d) return d;
   }
   const weakest = [...enemies].sort((p, q) => p.hp - q.hp)[0];
-  if (weakest && weakest.distance > s.range && rng.next() < w.aggression) {
+  if (weakest && weakest.distance > s.range && canReach(weakest.x, weakest.y) && rng.next() < w.aggression) {
     const d = goTo(weakest.x, weakest.y, `pursuing ${weakest.name} (${weakest.hp} HP).`, 0.05);
     if (d) return d;
   }
@@ -156,6 +183,7 @@ export function decideLocal(state: GameState, b: Blob): Decision {
 
   const targets = obs.knownCities
     .filter((c) => c.owner !== s.team && !(c.owner !== 'none' && team.allies.includes(c.owner)))
+    .filter((c) => canReach(c.x, c.y))
     .filter((c) => c.owner === 'none' || rng.next() < 0.35 + w.aggression * 0.6)
     .sort((p, q) => p.distance - q.distance);
   if (targets.length && rng.next() < 0.4 + w.expansion * 0.6) {
@@ -164,7 +192,7 @@ export function decideLocal(state: GameState, b: Blob): Decision {
     if (d) return d;
   }
 
-  const frontier = nearestFrontier(state, b, rng);
+  const frontier = nearestFrontier(state, b, rng, reach);
   if (frontier && rng.next() < 0.3 + w.scouting * 0.7) {
     const d = goTo(frontier[0], frontier[1], `scouting unexplored land toward (${frontier[0]},${frontier[1]}).`, 0.03);
     if (d) return d;
@@ -224,7 +252,7 @@ function pickBuild(obs: Observation, team: string, trapWeight: number, enemiesNe
 }
 
 /** The nearest explored, walkable tile that borders unexplored land. */
-function nearestFrontier(state: GameState, b: Blob, rng: Rng): [number, number] | null {
+function nearestFrontier(state: GameState, b: Blob, rng: Rng, reach: Set<number>): [number, number] | null {
   const map = state.map;
   const known = exploredSet(state.teams[b.team].explored);
   let best: [number, number] | null = null;
@@ -232,7 +260,7 @@ function nearestFrontier(state: GameState, b: Blob, rng: Rng): [number, number] 
   for (let y = 0; y < map.height; y++) {
     for (let x = 0; x < map.width; x++) {
       const i = idx(map, x, y);
-      if (!known(i) || !isWalkable(terrainAt(map, x, y))) continue;
+      if (!known(i) || !isWalkable(terrainAt(map, x, y)) || (!b.vessel && !reach.has(i))) continue;
       const frontier = NEIGHBOURS.some(([dx, dy]) => inBounds(map, x + dx, y + dy) && !known(idx(map, x + dx, y + dy)));
       if (!frontier) continue;
       const score = dist(b.x, b.y, x, y) + rng.next() * 3;

@@ -4,15 +4,27 @@
  */
 import type { DevKind, Gear, Rank, Tech, Terrain } from './types.ts';
 
-export const MAP_SIZE = 20;
+/** Map edge length in tiles. Matches can be played on any of these sizes. */
+export const MAP_SIZES = [20, 32, 48, 64] as const;
+export const DEFAULT_MAP_SIZE = 48;
 export const DEFAULT_MAX_DAYS = 300;
 export const MAX_DAYS_LIMIT = 1000;
 
 // Starting position -------------------------------------------------------
 export const START_COINS = 15;
 export const START_BLOBS = 3;
-export const NEUTRAL_VILLAGES = 6;
-export const ISLAND_VILLAGES = 2;
+/** Neutral villages on the mainland, scaled to the map's area. */
+export function neutralVillages(size: number): number {
+  return Math.max(6, Math.round((size * size) / 100));
+}
+/** Villages on islets, reachable only by boat. */
+export function islandVillages(size: number): number {
+  return Math.max(2, Math.round(size / 12));
+}
+/** Loot piles that wash up each time loot arrives, scaled to the map's area. */
+export function lootPerWave(size: number): number {
+  return Math.max(1, Math.round((size * size) / 700));
+}
 
 // Blobs -------------------------------------------------------------------
 export const BLOB_HP = 10;
@@ -60,7 +72,7 @@ export const RECRUIT_COST = 10;
 /** A team may field at most this many blobs: base + per city, capped. */
 export const BLOB_CAP_BASE = 3;
 export const BLOB_CAP_PER_CITY = 2;
-export const BLOB_CAP_MAX = 14;
+export const BLOB_CAP_MAX = 16;
 
 export const WALLS_COST = 15;
 export const WALLS_ARMOUR = 1;

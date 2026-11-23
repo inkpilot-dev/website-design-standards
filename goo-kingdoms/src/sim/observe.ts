@@ -35,6 +35,7 @@ export interface SeenCity {
   y: number;
   owner: TeamId | 'none';
   isCapital: boolean;
+  island: boolean;
   level: number;
   walls: boolean;
   wardenHp: number | null;
@@ -103,7 +104,7 @@ export function observe(state: GameState, b: Blob): Observation {
       const visible = sees(c.x, c.y) || c.owner === b.team;
       const owner = visible ? (c.owner ?? 'none') : (team.cityIntel[c.id] ?? 'none');
       return {
-        id: c.id, name: c.name, x: c.x, y: c.y, owner, isCapital: c.isCapital,
+        id: c.id, name: c.name, x: c.x, y: c.y, owner, isCapital: c.isCapital, island: c.island,
         level: c.level, walls: c.walls, wardenHp: visible ? (c.warden?.hp ?? null) : (owner === 'none' ? (c.warden ? c.warden.maxHp : null) : null),
         distance: dist(b.x, b.y, c.x, c.y), visible,
       };

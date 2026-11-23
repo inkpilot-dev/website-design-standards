@@ -93,7 +93,7 @@ export const FACTIONS: Record<TeamId, Faction> = {
 };
 
 /** The rules every blob is told, generated from the same constants the engine uses. */
-export function rulesText(): string {
+export function rulesText(mapSize: number): string {
   const dev = Object.entries(R.DEVELOPMENTS)
     .map(([k, d]) => `- ${k}: ${d.cost} coins${d.tech ? `, needs ${d.tech}` : ''}, on ${d.terrain.join('/')}. ${d.label}.`)
     .join('\n');
@@ -104,7 +104,7 @@ export function rulesText(): string {
     .map(([k, g]) => `- ${k}: ${g.cost} coins, needs ${g.tech}. ${g.label}.`)
     .join('\n');
   return `GOO KINGDOMS: RULES
-Four teams of blobs fight over a ${R.MAP_SIZE}x${R.MAP_SIZE} island. One day = one tick. Each living blob picks exactly one action per day. You are one blob: you only see your own surroundings, your team's map memory, and speech within ${R.HEARING_RANGE} tiles.
+Four teams of blobs fight over a ${mapSize}x${mapSize} island. One day = one tick. Each living blob picks exactly one action per day. You are one blob: you only see your own surroundings, your team's map memory, and speech within ${R.HEARING_RANGE} tiles.
 
 Coordinates: x grows to the east, y grows to the south. Distance is counted in king moves (diagonals count as 1).
 
@@ -138,9 +138,9 @@ DIPLOMACY: ally_propose / ally_accept / ally_leave with a team id; pay coins fro
 VICTORY: last team standing; or supremacy: hold at least two thirds of all cities for ${R.SUPREMACY_DAYS} days in a row; or at the day limit, the team with the most cities wins.`;
 }
 
-export function systemPrompt(team: TeamId): string {
+export function systemPrompt(team: TeamId, mapSize: number): string {
   const f = FACTIONS[team];
-  return `${rulesText()}
+  return `${rulesText(mapSize)}
 
 YOUR FACTION: ${f.name}, ${f.epithet} (team id "${team}"). Your capital is ${f.capitalLabel}.
 Doctrine: ${f.doctrine}

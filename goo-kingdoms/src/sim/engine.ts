@@ -51,7 +51,7 @@ function emptyStats(): TeamStats {
 // ---------------------------------------------------------------------------
 
 export function createGame(config: GameConfig): GameState {
-  const { map, cities, capitals } = generateWorld(config.seed);
+  const { map, cities, capitals } = generateWorld(config.seed, config.mapSize);
   const rng = new Rng(mixSeed(config.seed, 2));
   const teams = {} as Record<TeamId, TeamState>;
   for (const id of TEAM_IDS) {
@@ -944,7 +944,7 @@ function world(ctx: DayContext): void {
   }
 
   // Loot piles wash up now and then.
-  if (state.day % R.LOOT_EVERY === 0) {
+  if (state.day % R.LOOT_EVERY === 0) for (let wave = 0; wave < R.lootPerWave(state.map.width); wave++) {
     for (let tries = 0; tries < 40; tries++) {
       const x = rng.int(1, state.map.width - 2);
       const y = rng.int(1, state.map.height - 2);
