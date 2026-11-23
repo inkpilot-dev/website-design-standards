@@ -1,0 +1,16 @@
+{
+  "name": "blob-wars",
+  "version": "1.0.0",
+  "description": "Scaffold for an original Claude-powered blob strategy game (work in progress).",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=20.12"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^1.12.0"
+  }
+}
