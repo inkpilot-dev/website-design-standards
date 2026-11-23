@@ -46,6 +46,28 @@ LEARNED = 0.9  # share of the practice questions passed from which a task counts
 EVAL_CACHE = "2"
 
 
+def bring_checks_up_to_date(root: Path, project: dict) -> bool:
+    """An exam built by an earlier version judged free-form answers (every example its own answer)
+    by how many words they share with the one expected answer, which no trained model can meet.
+    Building the exam again fixes that; so does this, for a project whose exam was not rebuilt:
+    when the user's rules are there to judge by, the wording check stops counting. True if changed."""
+    paths = ProjectPaths(root)
+    if project.get("template") != "custom" or not paths.verifiers.is_file():
+        return False
+    vset = json.loads(paths.verifiers.read_text(encoding="utf-8"))
+    wording = [v for v in vset["verifiers"] if v["id"] in ("overlap", "exact") and v["role"] == "reward"]
+    if not wording or not any(v["kind"] == "rule" for v in vset["verifiers"]):
+        return False
+    refs = [str(it.get("reference") or "").strip().lower() for split in ("train", "dev", "test") for it in read_jsonl(paths.split(split))]
+    if not refs or len(set(refs)) < 0.9 * len(refs):
+        return False
+    for v in wording:
+        v["role"] = "eval_only"
+    atomic_write_json(paths.verifiers, vset)
+    events.log("Every example has its own answer, so the exam now checks your rules and not the exact wording (this exam was built by an earlier version of Inkport).", "info")
+    return True
+
+
 class LeakageError(RuntimeError):
     pass
 
@@ -260,6 +282,7 @@ class Trainer:
         self.run_dir.mkdir(parents=True, exist_ok=True)
         atomic_write_json(self.run_dir / "plan.json", plan)
         self.state = RunState(self.run_dir)
+        bring_checks_up_to_date(root, self.project)
         self.vset = load_verifier_set(root)
         self.ctx = Context(root=root)
         self.t0 = time.monotonic()
@@ -317,6 +340,10 @@ class Trainer:
         root = json.loads(self.paths.test_manifest.read_text())["merkle_root"]
         tag = f"{self.plan['base_model']['id']}|{self.plan['backend']}|{self.plan.get('quant')}|{model_tag}|{root}|{self.max_new}|{self.gate_cfg['general_suite_n']}|{EVAL_CACHE}"
         import hashlib  # noqa: WPS433
+
+        # Stored results belong to the checks they were scored with: an exam built again from the
+        # same files has the same questions and may have other checks.
+        tag += "|" + hashlib.sha256(json.dumps(self.vset, sort_keys=True).encode()).hexdigest()[:16]
 
         return self.paths.cache / f"eval-{hashlib.sha256(tag.encode()).hexdigest()[:20]}.json"
 

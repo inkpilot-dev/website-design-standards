@@ -162,3 +162,23 @@ def test_set_replies_asked_in_several_ways_still_have_to_say_the_same_thing(proj
     item = next(iter(read_jsonl(project / "data" / "dev.jsonl")))
     assert score_item(item, item["reference"], vset, ctx)["pass"]
     assert not score_item(item, "Thank you, we will look into it.", vset, ctx)["pass"]
+
+
+def test_an_exam_built_by_an_earlier_version_is_brought_up_to_date_when_training_starts(project, tmp_path):
+    from engine.contract import load_project
+    from engine.pipeline.train_and_gate import bring_checks_up_to_date
+
+    _retemplate(project, "custom")
+    run_ingest(project, [str(_style_file(tmp_path))], ['must mention "thou"'])
+    path = project / "data" / "verifiers.json"
+    old = json.loads(path.read_text())
+    for v in old["verifiers"]:
+        if v["id"] == "overlap":
+            v["role"] = "reward"  # as an earlier version wrote it
+    path.write_text(json.dumps(old))
+    item = next(iter(read_jsonl(project / "data" / "dev.jsonl")))
+    good = "Good morrow, thou hast a kind heart."
+    assert not score_item(item, good, load_verifier_set(project), Context(root=project))["pass"]
+    assert bring_checks_up_to_date(project, load_project(project)) is True
+    assert score_item(item, good, load_verifier_set(project), Context(root=project))["pass"]
+    assert bring_checks_up_to_date(project, load_project(project)) is False  # nothing left to do
