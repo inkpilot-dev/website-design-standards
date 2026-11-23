@@ -20,6 +20,7 @@ import { FACTIONS } from '../agents/factions.ts';
 import { computeTerritory, exploredSet, idx, inBounds, isWater, visibleTiles, dist } from '../shared/geo.ts';
 import { HEARING_RANGE } from '../shared/rules.ts';
 import { esc } from './util.ts';
+import { Heightfield, buildFarSea, buildGround, buildShroud, buildWater, paintShroud } from './terrain.ts';
 
 export type View = { kind: 'god' } | { kind: 'team'; team: TeamId } | { kind: 'blob'; id: string };
 export type Selection =
@@ -126,16 +127,14 @@ export class Renderer {
   private world = new THREE.Group();
   private terrainGroup = new THREE.Group();
   private dynamicGroup = new THREE.Group();
-  private landMesh: THREE.InstancedMesh | null = null;
-  private seabedMesh: THREE.InstancedMesh | null = null;
-  private tileOfInstance: number[] = [];
-  private seabedTileOfInstance: number[] = [];
+  private hf: Heightfield | null = null;
+  private ground: THREE.Mesh | null = null;
+  private groundBase: Float32Array | null = null;
   private water: THREE.Mesh | null = null;
-  private foam: THREE.Mesh | null = null;
-  private territoryMesh: THREE.InstancedMesh | null = null;
+  private farSea: THREE.Mesh | null = null;
+  private shroud: THREE.Mesh | null = null;
   private territoryLines: THREE.LineSegments | null = null;
-  private fogNear: THREE.InstancedMesh | null = null;
-  private fogFar: THREE.InstancedMesh | null = null;
+  private territorySig = '';
   private hearing: THREE.LineLoop | null = null;
   private grid: THREE.Group | null = null;
   private selectRing: THREE.Mesh;
@@ -163,6 +162,16 @@ export class Renderer {
     cone4: new THREE.ConeGeometry(1, 1, 4),
     cyl: new THREE.CylinderGeometry(1, 1, 1, 10),
     sphereLow: new THREE.SphereGeometry(1, 8, 6),
+    gable: (() => {
+      const sh = new THREE.Shape();
+      sh.moveTo(-0.5, 0);
+      sh.lineTo(0.5, 0);
+      sh.lineTo(0, 0.62);
+      sh.lineTo(-0.5, 0);
+      const g = new THREE.ExtrudeGeometry(sh, { depth: 1, bevelEnabled: false });
+      g.translate(0, 0, -0.5);
+      return g;
+    })(),
     flag: (() => {
       const g = new THREE.PlaneGeometry(0.26, 0.15, 6, 1);
       g.translate(0.13, 0, 0);
@@ -310,15 +319,21 @@ export class Renderer {
     return y - (this.map ? this.map.height : 20) / 2 + 0.5;
   }
 
+  /** Height a unit stands at on a tile: the ground, or the sea surface. */
   private top(x: number, y: number): number {
-    if (!this.map || !inBounds(this.map, x, y)) return WATER_Y;
-    const t = this.map.tiles[idx(this.map, x, y)].terrain;
-    return isWater(t) ? WATER_Y : TOP[t];
+    if (!this.hf || !this.map || !inBounds(this.map, x, y)) return WATER_Y;
+    if (isWater(this.map.tiles[idx(this.map, x, y)].terrain)) return WATER_Y;
+    return Math.max(WATER_Y, this.hf.heightAt(this.wx(x), this.wz(y)));
+  }
+
+  /** Ground height under a world position. */
+  private h(wx: number, wz: number): number {
+    return this.hf ? this.hf.heightAt(wx, wz) : 0;
   }
 
   /** Ground height under a fractional tile position (for hops between tiles). */
   private groundAt(fx: number, fy: number): number {
-    return this.top(Math.round(fx), Math.round(fy));
+    return Math.max(WATER_Y, this.h(this.wx(fx), this.wz(fy)));
   }
 
   // -------------------------------------------------------------------------
@@ -341,41 +356,57 @@ export class Renderer {
     this.scene.add(sky);
     this.scene.fog = new THREE.Fog(0xcfe2ea, 35, 110);
 
-    this.scene.add(new THREE.HemisphereLight(0xdfefff, 0x5a6b3a, 1.1));
-    const sun = new THREE.DirectionalLight(0xfff1d6, 2.4);
-    sun.position.set(-12, 22, -8);
+    this.scene.add(new THREE.HemisphereLight(0xeaf5ff, 0x71824a, 1.75));
+    const sun = new THREE.DirectionalLight(0xffefd2, 1.9);
+    sun.position.set(-12, 24, -8);
     sun.castShadow = true;
     sun.shadow.mapSize.set(2048, 2048);
     const sc = sun.shadow.camera;
-    sc.left = -16; sc.right = 16; sc.top = 16; sc.bottom = -16; sc.near = 1; sc.far = 60;
-    sun.shadow.bias = -0.0005;
-    sun.shadow.normalBias = 0.02;
+    sc.left = -17; sc.right = 17; sc.top = 17; sc.bottom = -17; sc.near = 1; sc.far = 60;
+    sun.shadow.bias = -0.0004;
+    sun.shadow.normalBias = 0.03;
+    sun.shadow.radius = 3;
     this.scene.add(sun);
     this.scene.add(sun.target);
 
-    // The open sea beyond the map, fading into the fog.
-    const farSea = new THREE.Mesh(new THREE.CircleGeometry(150, 48), std(0x1f4e66, { flatShading: false, roughness: 0.4 }));
-    farSea.rotation.x = -Math.PI / 2;
-    farSea.position.y = -0.82;
-    this.scene.add(farSea);
-
-    // Clouds: clusters of soft spheres that drift and cast shadows on the island.
-    const cloudMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 1, transparent: true, opacity: 0.8, flatShading: true, depthWrite: false });
-    for (let i = 0; i < 7; i++) {
+    // Clouds drift high above the island. Each one trails a soft patch of
+    // shade across the ground below it.
+    const cloudMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 1, transparent: true, opacity: 0.85, flatShading: true, depthWrite: false });
+    const shadeTex = (() => {
+      const cv = document.createElement('canvas');
+      cv.width = 128;
+      cv.height = 128;
+      const g = cv.getContext('2d')!;
+      const grad = g.createRadialGradient(64, 64, 4, 64, 64, 62);
+      grad.addColorStop(0, 'rgba(10,25,20,0.55)');
+      grad.addColorStop(0.6, 'rgba(10,25,20,0.3)');
+      grad.addColorStop(1, 'rgba(10,25,20,0)');
+      g.fillStyle = grad;
+      g.fillRect(0, 0, 128, 128);
+      const tex = new THREE.CanvasTexture(cv);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      return tex;
+    })();
+    const shadeGeo = new THREE.PlaneGeometry(1, 1);
+    shadeGeo.rotateX(-Math.PI / 2);
+    for (let i = 0; i < 6; i++) {
       const g = new THREE.Group();
       const n = 4 + Math.floor(Math.random() * 4);
       for (let k = 0; k < n; k++) {
-        const s = 0.7 + Math.random() * 0.9;
+        const s = 0.8 + Math.random() * 1.0;
         const m = new THREE.Mesh(this.geo.sphereLow, cloudMat);
         m.scale.set(s * 1.3, s * 0.7, s);
         m.position.set((Math.random() - 0.5) * 3, Math.random() * 0.4, (Math.random() - 0.5) * 1.6);
-        m.castShadow = true;
         g.add(m);
       }
-      g.position.set(Math.random() * 40 - 20, 10 + Math.random() * 2.5, Math.random() * 30 - 15);
+      g.position.set(Math.random() * 40 - 20, 21 + Math.random() * 4, Math.random() * 30 - 15);
       g.userData.speed = 0.25 + Math.random() * 0.25;
+      const shade = new THREE.Mesh(shadeGeo, new THREE.MeshBasicMaterial({ map: shadeTex, transparent: true, depthWrite: false, opacity: 0.55 }));
+      shade.scale.set(5 + Math.random() * 2, 1, 3.5 + Math.random() * 1.5);
+      shade.renderOrder = 4;
+      g.userData.shade = shade;
       this.clouds.push(g);
-      this.scene.add(g);
+      this.scene.add(g, shade);
     }
   }
 
@@ -397,144 +428,102 @@ export class Renderer {
     this.boss = null;
     this.terrainGroup.clear();
     this.dynamicGroup.clear();
+    if (this.farSea) this.scene.remove(this.farSea);
     this.frame = null;
     this.prev = null;
+    this.territorySig = '';
+    this.lastFogKey = '';
 
-    const W = map.width;
-    const H = map.height;
-    const color = new THREE.Color();
-
-    // Land columns.
-    const landTiles: number[] = [];
-    const seaTiles: number[] = [];
-    map.tiles.forEach((t, i) => (isWater(t.terrain) ? seaTiles : landTiles).push(i));
-    const land = new THREE.InstancedMesh(this.geo.box, std(0xffffff), landTiles.length);
-    const m4 = new THREE.Matrix4();
-    landTiles.forEach((i, k) => {
-      const x = i % W;
-      const y = Math.floor(i / W);
-      const t = map.tiles[i].terrain;
-      const hgt = TOP[t] + 0.6;
-      m4.compose(new THREE.Vector3(this.wx(x), TOP[t] - hgt / 2, this.wz(y)), new THREE.Quaternion(), new THREE.Vector3(1, hgt, 1));
-      land.setMatrixAt(k, m4);
-      const j = (hash(x, y, 1) - 0.5) * 0.08;
-      color.setHex(LAND_COLOR[t]).offsetHSL(0, 0, j);
-      land.setColorAt(k, color);
-    });
-    land.receiveShadow = true;
-    land.castShadow = true;
-    this.landMesh = land;
-    this.tileOfInstance = landTiles;
-    this.terrainGroup.add(land);
-
-    // Seabed: sandy in the shallows, darker further out (seen through the water).
-    const seabed = new THREE.InstancedMesh(this.geo.box, std(0xffffff), seaTiles.length);
-    const sandC = new THREE.Color(0xd9c99a);
-    const deepC = new THREE.Color(0x1f4e66);
-    seaTiles.forEach((i, k) => {
-      const x = i % W;
-      const y = Math.floor(i / W);
-      const d = map.depth[i];
-      const yTop = -0.12 - d * 0.7;
-      m4.compose(new THREE.Vector3(this.wx(x), yTop - 0.3, this.wz(y)), new THREE.Quaternion(), new THREE.Vector3(1, 0.6, 1));
-      seabed.setMatrixAt(k, m4);
-      seabed.setColorAt(k, sandC.clone().lerp(deepC, ease(clamp01(d * 1.2))));
-    });
-    seabed.receiveShadow = true;
-    this.seabedMesh = seabed;
-    this.seabedTileOfInstance = seaTiles;
-    this.terrainGroup.add(seabed);
-
-    // Translucent sea with gentle waves.
-    const waterMat = new THREE.MeshStandardMaterial({ color: 0x3f93b3, transparent: true, opacity: 0.72, roughness: 0.25, metalness: 0.1 });
-    addSway(waterMat, this.time, 'transformed.z += sin(position.x * 1.4 + uTime * 1.1) * 0.025 + cos(position.y * 1.7 + uTime * 0.8) * 0.025;');
-    const water = new THREE.Mesh(new THREE.PlaneGeometry(W + 30, H + 30, 100, 100), waterMat);
-    water.rotation.x = -Math.PI / 2;
-    water.position.y = WATER_Y;
-    water.receiveShadow = true;
-    this.water = water;
-    this.terrainGroup.add(water);
-
-    // Shoreline foam: thin white strips on water tiles that touch land.
-    const foamGeos: THREE.BufferGeometry[] = [];
-    for (const i of seaTiles) {
-      const x = i % W;
-      const y = Math.floor(i / W);
-      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as [number, number][]) {
-        if (!inBounds(map, x + dx, y + dy) || isWater(map.tiles[idx(map, x + dx, y + dy)].terrain)) continue;
-        const g = new THREE.PlaneGeometry(dx !== 0 ? 0.16 : 1, dx !== 0 ? 1 : 0.16);
-        g.rotateX(-Math.PI / 2);
-        g.translate(this.wx(x) + dx * 0.42, WATER_Y + 0.03, this.wz(y) + dy * 0.42);
-        foamGeos.push(g);
-      }
-    }
-    if (foamGeos.length) {
-      const foamMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.6, depthWrite: false });
-      this.foam = new THREE.Mesh(mergeGeometries(foamGeos), foamMat);
-      this.terrainGroup.add(this.foam);
-    }
-
+    const hf = new Heightfield(map);
+    this.hf = hf;
+    const ground = buildGround(hf);
+    this.ground = ground.mesh;
+    this.groundBase = ground.base;
+    this.terrainGroup.add(ground.mesh);
+    this.water = buildWater(hf, this.time);
+    this.terrainGroup.add(this.water);
+    this.farSea = buildFarSea(hf);
+    this.scene.add(this.farSea);
+    this.shroud = buildShroud(hf);
+    this.terrainGroup.add(this.shroud);
     this.buildDecor(map);
-
-    // Territory overlay (updated per frame).
-    const tGeo = new THREE.PlaneGeometry(1, 1);
-    tGeo.rotateX(-Math.PI / 2);
-    this.territoryMesh = new THREE.InstancedMesh(tGeo, new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.22, depthWrite: false }), W * H);
-    this.territoryMesh.count = 0;
-    this.territoryMesh.renderOrder = 2;
-    this.terrainGroup.add(this.territoryMesh);
-
-    // Fog-of-war volumes (updated per frame).
-    const fogMatA = new THREE.MeshBasicMaterial({ color: 0x0e1216, transparent: true, opacity: 0.5 });
-    const fogMatB = new THREE.MeshBasicMaterial({ color: 0x0e1216, transparent: true, opacity: 0.88 });
-    this.fogNear = new THREE.InstancedMesh(this.geo.box, fogMatA, W * H);
-    this.fogFar = new THREE.InstancedMesh(this.geo.box, fogMatB, W * H);
-    this.fogNear.count = 0;
-    this.fogFar.count = 0;
-    this.fogNear.renderOrder = 5;
-    this.fogFar.renderOrder = 5;
-    this.terrainGroup.add(this.fogNear, this.fogFar);
-
     this.buildGrid(map);
   }
 
-  /** Trees, hill boulders, mountains, fruit bushes and crystals. */
+  /** A jagged low-poly rock: an icosahedron with every corner nudged. */
+  private rockGeometry(seed: number): THREE.BufferGeometry {
+    const g = new THREE.IcosahedronGeometry(1, 0);
+    const pos = g.attributes.position as THREE.BufferAttribute;
+    const moved = new Map<string, [number, number, number]>();
+    for (let i = 0; i < pos.count; i++) {
+      const key = `${pos.getX(i).toFixed(3)},${pos.getY(i).toFixed(3)},${pos.getZ(i).toFixed(3)}`;
+      if (!moved.has(key)) {
+        const k = moved.size;
+        moved.set(key, [
+          pos.getX(i) * (0.8 + hash(seed, k, 1) * 0.4),
+          pos.getY(i) * (0.8 + hash(seed, k, 2) * 0.4),
+          pos.getZ(i) * (0.8 + hash(seed, k, 3) * 0.4),
+        ]);
+      }
+      const [x, y, z] = moved.get(key)!;
+      pos.setXYZ(i, x, y, z);
+    }
+    g.translate(0, 0.55, 0);
+    g.computeVertexNormals();
+    return g;
+  }
+
+  /** Trees, grass tufts, hill boulders, mountain rocks, fruit bushes and crystals. */
   private buildDecor(map: WorldMap): void {
     const W = map.width;
-    const trunkGeo = new THREE.CylinderGeometry(0.035, 0.045, 0.18, 6);
-    trunkGeo.translate(0, 0.09, 0);
-    const tiers = [new THREE.ConeGeometry(0.2, 0.3, 7), new THREE.ConeGeometry(0.16, 0.26, 7), new THREE.ConeGeometry(0.11, 0.22, 7)];
+    const m4 = new THREE.Matrix4();
+    const q = new THREE.Quaternion();
+    const c = new THREE.Color();
+    const up = new THREE.Vector3(0, 1, 0);
+
+    // Pines: a trunk and three tiers of foliage, gently swaying in gusts.
+    const trunkGeo = new THREE.CylinderGeometry(0.03, 0.045, 0.2, 6);
+    trunkGeo.translate(0, 0.1, 0);
+    const tiers = [new THREE.ConeGeometry(0.19, 0.3, 8), new THREE.ConeGeometry(0.15, 0.27, 8), new THREE.ConeGeometry(0.1, 0.23, 8)];
     tiers[0].translate(0, 0.3, 0);
     tiers[1].translate(0, 0.45, 0);
-    tiers[2].translate(0, 0.58, 0);
+    tiers[2].translate(0, 0.6, 0);
     const foliageGeo = mergeGeometries(tiers);
 
     const spots: { x: number; y: number; s: number; r: number }[] = [];
-    const boulders: { x: number; y: number; z: number; s: number }[] = [];
-    const mountains: { x: number; z: number; y: number; s: number; h: number }[] = [];
-    const bushes: { x: number; y: number; z: number }[] = [];
-    const crystals: { x: number; y: number; z: number; r: number }[] = [];
+    const tufts: { x: number; z: number; s: number; r: number }[] = [];
+    const boulders: { x: number; z: number; s: number; h: number; r: number }[] = [];
+    const peaks: { x: number; z: number; s: number; h: number; r: number }[] = [];
+    const bushes: { x: number; z: number }[] = [];
+    const crystals: { x: number; z: number; r: number }[] = [];
     for (let y = 0; y < map.height; y++) {
       for (let x = 0; x < W; x++) {
         const t = map.tiles[idx(map, x, y)];
-        const base = TOP[t.terrain];
+        const cx = this.wx(x);
+        const cz = this.wz(y);
+        const jit = (k: number) => (hash(x, y, k) - 0.5) * 0.8;
         if (t.terrain === 'forest') {
-          for (let k = 0; k < 3; k++) spots.push({ x: this.wx(x) - 0.3 + hash(x, y, 70 + k) * 0.6, y: this.wz(y) - 0.3 + hash(x, y, 80 + k) * 0.6, s: 0.8 + hash(x, y, 90 + k) * 0.5, r: hash(x, y, k) * 6 });
-        } else if (t.terrain === 'grass' && hash(x, y, 7) < 0.12) {
-          spots.push({ x: this.wx(x) - 0.3 + hash(x, y, 71) * 0.6, y: this.wz(y) - 0.3 + hash(x, y, 81) * 0.6, s: 0.7, r: 0 });
+          const n = 4 + Math.floor(hash(x, y, 5) * 3);
+          for (let k = 0; k < n; k++) spots.push({ x: cx + jit(70 + k), y: cz + jit(80 + k), s: 0.7 + hash(x, y, 90 + k) * 0.6, r: hash(x, y, k) * 6 });
+        } else if (t.terrain === 'grass') {
+          if (hash(x, y, 7) < 0.12) spots.push({ x: cx + jit(71), y: cz + jit(81), s: 0.75, r: 0 });
+          for (let k = 0; k < 5; k++) tufts.push({ x: cx + jit(300 + k) * 1.1, z: cz + jit(310 + k) * 1.1, s: 0.6 + hash(x, y, 320 + k) * 0.6, r: hash(x, y, 330 + k) * 6 });
         } else if (t.terrain === 'hills') {
-          for (let k = 0; k < 3; k++) boulders.push({ x: this.wx(x) - 0.3 + hash(x, y, 50 + k) * 0.6, y: base, z: this.wz(y) - 0.3 + hash(x, y, 60 + k) * 0.6, s: 0.12 + hash(x, y, 55 + k) * 0.14 });
+          for (let k = 0; k < 3; k++) boulders.push({ x: cx + jit(50 + k), z: cz + jit(60 + k), s: 0.09 + hash(x, y, 55 + k) * 0.1, h: 0.7 + hash(x, y, 56 + k) * 0.5, r: hash(x, y, 57 + k) * 6 });
+          for (let k = 0; k < 3; k++) tufts.push({ x: cx + jit(340 + k), z: cz + jit(350 + k), s: 0.6, r: hash(x, y, 360 + k) * 6 });
         } else if (t.terrain === 'mountain') {
-          mountains.push({ x: this.wx(x), z: this.wz(y), y: base, s: 0.52, h: 0.85 + hash(x, y, 3) * 0.45 });
-          mountains.push({ x: this.wx(x) - 0.25 + hash(x, y, 4) * 0.5, z: this.wz(y) - 0.25 + hash(x, y, 5) * 0.5, y: base, s: 0.33, h: 0.5 + hash(x, y, 6) * 0.3 });
+          peaks.push({ x: cx + jit(4) * 0.25, z: cz + jit(5) * 0.25, s: 0.4 + hash(x, y, 3) * 0.1, h: 2.1 + hash(x, y, 6) * 1.0, r: hash(x, y, 8) * 6 });
+          for (let k = 0; k < 3; k++) peaks.push({ x: cx + jit(10 + k), z: cz + jit(20 + k), s: 0.2 + hash(x, y, 30 + k) * 0.1, h: 1.4 + hash(x, y, 40 + k) * 1.0, r: hash(x, y, 50 + k) * 6 });
+        } else if (t.terrain === 'sand' && hash(x, y, 9) < 0.25) {
+          boulders.push({ x: cx + jit(91), z: cz + jit(92), s: 0.06, h: 0.6, r: hash(x, y, 93) * 6 });
         }
-        if (t.resource === 'fruit') for (let k = 0; k < 2; k++) bushes.push({ x: this.wx(x) - 0.25 + hash(x, y, 30 + k) * 0.5, y: base, z: this.wz(y) - 0.25 + hash(x, y, 40 + k) * 0.5 });
-        if (t.resource === 'crystal') for (let k = 0; k < 3; k++) crystals.push({ x: this.wx(x) + 0.15 + (k - 1) * 0.08, y: base, z: this.wz(y) + 0.2, r: k * 0.6 - 0.6 });
+        if (t.resource === 'fruit') for (let k = 0; k < 2; k++) bushes.push({ x: cx + jit(30 + k) * 0.6, z: cz + jit(40 + k) * 0.6 });
+        if (t.resource === 'crystal') for (let k = 0; k < 3; k++) crystals.push({ x: cx + 0.15 + (k - 1) * 0.08, z: cz + 0.2, r: k * 0.6 - 0.6 });
       }
     }
     this.treeSpots = spots;
 
-    const foliageMat = std(0x3c7d41);
+    const foliageMat = std(0xffffff);
     addSway(foliageMat, this.time, `
       vec4 wp = instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0);
       float gust = sin(uTime * 0.9 - wp.x * 0.35 + wp.z * 0.1) * 0.5 + 0.5;
@@ -543,18 +532,12 @@ export class Renderer {
       transformed.z += cos(uTime * 1.7 + wp.z * 1.1) * 0.03 * bend;`);
     const trunks = new THREE.InstancedMesh(trunkGeo, std(0x6b4a2d), spots.length);
     const foliage = new THREE.InstancedMesh(foliageGeo, foliageMat, spots.length);
-    const m4 = new THREE.Matrix4();
-    const q = new THREE.Quaternion();
-    const c = new THREE.Color();
     spots.forEach((s, k) => {
-      const tx = Math.round(s.x + map.width / 2 - 0.5);
-      const ty = Math.round(s.y + map.height / 2 - 0.5);
-      const base = TOP[map.tiles[idx(map, Math.max(0, Math.min(W - 1, tx)), Math.max(0, Math.min(map.height - 1, ty)))].terrain];
-      q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), s.r);
-      m4.compose(new THREE.Vector3(s.x, base, s.y), q, new THREE.Vector3(s.s, s.s, s.s));
+      q.setFromAxisAngle(up, s.r);
+      m4.compose(new THREE.Vector3(s.x, this.h(s.x, s.y) - 0.02, s.y), q, new THREE.Vector3(s.s, s.s * (0.9 + hash(k, 7) * 0.3), s.s));
       trunks.setMatrixAt(k, m4);
       foliage.setMatrixAt(k, m4);
-      c.setHex(0x3c7d41).offsetHSL((hash(k, 1) - 0.5) * 0.04, 0, (hash(k, 2) - 0.5) * 0.1);
+      c.setHex(hash(k, 3) < 0.5 ? 0x2f6e3a : 0x3e8446).offsetHSL((hash(k, 1) - 0.5) * 0.03, 0, (hash(k, 2) - 0.5) * 0.08);
       foliage.setColorAt(k, c);
     });
     shadowed(trunks);
@@ -562,49 +545,66 @@ export class Renderer {
     this.trees = { trunks, foliage };
     this.terrainGroup.add(trunks, foliage);
 
-    const rockGeo = new THREE.DodecahedronGeometry(1, 0);
-    const rocks = new THREE.InstancedMesh(rockGeo, std(0xa39b7c), boulders.length);
-    boulders.forEach((b, k) => {
-      q.setFromEuler(new THREE.Euler(hash(k, 3), hash(k, 4) * 6, 0));
-      m4.compose(new THREE.Vector3(b.x, b.y + b.s * 0.3, b.z), q, new THREE.Vector3(b.s * 1.3, b.s * 0.8, b.s));
-      rocks.setMatrixAt(k, m4);
+    // Grass tufts.
+    const tuftGeo = mergeGeometries([0, 1, 2].map((i) => {
+      const g = new THREE.ConeGeometry(0.012, 0.09, 3);
+      g.translate(0, 0.045, 0);
+      g.rotateZ((i - 1) * 0.35);
+      g.translate((i - 1) * 0.015, 0, 0);
+      return g;
+    }));
+    const tuftMat = std(0xffffff);
+    addSway(tuftMat, this.time, `
+      vec4 wp = instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0);
+      transformed.x += sin(uTime * 2.4 - wp.x * 0.9 + wp.z * 0.4) * 0.25 * max(position.y, 0.0);`);
+    const tuftMesh = new THREE.InstancedMesh(tuftGeo, tuftMat, tufts.length);
+    tufts.forEach((t, k) => {
+      q.setFromAxisAngle(up, t.r);
+      m4.compose(new THREE.Vector3(t.x, this.h(t.x, t.z), t.z), q, new THREE.Vector3(t.s, t.s, t.s));
+      tuftMesh.setMatrixAt(k, m4);
+      tuftMesh.setColorAt(k, c.setHex(0x6fa843).offsetHSL(0, 0, (hash(k, 4) - 0.5) * 0.12));
     });
-    this.terrainGroup.add(shadowed(rocks));
+    tuftMesh.receiveShadow = true;
+    this.terrainGroup.add(tuftMesh);
 
-    const peakGeo = new THREE.ConeGeometry(1, 1, 6);
-    peakGeo.translate(0, 0.5, 0);
-    const snowGeo = new THREE.ConeGeometry(1, 1, 6);
-    snowGeo.translate(0, 0.5, 0);
-    const peaks = new THREE.InstancedMesh(peakGeo, std(0x8b877c), mountains.length);
-    const snow = new THREE.InstancedMesh(snowGeo, std(0xf4f2ec), mountains.length);
-    mountains.forEach((mt, k) => {
-      q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), hash(k, 9) * 2);
-      m4.compose(new THREE.Vector3(mt.x, mt.y, mt.z), q, new THREE.Vector3(mt.s, mt.h, mt.s));
-      peaks.setMatrixAt(k, m4);
-      m4.compose(new THREE.Vector3(mt.x, mt.y + mt.h * 0.68, mt.z), q, new THREE.Vector3(mt.s * 0.33, mt.h * 0.33, mt.s * 0.33));
-      snow.setMatrixAt(k, m4);
-    });
-    this.terrainGroup.add(shadowed(peaks), shadowed(snow));
+    // Rocks: jagged low-poly shapes in a few variants.
+    const variants = [0, 1, 2, 3].map((v) => this.rockGeometry(v + 11));
+    const placeRocks = (list: { x: number; z: number; s: number; h: number; r: number }[], base: number, light: number) => {
+      variants.forEach((geo, v) => {
+        const mine = list.filter((_, k) => k % variants.length === v);
+        if (!mine.length) return;
+        const mesh = new THREE.InstancedMesh(geo, std(0xffffff), mine.length);
+        mine.forEach((r, k) => {
+          q.setFromEuler(new THREE.Euler(0, r.r, (hash(k, v, 5) - 0.5) * 0.2));
+          m4.compose(new THREE.Vector3(r.x, this.h(r.x, r.z) - r.s * 0.25, r.z), q, new THREE.Vector3(r.s, r.s * r.h, r.s));
+          mesh.setMatrixAt(k, m4);
+          mesh.setColorAt(k, c.setHex(hash(k, v, 6) < 0.5 ? base : light).offsetHSL(0, 0, (hash(k, v, 7) - 0.5) * 0.06));
+        });
+        this.terrainGroup.add(shadowed(mesh));
+      });
+    };
+    placeRocks(peaks, 0x8c8880, 0xa9a59c);
+    placeRocks(boulders, 0x9c978b, 0xb8b3a6);
 
     if (bushes.length) {
       const bush = new THREE.InstancedMesh(this.geo.sphereLow, std(0x3f6e2c), bushes.length);
       const berries = new THREE.InstancedMesh(this.geo.sphereLow, std(0xd4553b), bushes.length * 3);
       bushes.forEach((b, k) => {
-        m4.compose(new THREE.Vector3(b.x, b.y + 0.06, b.z), q.identity(), new THREE.Vector3(0.12, 0.09, 0.12));
+        const y = this.h(b.x, b.z);
+        m4.compose(new THREE.Vector3(b.x, y + 0.06, b.z), q.identity(), new THREE.Vector3(0.12, 0.09, 0.12));
         bush.setMatrixAt(k, m4);
         for (let j = 0; j < 3; j++) {
-          m4.compose(new THREE.Vector3(b.x + Math.cos(j * 2.1) * 0.08, b.y + 0.12, b.z + Math.sin(j * 2.1) * 0.08), q, new THREE.Vector3(0.03, 0.03, 0.03));
+          m4.compose(new THREE.Vector3(b.x + Math.cos(j * 2.1) * 0.08, y + 0.12, b.z + Math.sin(j * 2.1) * 0.08), q, new THREE.Vector3(0.03, 0.03, 0.03));
           berries.setMatrixAt(k * 3 + j, m4);
         }
       });
       this.terrainGroup.add(shadowed(bush), berries);
     }
     if (crystals.length) {
-      const cg = new THREE.OctahedronGeometry(1, 0);
-      const cr = new THREE.InstancedMesh(cg, std(0xd9f1ee, { emissive: 0x2a5a56, roughness: 0.2, metalness: 0.2 }), crystals.length);
+      const cr = new THREE.InstancedMesh(new THREE.OctahedronGeometry(1, 0), std(0xd9f1ee, { emissive: 0x2a5a56, roughness: 0.2, metalness: 0.2 }), crystals.length);
       crystals.forEach((cc, k) => {
         q.setFromEuler(new THREE.Euler(0, 0, cc.r * 0.4));
-        m4.compose(new THREE.Vector3(cc.x, cc.y + 0.1, cc.z), q, new THREE.Vector3(0.04, 0.12, 0.04));
+        m4.compose(new THREE.Vector3(cc.x, this.h(cc.x, cc.z) + 0.1, cc.z), q, new THREE.Vector3(0.04, 0.12, 0.04));
         cr.setMatrixAt(k, m4);
       });
       this.terrainGroup.add(shadowed(cr));
@@ -619,9 +619,9 @@ export class Renderer {
     const pts: number[] = [];
     for (let i = 0; i <= map.width; i++) {
       const x = i - map.width / 2;
-      pts.push(x, 0.5, -map.height / 2, x, 0.5, map.height / 2);
+      pts.push(x, 0.47, -map.height / 2, x, 0.47, map.height / 2);
       const z = i - map.height / 2;
-      pts.push(-map.width / 2, 0.5, z, map.width / 2, 0.5, z);
+      pts.push(-map.width / 2, 0.47, z, map.width / 2, 0.47, z);
     }
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
@@ -661,13 +661,12 @@ export class Renderer {
     const m4 = new THREE.Matrix4();
     const q = new THREE.Quaternion();
     this.treeSpots.forEach((s, k) => {
-      const tx = Math.round(s.x + this.map!.width / 2 - 0.5);
-      const ty = Math.round(s.y + this.map!.height / 2 - 0.5);
+      const tx = Math.floor(s.x + this.map!.width / 2);
+      const ty = Math.floor(s.y + this.map!.height / 2);
       const hide = busy.has(`${tx},${ty}`);
-      const base = this.top(tx, ty);
       q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), s.r);
       const sc = hide ? 0.0001 : s.s;
-      m4.compose(new THREE.Vector3(s.x, base, s.y), q, new THREE.Vector3(sc, sc, sc));
+      m4.compose(new THREE.Vector3(s.x, this.h(s.x, s.y) - 0.02, s.y), q, new THREE.Vector3(sc, sc * (0.9 + hash(k, 7) * 0.3), sc));
       this.trees!.trunks.setMatrixAt(k, m4);
       this.trees!.foliage.setMatrixAt(k, m4);
     });
@@ -677,43 +676,67 @@ export class Renderer {
 
   private syncTerritory(f: Frame): void {
     const map = this.map!;
-    const mesh = this.territoryMesh!;
     const terr = computeTerritory(map, f.cities);
     const teamAt = (x: number, y: number): TeamId | null => {
       if (!inBounds(map, x, y)) return null;
       const ci = terr[idx(map, x, y)];
       return ci === null ? null : f.cities[ci].owner;
     };
-    const m4 = new THREE.Matrix4();
-    const c = new THREE.Color();
-    let n = 0;
+    const owners: (TeamId | null)[] = [];
+    for (let y = 0; y < map.height; y++) for (let x = 0; x < map.width; x++) owners.push(teamAt(x, y));
+    const sig = `${this.showTerritory}|${owners.join(',')}`;
+    if (sig === this.territorySig) return;
+    this.territorySig = sig;
+
+    // Tint the painted ground inside each team's land.
+    const ground = this.ground!;
+    const col = ground.geometry.attributes.color as THREE.BufferAttribute;
+    const pos = ground.geometry.attributes.position as THREE.BufferAttribute;
+    const base = this.groundBase!;
+    const tint = new THREE.Color();
+    for (let i = 0; i < pos.count; i++) {
+      let r = base[i * 3], g = base[i * 3 + 1], b = base[i * 3 + 2];
+      if (this.showTerritory) {
+        const t = this.hf!.tileAt(pos.getX(i), pos.getZ(i));
+        const team = t ? owners[t[1] * map.width + t[0]] : null;
+        if (team && pos.getY(i) > -0.02) {
+          tint.set(FACTIONS[team].color);
+          r = r * 0.72 + tint.r * 0.28;
+          g = g * 0.72 + tint.g * 0.28;
+          b = b * 0.72 + tint.b * 0.28;
+        }
+      }
+      col.setXYZ(i, r, g, b);
+    }
+    col.needsUpdate = true;
+
+    // Borders that follow the ground.
     const lines: number[] = [];
     const lineColors: number[] = [];
+    const edge = (ax: number, az: number, bx: number, bz: number, color: THREE.Color) => {
+      const steps = 6;
+      for (let k = 0; k < steps; k++) {
+        const t0 = k / steps;
+        const t1 = (k + 1) / steps;
+        const x0 = ax + (bx - ax) * t0, z0 = az + (bz - az) * t0;
+        const x1 = ax + (bx - ax) * t1, z1 = az + (bz - az) * t1;
+        lines.push(x0, Math.max(0.01, this.h(x0, z0)) + 0.025, z0, x1, Math.max(0.01, this.h(x1, z1)) + 0.025, z1);
+        lineColors.push(color.r, color.g, color.b, color.r, color.g, color.b);
+      }
+    };
     for (let y = 0; y < map.height; y++) {
       for (let x = 0; x < map.width; x++) {
-        const team = teamAt(x, y);
+        const team = owners[y * map.width + x];
         if (!team) continue;
-        const h = this.top(x, y) + 0.012;
-        m4.makeTranslation(this.wx(x), h, this.wz(y));
-        mesh.setMatrixAt(n, m4);
-        mesh.setColorAt(n, c.set(FACTIONS[team].color));
-        n++;
-        const col = new THREE.Color(FACTIONS[team].color);
+        const color = new THREE.Color(FACTIONS[team].color).offsetHSL(0, 0.1, 0.05);
         const x0 = this.wx(x) - 0.5;
         const z0 = this.wz(y) - 0.5;
-        const edge = (ax: number, az: number, bx: number, bz: number) => {
-          lines.push(ax, h + 0.01, az, bx, h + 0.01, bz);
-          lineColors.push(col.r, col.g, col.b, col.r, col.g, col.b);
-        };
-        if (teamAt(x, y - 1) !== team) edge(x0, z0, x0 + 1, z0);
-        if (teamAt(x, y + 1) !== team) edge(x0, z0 + 1, x0 + 1, z0 + 1);
-        if (teamAt(x - 1, y) !== team) edge(x0, z0, x0, z0 + 1);
-        if (teamAt(x + 1, y) !== team) edge(x0 + 1, z0, x0 + 1, z0 + 1);
+        if (teamAt(x, y - 1) !== team) edge(x0, z0, x0 + 1, z0, color);
+        if (teamAt(x, y + 1) !== team) edge(x0, z0 + 1, x0 + 1, z0 + 1, color);
+        if (teamAt(x - 1, y) !== team) edge(x0, z0, x0, z0 + 1, color);
+        if (teamAt(x + 1, y) !== team) edge(x0 + 1, z0, x0 + 1, z0 + 1, color);
       }
     }
-    mesh.count = n;
-    mesh.instanceMatrix.needsUpdate = true;
-    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
     if (this.territoryLines) {
       this.terrainGroup.remove(this.territoryLines);
       this.territoryLines.geometry.dispose();
@@ -723,6 +746,7 @@ export class Renderer {
     geo.setAttribute('color', new THREE.Float32BufferAttribute(lineColors, 3));
     this.territoryLines = new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ vertexColors: true }));
     this.territoryLines.renderOrder = 3;
+    this.territoryLines.visible = this.showTerritory;
     this.terrainGroup.add(this.territoryLines);
   }
 
@@ -751,23 +775,34 @@ export class Renderer {
     return shadowed(g);
   }
 
-  private makeHouse(roof: number): THREE.Group {
+  private makeHouse(roof: number, seed: number): THREE.Group {
     const g = new THREE.Group();
-    const walls = new THREE.Mesh(this.geo.box, this.mats.wall);
-    walls.scale.set(0.2, 0.15, 0.17);
-    walls.position.y = 0.075;
-    const r = new THREE.Mesh(this.geo.cone4, std(roof));
-    r.scale.set(0.17, 0.13, 0.15);
-    r.rotation.y = Math.PI / 4;
-    r.position.y = 0.215;
+    const wallTone = [0xf1e6cf, 0xe9dcc0, 0xf4ecdb][seed % 3];
+    const w = 0.2 + hash(seed, 1) * 0.05;
+    const d = 0.16 + hash(seed, 2) * 0.03;
+    const hgt = 0.14 + hash(seed, 3) * 0.04;
+    const walls = new THREE.Mesh(this.geo.box, std(wallTone));
+    walls.scale.set(w, hgt + 0.06, d);
+    walls.position.y = (hgt - 0.06) / 2;
+    const roofMesh = new THREE.Mesh(this.geo.gable, std(new THREE.Color(roof).offsetHSL(0, 0, (hash(seed, 4) - 0.5) * 0.08).getHex()));
+    roofMesh.scale.set(d + 0.06, 0.2, w + 0.05);
+    roofMesh.rotation.y = Math.PI / 2;
+    roofMesh.position.y = hgt;
     const door = new THREE.Mesh(this.geo.box, this.mats.woodDark);
-    door.scale.set(0.05, 0.08, 0.01);
-    door.position.set(0, 0.04, 0.086);
+    door.scale.set(0.045, 0.075, 0.01);
+    door.position.set(0, 0.0375, d / 2 + 0.002);
+    g.add(walls, roofMesh, door);
+    for (const sx of [-1, 1]) {
+      const win = new THREE.Mesh(this.geo.box, std(0x3b4a57, { roughness: 0.3 }));
+      win.scale.set(0.035, 0.035, 0.01);
+      win.position.set(sx * w * 0.3, hgt * 0.62, d / 2 + 0.002);
+      g.add(win);
+    }
     const chimney = new THREE.Mesh(this.geo.box, this.mats.stoneDark);
     chimney.scale.set(0.035, 0.1, 0.035);
-    chimney.position.set(0.05, 0.25, -0.03);
+    chimney.position.set(w * 0.25, hgt + 0.08, -d * 0.15);
     chimney.name = 'chimney';
-    g.add(walls, r, door, chimney);
+    g.add(chimney);
     return shadowed(g);
   }
 
@@ -871,45 +906,118 @@ export class Renderer {
       if (v && v.sig === sig) continue;
       if (v) this.dynamicGroup.remove(v.group);
       const group = new THREE.Group();
-      const base = this.top(c.x, c.y);
-      group.position.set(this.wx(c.x), base, this.wz(c.y));
-      const plaza = new THREE.Mesh(new THREE.CylinderGeometry(0.44, 0.46, 0.03, 20), std(0xdccda5));
-      plaza.position.y = 0.015;
+      const gx = this.wx(c.x);
+      const gz = this.wz(c.y);
+      const gy = this.h(gx, gz);
+      group.position.set(gx, gy, gz);
+      /** Put a child on the real ground under it. */
+      const seat = (o: THREE.Object3D, lx: number, lz: number, extra = 0) => {
+        o.position.set(lx, this.h(gx + lx, gz + lz) - gy + extra, lz);
+        group.add(o);
+      };
+
+      // Paved square, with a skirt so it never floats on a slope.
+      const plaza = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.42, 0.3, 24), std(0xd9c9a0));
+      plaza.position.y = -0.13;
       plaza.receiveShadow = true;
       group.add(plaza);
-      const houses = Math.min(6, c.level + (c.isCapital ? 1 : 0));
-      const spots: [number, number, number][] = [[-0.3, -0.25, 0.2], [0.3, -0.25, -0.3], [-0.33, 0.12, 0.5], [0.33, 0.14, -0.6], [-0.1, -0.36, 0.1], [0.12, 0.34, 0.9]];
-      for (let i = 0; i < houses; i++) {
-        const h = this.makeHouse(roof);
-        h.position.set(spots[i][0], 0.02, spots[i][1]);
-        h.rotation.y = spots[i][2];
-        group.add(h);
+      for (let i = 0; i < 10; i++) {
+        const stone = new THREE.Mesh(this.geo.box, std(0xc8b78c));
+        const a = hash(c.x, c.y, 400 + i) * Math.PI * 2;
+        const r = hash(c.x, c.y, 410 + i) * 0.32;
+        stone.scale.set(0.06, 0.01, 0.05);
+        stone.rotation.y = a;
+        stone.position.set(Math.cos(a) * r, 0.022, Math.sin(a) * r);
+        group.add(stone);
       }
-      if (c.isCapital && c.founder) {
-        const fa = FACTIONS[c.founder];
+
+      // Houses grow with the city.
+      const houses = Math.min(7, c.level + 1 + (c.isCapital ? 1 : 0));
+      const spots: [number, number, number][] = [[-0.27, -0.24, 0.2], [0.29, -0.22, -0.3], [-0.31, 0.14, 1.4], [0.31, 0.16, -1.5], [-0.05, -0.33, 0.05], [0.12, 0.33, 3.1], [-0.15, 0.32, 3.3]];
+      const capitalHere = c.isCapital && c.founder;
+      for (let i = 0; i < houses; i++) {
+        let [lx, lz, ry] = spots[i];
+        if (capitalHere && Math.hypot(lx, lz) < 0.3) continue;
+        if (capitalHere) {
+          lx *= 1.15;
+          lz *= 1.15;
+        }
+        const hs = this.makeHouse(roof, c.x * 31 + c.y * 7 + i);
+        hs.rotation.y = ry;
+        hs.scale.setScalar(capitalHere ? 0.85 : 1);
+        seat(hs, lx, lz);
+      }
+
+      if (capitalHere) {
+        const fa = FACTIONS[c.founder!];
         const cap = this.makeCapital(fa.capitalStyle, new THREE.Color(fa.color).getHex(), new THREE.Color(fa.colorDark).getHex(), banner);
-        cap.position.y = 0.02;
-        group.add(cap);
+        seat(cap, 0, -0.02);
+        // Stone curtain wall with corner towers.
+        const R = 0.47;
+        for (let i = 0; i < 28; i++) {
+          const a = (i / 28) * Math.PI * 2;
+          if (Math.abs(a - Math.PI / 2) < 0.18) continue; // gate facing south
+          const seg = new THREE.Mesh(this.geo.box, this.mats.stone);
+          seg.scale.set(0.11, 0.09, 0.05);
+          seg.rotation.y = -a + Math.PI / 2;
+          seat(shadowed(seg), Math.cos(a) * R, Math.sin(a) * R, 0.045);
+        }
+        for (const a of [Math.PI / 4, (3 * Math.PI) / 4, (5 * Math.PI) / 4, (7 * Math.PI) / 4]) {
+          const tw = new THREE.Group();
+          const body = new THREE.Mesh(this.geo.cyl, this.mats.stone);
+          body.scale.set(0.055, 0.2, 0.055);
+          body.position.y = 0.1;
+          const cone = new THREE.Mesh(new THREE.ConeGeometry(1, 1, 8), std(new THREE.Color(fa.colorDark).getHex()));
+          cone.scale.set(0.07, 0.1, 0.07);
+          cone.position.y = 0.25;
+          tw.add(body, cone);
+          seat(shadowed(tw), Math.cos(a) * R, Math.sin(a) * R);
+        }
       } else {
+        // Villages: a timber fence with a gap for the road, a well and a banner.
+        for (let i = 0; i < 26; i++) {
+          const a = (i / 26) * Math.PI * 2;
+          if (Math.abs(a - Math.PI / 2) < 0.2) continue;
+          const post = new THREE.Mesh(this.geo.cyl, this.mats.wood);
+          const ph = 0.1 + (i % 2) * 0.02;
+          post.scale.set(0.014, ph, 0.014);
+          seat(shadowed(post), Math.cos(a) * 0.46, Math.sin(a) * 0.46, ph / 2);
+        }
+        const well = new THREE.Group();
+        const ring = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.055, 0.06, 10, 1, true), this.mats.stone);
+        ring.position.y = 0.03;
+        const water = new THREE.Mesh(new THREE.CircleGeometry(0.045, 10), std(0x3a8fb0));
+        water.rotation.x = -Math.PI / 2;
+        water.position.y = 0.04;
+        const wroof = new THREE.Mesh(this.geo.cone4, std(roof));
+        wroof.scale.set(0.08, 0.05, 0.08);
+        wroof.rotation.y = Math.PI / 4;
+        wroof.position.y = 0.16;
+        for (const sx of [-1, 1]) {
+          const p = new THREE.Mesh(this.geo.box, this.mats.wood);
+          p.scale.set(0.01, 0.12, 0.01);
+          p.position.set(sx * 0.045, 0.08, 0);
+          well.add(p);
+        }
+        well.add(ring, water, wroof);
+        seat(shadowed(well), 0.05, 0.05);
         const flag = this.makeFlag(banner, 0.42);
-        flag.position.set(0.05, 0.02, 0);
-        group.add(flag);
+        seat(flag, -0.08, -0.06);
       }
       if (c.walls) {
         for (let i = 0; i < 24; i++) {
-          const a = (i / 24) * Math.PI * 2;
+          const a = (i / 24) * Math.PI * 2 + 0.13;
           const seg = new THREE.Mesh(this.geo.box, this.mats.stoneDark);
-          seg.scale.set(0.12, 0.1 + (i % 2) * 0.03, 0.05);
-          seg.position.set(Math.cos(a) * 0.47, 0.06, Math.sin(a) * 0.47);
+          seg.scale.set(0.12, 0.14 + (i % 2) * 0.03, 0.06);
           seg.rotation.y = -a + Math.PI / 2;
-          group.add(shadowed(seg));
+          seat(shadowed(seg), Math.cos(a) * 0.52, Math.sin(a) * 0.52, 0.07);
         }
       }
       if (c.warden) {
         const w = this.makeWarden();
-        w.position.set(0, 0.02, 0.28);
         w.name = 'warden';
-        group.add(w);
+        seat(w, 0, 0.3);
+        w.userData.baseY = w.position.y;
       }
       this.dynamicGroup.add(group);
       const label = v?.label ?? this.makeLabel('city-label');
@@ -934,7 +1042,7 @@ export class Renderer {
     const teamColor = team ? new THREE.Color(FACTIONS[team].color).getHex() : 0xdddddd;
     switch (d.kind) {
       case 'farm': {
-        add(this.geo.box, this.mats.soil, 0.8, 0.03, 0.7, 0, 0.015, 0);
+        add(this.geo.box, this.mats.soil, 0.8, 0.22, 0.7, 0, -0.08, 0);
         const cropMat = this.mats.crop;
         if (!cropMat.userData.sway) {
           cropMat.userData.sway = true;
@@ -1062,17 +1170,20 @@ export class Renderer {
   // Blobs, boats, boss
   // -------------------------------------------------------------------------
 
-  private makeEyes(spread: number, y: number, z: number): THREE.Mesh[] {
+  private makeEyes(spread: number, y: number, z: number, size = 1): THREE.Mesh[] {
     const out: THREE.Mesh[] = [];
     for (const s of [-1, 1]) {
       const white = new THREE.Mesh(this.geo.eye, this.mats.white);
-      white.scale.set(0.055, 0.065, 0.04);
+      white.scale.set(0.07 * size, 0.08 * size, 0.05 * size);
       white.position.set(s * spread, y, z);
       const pupil = new THREE.Mesh(this.geo.eye, this.mats.pupil);
-      pupil.scale.set(0.028, 0.034, 0.02);
-      pupil.position.set(s * spread, y - 0.005, z + 0.03);
+      pupil.scale.set(0.038 * size, 0.045 * size, 0.025 * size);
+      pupil.position.set(s * spread + s * 0.006 * size, y - 0.008 * size, z + 0.04 * size);
       pupil.name = 'pupil';
-      out.push(white, pupil);
+      const glint = new THREE.Mesh(this.geo.eye, this.mats.white);
+      glint.scale.setScalar(0.012 * size);
+      glint.position.set(s * spread - 0.012 * size, y + 0.014 * size, z + 0.062 * size);
+      out.push(white, pupil, glint);
     }
     return out;
   }
@@ -1116,17 +1227,27 @@ export class Renderer {
     const root = new THREE.Group();
     const body = new THREE.Group();
     const scale = b.rank === 'champion' ? 1.12 : b.rank === 'veteran' ? 1.05 : 1;
-    const mat = new THREE.MeshStandardMaterial({ color: f.color, roughness: 0.35, metalness: 0.05, transparent: true, opacity: 1 });
+    const mat = new THREE.MeshPhysicalMaterial({
+      color: new THREE.Color(f.color).offsetHSL(0, 0.08, 0.04),
+      roughness: 0.38,
+      metalness: 0,
+      clearcoat: 0.9,
+      clearcoatRoughness: 0.25,
+      sheen: 0.4,
+      sheenColor: new THREE.Color(f.colorLight),
+      transparent: true,
+      opacity: 1,
+    });
     const bodyMesh = new THREE.Mesh(this.geo.blob, mat);
-    bodyMesh.scale.set(0.42 * scale, 0.36 * scale, 0.4 * scale);
-    bodyMesh.position.y = 0.17 * scale;
+    bodyMesh.scale.set(0.44 * scale, 0.4 * scale, 0.42 * scale);
+    bodyMesh.position.y = 0.19 * scale;
     bodyMesh.castShadow = true;
     body.add(bodyMesh);
-    const shine = new THREE.Mesh(this.geo.eye, new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.35 }));
-    shine.scale.set(0.05, 0.03, 0.02);
-    shine.position.set(-0.1 * scale, 0.28 * scale, 0.14 * scale);
-    body.add(shine);
-    for (const e of this.makeEyes(0.075 * scale, 0.22 * scale, 0.15 * scale)) body.add(e);
+    for (const e of this.makeEyes(0.085 * scale, 0.255 * scale, 0.16 * scale, scale)) body.add(e);
+    const mouth = new THREE.Mesh(new THREE.TorusGeometry(0.028, 0.007, 6, 12, Math.PI), std(new THREE.Color(f.colorDark).getHex(), { flatShading: false }));
+    mouth.rotation.z = Math.PI;
+    mouth.position.set(0, 0.175 * scale, 0.205 * scale);
+    body.add(mouth);
 
     const gear = new THREE.Group();
     let bow: THREE.Group | null = null;
@@ -1482,12 +1603,14 @@ export class Renderer {
 
     for (const c of this.clouds) {
       c.position.x += c.userData.speed * dt;
-      if (c.position.x > 26) {
-        c.position.x = -26;
+      if (c.position.x > 30) {
+        c.position.x = -30;
         c.position.z = Math.random() * 30 - 15;
       }
+      // Shade falls where sunlight through the cloud would land.
+      const shade = c.userData.shade as THREE.Mesh;
+      shade.position.set(c.position.x + c.position.y * 0.5, 0.72, c.position.z + c.position.y * 0.35);
     }
-    if (this.foam) (this.foam.material as THREE.MeshBasicMaterial).opacity = 0.45 + Math.sin(t * 1.6) * 0.2;
 
     if (f && map) {
       const viewer = this.viewer();
@@ -1518,8 +1641,7 @@ export class Renderer {
       this.updateFog(viewer);
       this.updateSpeech(f, viewer);
       this.updateSelectionRing(t);
-      if (this.territoryMesh) this.territoryMesh.visible = this.showTerritory;
-      if (this.territoryLines) this.territoryLines.visible = this.showTerritory;
+      if (this.territorySig && !this.territorySig.startsWith(String(this.showTerritory))) this.syncTerritory(f);
       if (this.grid) this.grid.visible = this.showCoords;
     }
 
@@ -1587,7 +1709,7 @@ export class Renderer {
       const pos = this.blobTarget(b, moves.get(id), p);
       const visible = seen(Math.round(pos.x), Math.round(pos.y)) || seen(b.x, b.y);
       v.root.visible = visible;
-      const ground = pos.hop > 0 ? lerp(this.groundAt(Math.floor(pos.x), Math.floor(pos.y)), this.groundAt(Math.ceil(pos.x), Math.ceil(pos.y)), 0.5) : this.top(b.x, b.y);
+      const ground = this.groundAt(pos.x, pos.y);
       let gx = this.wx(pos.x);
       let gz = this.wz(pos.y);
       let gy = (b.vessel ? WATER_Y - 0.02 + Math.sin(t * 1.8 + b.x) * 0.02 : ground) + pos.hop;
@@ -1737,7 +1859,7 @@ export class Renderer {
       v.label.style.borderColor = owner ? owner.color : '#d8d2c2';
       this.place(v.label, new THREE.Vector3(this.wx(c.x), this.top(c.x, c.y) + (c.isCapital ? 1.05 : 0.7), this.wz(c.y)), vis);
       const warden = v.group.getObjectByName('warden');
-      if (warden) warden.position.y = 0.02 + Math.abs(Math.sin(t * 2 + c.x)) * 0.03;
+      if (warden) warden.position.y = (warden.userData.baseY ?? 0) + Math.abs(Math.sin(t * 2 + c.x)) * 0.03;
       // Chimney smoke.
       if (puff && vis && Math.random() < 0.5) {
         const chimneys: THREE.Object3D[] = [];
@@ -1805,8 +1927,6 @@ export class Renderer {
 
   private updateFog(viewer: ReturnType<Renderer['viewer']>): void {
     const map = this.map!;
-    const near = this.fogNear!;
-    const far = this.fogFar!;
     const key = viewer.visible ? `${this.frame?.day}|${JSON.stringify(this.view)}|${viewer.blob ? `${viewer.blob.x},${viewer.blob.y}` : ''}` : 'none';
     if (key === this.lastFogKey) return;
     this.lastFogKey = key;
@@ -1814,35 +1934,34 @@ export class Renderer {
       this.scene.remove(this.hearing);
       this.hearing = null;
     }
+    const shroud = this.shroud!;
     if (!viewer.visible || !viewer.explored) {
-      near.count = 0;
-      far.count = 0;
+      shroud.visible = false;
       return;
     }
-    const m4 = new THREE.Matrix4();
-    let a = 0;
-    let b = 0;
-    for (let y = 0; y < map.height; y++) {
-      for (let x = 0; x < map.width; x++) {
-        const i = idx(map, x, y);
-        if (viewer.visible.has(i)) continue;
-        const h = 2.2;
-        m4.compose(new THREE.Vector3(this.wx(x), -0.6 + h / 2, this.wz(y)), new THREE.Quaternion(), new THREE.Vector3(1.001, h, 1.001));
-        if (viewer.explored(i)) near.setMatrixAt(a++, m4);
-        else far.setMatrixAt(b++, m4);
-      }
-    }
-    near.count = a;
-    far.count = b;
-    near.instanceMatrix.needsUpdate = true;
-    far.instanceMatrix.needsUpdate = true;
+    const vis = viewer.visible;
+    const exp = viewer.explored;
+    paintShroud(shroud, this.hf!, (x, y) => {
+      const i = idx(map, x, y);
+      return vis.has(i) ? 0 : exp(i) ? 0.5 : 0.9;
+    });
+    shroud.visible = true;
     if (viewer.blob) {
       const r = HEARING_RANGE + 0.5;
       const cx = this.wx(viewer.blob.x);
       const cz = this.wz(viewer.blob.y);
-      const pts = [[-r, -r], [r, -r], [r, r], [-r, r]].map(([dx, dz]) => new THREE.Vector3(cx + dx, 0.55, cz + dz));
+      const pts: THREE.Vector3[] = [];
+      const corners = [[-r, -r], [r, -r], [r, r], [-r, r], [-r, -r]];
+      for (let k = 0; k < 4; k++) {
+        for (let s2 = 0; s2 < 12; s2++) {
+          const t = s2 / 12;
+          const x = cx + corners[k][0] + (corners[k + 1][0] - corners[k][0]) * t;
+          const z = cz + corners[k][1] + (corners[k + 1][1] - corners[k][1]) * t;
+          pts.push(new THREE.Vector3(x, Math.max(0.02, this.h(x, z)) + 0.06, z));
+        }
+      }
       const geo = new THREE.BufferGeometry().setFromPoints(pts);
-      this.hearing = new THREE.LineLoop(geo, new THREE.LineDashedMaterial({ color: 0xebe6da, dashSize: 0.2, gapSize: 0.14 }));
+      this.hearing = new THREE.LineLoop(geo, new THREE.LineDashedMaterial({ color: 0xfff6de, dashSize: 0.2, gapSize: 0.14 }));
       this.hearing.computeLineDistances();
       this.scene.add(this.hearing);
     }
@@ -1905,15 +2024,13 @@ export class Renderer {
     }
 
     // Otherwise work out the tile from the terrain.
-    const targets: THREE.Object3D[] = [this.landMesh!, this.seabedMesh!];
+    const targets: THREE.Object3D[] = [this.ground!, this.water!];
     const hit = ray.intersectObjects(targets, false)[0];
-    let tile: number | null = null;
-    if (hit && hit.instanceId !== undefined) {
-      tile = hit.object === this.landMesh ? this.tileOfInstance[hit.instanceId] : this.seabedTileOfInstance[hit.instanceId];
-    }
-    if (tile === null) return null;
-    const x = tile % map.width;
-    const y = Math.floor(tile / map.width);
+    if (!hit) return null;
+    const t = this.hf!.tileAt(hit.point.x, hit.point.z);
+    if (!t) return null;
+    const [x, y] = t;
+    const tile = idx(map, x, y);
     const viewer = this.viewer();
     const visible = !viewer.visible || viewer.visible.has(tile);
     const blob = visible ? f.blobs.find((b) => b.x === x && b.y === y) : undefined;
