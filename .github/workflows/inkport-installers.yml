@@ -10,11 +10,15 @@ on:
         description: Which installers to build
         type: choice
         default: all
-        options: [all, windows, macos, linux]
+        options: [all, windows, macos, linux, none]
       long_checks:
         description: Run the long command-line training checks too (about 40 minutes more per platform)
         type: boolean
         default: true
+      nvidia:
+        description: Also build the Windows flavor that trains on NVIDIA graphics cards (portable zip, about 5 GB)
+        type: boolean
+        default: false
       probe:
         description: 'Measure a training recipe on the build machines (macOS, Linux): plan overrides as JSON, several separated by ";;"; "{}" is a run with the settings a user gets'
         type: string
@@ -220,6 +224,58 @@ jobs:
         shell: pwsh
         run: |
           if (-not (Get-ChildItem build/installers/windows-x86_64-cpu/*.exe -ErrorAction SilentlyContinue)) { throw "the NSIS installer was not produced; see the Build installer step" }
+
+  windows-nvidia:
+    name: Windows (x64, NVIDIA training)
+    if: inputs.nvidia
+    runs-on: windows-2022
+    timeout-minutes: 240
+    steps:
+      - name: Allow long paths
+        run: git config --system core.longpaths true
+        working-directory: .
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: pnpm/action-setup@v4
+        with: { version: 10 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm, cache-dependency-path: inkport/pnpm-lock.yaml }
+      - name: Vulkan SDK (build machine only; lets answers use the graphics card)
+        continue-on-error: true
+        shell: pwsh
+        working-directory: .
+        run: |
+          $exe = Join-Path $env:RUNNER_TEMP "vulkan_sdk.exe"
+          curl.exe -fsSL --retry 3 -o $exe https://sdk.lunarg.com/sdk/download/latest/windows/vulkan_sdk.exe
+          if ($LASTEXITCODE -ne 0) { throw "could not download the Vulkan SDK" }
+          $root = "C:\VulkanSDK\inkport"
+          $p = Start-Process -FilePath $exe -ArgumentList @("--root", $root, "--accept-licenses", "--default-answer", "--confirm-command", "install") -PassThru
+          $null = $p.Handle
+          if (-not $p.WaitForExit(15 * 60 * 1000)) { $p.Kill(); throw "the Vulkan SDK installer did not finish" }
+          "VULKAN_SDK=$root" >> $env:GITHUB_ENV
+          "$root\Bin" >> $env:GITHUB_PATH
+      - name: Free space on the build machine
+        shell: pwsh
+        working-directory: .
+        run: Get-PSDrive C, D | Format-Table Name, @{n="FreeGB";e={[math]::Round($_.Free/1GB,1)}}
+      - name: Build (portable zip only - larger than an installer can hold)
+        shell: pwsh
+        run: ./scripts/build_all_in_one.ps1 -Flavor cuda -VulkanOptional -Bundles none
+      - name: Quick clean-machine check (this machine has no NVIDIA card - the build must still work on its processor)
+        shell: pwsh
+        timeout-minutes: 40
+        run: |
+          $zip = Get-ChildItem build/installers/windows-x86_64-cuda/*.zip | Select-Object -First 1
+          ./scripts/clean_machine_check.ps1 -Installer $zip.FullName -Quick
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Inkport-Windows-x64-NVIDIA-Portable
+          path: |
+            inkport/build/installers/windows-x86_64-cuda/*.zip
+            inkport/build/installers/windows-x86_64-cuda/SHA256SUMS
+          compression-level: 0
+          retention-days: 30
 
   linux:
     name: Linux (x64)

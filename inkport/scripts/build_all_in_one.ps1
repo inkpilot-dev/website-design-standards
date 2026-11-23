@@ -74,7 +74,12 @@ if (-not $SkipPayload) {
   Step "3/7 llama.cpp for $Platform"
   $llamaArgs = @("--platform", $Platform, "--out", (Join-Path $Payload "llama"))
   if ($NoVulkan) { $llamaArgs += "--no-vulkan" } elseif ($VulkanOptional) { $llamaArgs += "--vulkan-optional" }
-  if ($Flavor -eq "cuda") { Need nvcc "CUDA toolkit (build machine only; users need just the NVIDIA driver)"; $llamaArgs += "--cuda" }
+  # Training on an NVIDIA card needs only the CUDA build of PyTorch (step 2). Answers use the card
+  # through Vulkan; with the CUDA toolkit on the build machine they also get llama.cpp's CUDA backend.
+  if ($Flavor -eq "cuda") {
+    if (Get-Command nvcc -ErrorAction SilentlyContinue) { $llamaArgs += "--cuda" }
+    else { Write-Host "    note: no CUDA toolkit on this build machine; answers will use the graphics card through Vulkan" -ForegroundColor Yellow }
+  }
   Py scripts/lib/build_llamacpp.py @llamaArgs
 
   Step "3b/7 App-local MSVC runtime (no VC++ redistributable needed on user machines)"
@@ -117,7 +122,9 @@ if ($signConfig.Count -gt 0) { $bundleConfig.bundle.windows | Add-Member -NotePr
 $merged = Join-Path $Root "build\tauri.$Platform.build.json"
 $bundleConfig | ConvertTo-Json -Depth 20 | Set-Content -Encoding UTF8 $merged
 $env:RUSTFLAGS = "-C target-feature=+crt-static"   # the Rust app itself needs no VC++ runtime either
-$tauriArgs = @("tauri", "build", "--config", $merged, "--target", $Triple, "--bundles", $Bundles)
+# -Bundles none: only the portable zip (the NVIDIA flavor is larger than an installer can hold).
+$tauriArgs = @("tauri", "build", "--config", $merged, "--target", $Triple)
+if ($Bundles -eq "none") { $tauriArgs += "--no-bundle" } else { $tauriArgs += @("--bundles", $Bundles) }
 if ($DebugBuild) { $tauriArgs += "--debug" }
 # NSIS and MSI cannot hold more than 2 GiB (compressed; see src-tauri/nsis/installer.nsi). If the
 # payload ever outgrows that, the bundling step fails AFTER the app binaries are built; the
