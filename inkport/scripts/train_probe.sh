@@ -23,12 +23,14 @@ n=0
 for RUN in "${RUNS[@]}"; do
   n=$((n + 1))
   GOAL=business_rules; OVERRIDES="$RUN"
-  case "$RUN" in business_rules:*|code_sql:*|docs_legal:*|custom:*) GOAL="${RUN%%:*}"; OVERRIDES="${RUN#*:}" ;; esac
+  case "$RUN" in business_rules:*|code_sql:*|docs_legal:*|custom:*|style:*) GOAL="${RUN%%:*}"; OVERRIDES="${RUN#*:}" ;; esac
   case "$GOAL" in
     business_rules) FILES="expenses.csv policy.md"; RULES='["category must be one of fuel, meals, software, office_supplies, travel","amount must be positive","if the description mentions Uber then category must be travel"]' ;;
     code_sql) FILES="orders.csv customers.csv helpers.py"; RULES='["must not mention DROP","no more than 120 words"]' ;;
     docs_legal) FILES="lease.md"; RULES='["must include a quote","no more than 80 words"]' ;;
     custom) FILES="support.csv"; RULES='["no more than 50 words","must mention \"thank you\""]' ;;
+    # A style, not set replies: 120 questions, each with its own answer (tests/fixtures).
+    style) FILES=""; STYLE_FILE="$(cd "$(dirname "$0")/.." && pwd)/tests/fixtures/shakespeare_examples.csv"; RULES='["no more than 50 words","must mention \"thou\""]' ;;
   esac
   WORK="$(mktemp -d "${TMPDIR:-/tmp}/inkport-probe.XXXXXX")"
   export INKPORT_HOME="$WORK/home"
@@ -36,8 +38,10 @@ for RUN in "${RUNS[@]}"; do
   t0=$(date +%s)
   SAMPLES=$("$CLI" samples 2>>"$WORK/log" | result | field samples)
   [ -f "$SAMPLES/expenses.csv" ] || { echo "    no bundled samples (see $WORK/log)"; tail -5 "$WORK/log"; continue; }
-  "$CLI" create-project --name "Probe" --template "$GOAL" >/dev/null 2>>"$WORK/log"
+  TEMPLATE="$GOAL"; [ "$GOAL" = style ] && TEMPLATE=custom
+  "$CLI" create-project --name "Probe" --template "$TEMPLATE" >/dev/null 2>>"$WORK/log"
   INPUTS=(); for f in $FILES; do INPUTS+=("$SAMPLES/$f"); done
+  [ "$GOAL" = style ] && INPUTS=("$STYLE_FILE")
   "$CLI" ingest --project probe --inputs "${INPUTS[@]}" --rules "$RULES" 2>>"$WORK/log" | result | cut -c1-260 | sed 's/^/    exam: /'
   ARGS=(train --project probe --preset fast)
   [ "$OVERRIDES" = "{}" ] || ARGS+=(--overrides "$OVERRIDES")

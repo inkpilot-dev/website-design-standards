@@ -871,13 +871,17 @@ def run_ingest(root: Path, inputs: list[str], rule_texts: list[str]) -> dict:
     # other answer, and the trained model "passed 0%". There the user's rules are the exam; the
     # overlap is no longer part of the pass. (Examples that repeat their answers, like a list of
     # set replies asked in several ways, keep the overlap check.)
-    if template == "custom" and info.get("answer_style") == "long":
+    # The same holds for short answers compared letter by letter: when every example has its own
+    # answer, the hidden questions ask for answers the model was never shown, and no amount of
+    # training can make it produce them. Only what the examples have in common can be learned,
+    # and that is what the rules say.
+    if template == "custom" and info.get("answer_style") in ("long", "short"):
         refs = [str(it.get("reference") or "").strip().lower() for it in items]
         open_ended = len(set(refs)) >= 0.9 * max(1, len(refs))
         info["open_ended"] = open_ended
         if open_ended and rule_specs:
             for v in verifiers:
-                if v["id"] == "overlap":
+                if v["id"] in ("overlap", "exact"):
                     v["role"] = "eval_only"
             events.log("Every example has its own answer, so the exam checks your rules and not the exact wording.", "info")
         elif open_ended:
