@@ -530,6 +530,11 @@ class Trainer:
                 events.log("Time budget reached: checking where training stands, then finishing with the best result", "warn")
                 stopped = "budget"
             if step % eval_every == 0 or step == total or out_of_time:
+                # A check can take minutes (the model answers every practice question and the
+                # general ones), and the progress bar stands still meanwhile: a user took that for
+                # a freeze. Say what is happening, and say when learning goes on.
+                shown = "sft" if stage == "sft" else "rft"
+                events.stage(shown, "started", f"Checking its progress on the practice questions (after step {step} of {total}); the bar moves again when this is done")
                 dev_res = self._dev_eval(baseline, step)
                 last_dev = dev_res["passed"] / max(dev_res["n"], 1)
                 last_dnll = b.nll(holdout) - base_nll
@@ -550,6 +555,8 @@ class Trainer:
                 # whole first stage whatever happens to general skills, and read +0.148 (limit
                 # 0.15) in a refinement round after which the model answered more general
                 # questions than before. A reading that is not a number still means a broken run.
+                if step < total and not out_of_time:
+                    events.stage(shown, "started", f"Learning from your examples ({last_dev:.0%} of the practice questions right so far)")
                 drift_limit = math.inf if watch_general else float(cfg["dnll_limit"])
                 why = gone_wrong(base_dev_pass, base_dev_format, dev_res, last_dnll if math.isfinite(base_nll) else 0.0, drift_limit)
                 over = watch_general and general_lost >= general_limit(len(watch))
