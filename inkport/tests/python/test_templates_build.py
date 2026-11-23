@@ -182,3 +182,11 @@ def test_an_exam_built_by_an_earlier_version_is_brought_up_to_date_when_training
     assert bring_checks_up_to_date(project, load_project(project)) is True
     assert score_item(item, good, load_verifier_set(project), Context(root=project))["pass"]
     assert bring_checks_up_to_date(project, load_project(project)) is False  # nothing left to do
+
+
+def test_the_rules_are_also_given_to_the_model_as_instructions(project, tmp_path):
+    _retemplate(project, "custom")
+    run_ingest(project, [str(_style_file(tmp_path))], ['must mention "thou"', "must mention \"zebra\""])
+    item = next(iter(read_jsonl(project / "data" / "train.jsonl")))
+    told = item["messages"][0]["content"]
+    assert 'must mention "thou"' in told and "zebra" not in told  # a rule the examples break is not an instruction

@@ -858,6 +858,14 @@ def run_ingest(root: Path, inputs: list[str], rule_texts: list[str]) -> dict:
         # as a check (it contradicts the examples, or names a column they do not have) must not
         # be given to the model as an instruction either. Same files, same order of examples.
         items, verifiers, info = build_business(src, used)
+    if template == "custom" and used:
+        # The rules are also what the model is told, not only what it is examined on: with 72
+        # examples a model learned to say "thou" in three answers of four; being told to is what
+        # makes the rest follow. (The original model gets the same instructions in the exam, so
+        # the comparison stays fair, and the same text is used when the trained model is served.)
+        told = CUSTOM_SYSTEM + " Every answer must follow these rules: " + "; ".join(used) + "."
+        for it in items:
+            it["messages"][0] = {"role": "system", "content": told}
     if left_out:
         items = [it for i, it in enumerate(items) if i not in left_out]
     for it in items:
