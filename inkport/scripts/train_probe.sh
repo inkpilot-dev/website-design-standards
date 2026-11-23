@@ -44,7 +44,25 @@ for RUN in "${RUNS[@]}"; do
   "$CLI" "${ARGS[@]}" 2>"$WORK/train.log" | result | cut -c1-600 >"$WORK/result"
   grep -E "^ *(stage|info|warn|eval|dev|gate|error) \|" "$WORK/train.log" | grep -v "promote \|verify_data\|stay awake" | cut -c1-330 | sed 's/^/    /'
   echo "    RESULT $(cat "$WORK/result")"
+  # What the original model answered to the practice questions, next to the expected answers
+  # (practice questions only; the hidden exam is never printed).
+  if command -v python3 >/dev/null; then
+    python3 - "$INKPORT_HOME/projects/probe" <<'PY' | cut -c1-420 | sed 's/^/    /'
+import glob, json, sys
+root = sys.argv[1]
+dev = [json.loads(l) for l in open(root + "/data/dev.jsonl", encoding="utf-8")]
+for f in glob.glob(root + "/cache/eval-*.json"):
+    d = json.load(open(f, encoding="utf-8"))
+    if "dev_outputs" not in d:
+        continue
+    for item, out, ok in zip(dev, d["dev_outputs"], d.get("dev_pass") or []):
+        q = " ".join(item["messages"][-1]["content"].split())
+        print("base %s | Q: %s" % ("pass" if ok else "FAIL", q[-150:]))
+        print("          expected: %s" % " ".join(str(item.get("reference")).split())[:200])
+        print("          original: %s" % " ".join(str(out).split())[:200])
+PY
+  fi
   echo "    took $(( $(date +%s) - t0 )) s"
-  rm -rf "$WORK"
+  [ -n "${PROBE_KEEP:-}" ] || rm -rf "$WORK"
 done
 exit 0
