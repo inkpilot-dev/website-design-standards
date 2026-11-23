@@ -1,0 +1,27 @@
+{
+  "name": "goo-kingdoms",
+  "version": "1.0.0",
+  "description": "A 4X spectator strategy game where four Claude factions of autonomous blobs fight over an island.",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "build": "esbuild src/client/main.ts --bundle --minify --format=esm --target=es2022 --sourcemap --outfile=public/app.js",
+    "prestart": "npm run build",
+    "start": "node --disable-warning=ExperimentalWarning src/server/main.ts",
+    "typecheck": "tsc -p tsconfig.json",
+    "headless": "node --disable-warning=ExperimentalWarning src/server/headless.ts"
+  },
+  "engines": {
+    "node": ">=22.18"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^1.12.0",
+    "three": "^0.180.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "esbuild": "^0.28.2",
+    "typescript": "^7.0.2",
+    "@types/three": "^0.180.0"
+  }
+}

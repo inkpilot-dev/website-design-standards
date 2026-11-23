@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Goo Kingdoms</title>
+  <meta name="description" content="Watch four Claude factions of autonomous blobs fight over an island.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true"><path d="M5 22c0-8 5-15 11-15s11 7 11 15c0 3-3 5-11 5S5 25 5 22z" fill="currentColor"/><circle cx="12.5" cy="17" r="2.6" fill="#15181b"/><circle cx="19.5" cy="17" r="2.6" fill="#15181b"/></svg>
+      <span class="brand-name">Goo Kingdoms</span>
+    </div>
+    <div class="day" id="day">Day 0</div>
+    <div class="transport" role="group" aria-label="Playback">
+      <button id="btn-play" class="btn primary" type="button">Play</button>
+      <button id="btn-step" class="btn" type="button" title="Advance one day">Step</button>
+      <div class="segmented" id="speed" role="radiogroup" aria-label="Speed">
+        <button type="button" data-speed="1x">1x</button>
+        <button type="button" data-speed="2x">2x</button>
+        <button type="button" data-speed="5x">5x</button>
+        <button type="button" data-speed="max">Max</button>
+      </div>
+    </div>
+    <form class="seed" id="seed-form">
+      <label for="seed-input">Seed</label>
+      <input id="seed-input" type="number" min="0" max="999999" inputmode="numeric">
+      <button class="btn" type="submit">New match</button>
+    </form>
+    <button class="brain-chip" id="brain-chip" type="button" title="Open settings"></button>
+    <button class="btn" id="btn-settings" type="button">Settings</button>
+  </header>
+
+  <div class="thinking" id="thinking" hidden>
+    <div class="thinking-bar"><span id="thinking-fill"></span></div>
+    <span id="thinking-text"></span>
+  </div>
+  <div class="banner" id="banner" role="alert" hidden></div>
+
+  <nav class="tabs" role="tablist">
+    <button role="tab" type="button" data-tab="match" aria-selected="true">Match</button>
+    <button role="tab" type="button" data-tab="rulebook" aria-selected="false">Rulebook</button>
+    <button role="tab" type="button" data-tab="stats" aria-selected="false">Faction stats</button>
+  </nav>
+
+  <main>
+    <section class="tab-panel" id="tab-match">
+      <div class="stage">
+        <div class="board-wrap" id="board-wrap">
+          <canvas id="board" aria-label="3D view of the island"></canvas>
+          <div class="overlay" id="overlay" aria-hidden="true"></div>
+          <div class="camera-help" id="camera-help">Drag to orbit · right-drag to pan · scroll to zoom · W A S D to fly · Q / E down and up · F follows the selected unit · Home resets</div>
+          <div class="victory" id="victory" hidden></div>
+        </div>
+        <div class="board-controls">
+          <div class="view-picker">
+            <label for="view-select">View</label>
+            <select id="view-select">
+              <option value="god">Spectator (sees everything)</option>
+              <option value="crimson">Crimson Claude's fog of war</option>
+              <option value="cobalt">Cobalt Claude's fog of war</option>
+              <option value="amber">Amber Claude's fog of war</option>
+              <option value="emerald">Emerald Claude's fog of war</option>
+              <option value="blob">Selected blob's sight and hearing</option>
+            </select>
+          </div>
+          <label class="check"><input type="checkbox" id="opt-territory" checked> Territory</label>
+          <label class="check"><input type="checkbox" id="opt-speech" checked> Speech</label>
+          <label class="check"><input type="checkbox" id="opt-coords"> Grid</label>
+          <button class="btn small" id="btn-follow-cam" type="button">Follow selected</button>
+          <button class="btn small" id="btn-reset-cam" type="button">Reset camera</button>
+          <a class="link" href="/api/replay" download>Download replay</a>
+        </div>
+        <div class="replay">
+          <label for="replay-range">Replay</label>
+          <input type="range" id="replay-range" min="0" max="0" value="0">
+          <span id="replay-day" class="mono">Day 0</span>
+          <button class="btn small" id="btn-live" type="button">Live</button>
+        </div>
+      </div>
+
+      <aside class="side">
+        <section>
+          <h2>Standings</h2>
+          <ol class="standings" id="standings"></ol>
+          <p class="supremacy" id="supremacy"></p>
+        </section>
+        <section>
+          <h2>Inspector</h2>
+          <div id="inspector" class="inspector"><p class="muted">Click a blob, city, building, loot pile or the boss to inspect it.</p></div>
+        </section>
+        <section class="chronicle-section">
+          <h2>Chronicle</h2>
+          <ol class="chronicle" id="chronicle"></ol>
+        </section>
+      </aside>
+    </section>
+
+    <section class="tab-panel" id="tab-rulebook" hidden>
+      <article class="rulebook" id="rulebook"></article>
+    </section>
+
+    <section class="tab-panel" id="tab-stats" hidden>
+      <div class="stats" id="stats"></div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <p>Goo Kingdoms runs on your machine. In Claude mode, each blob's own view of the match is sent to the Anthropic API to choose its action. Your API key stays on this machine's server and is never written to disk by the app.</p>
+  </footer>
+
+  <dialog id="settings">
+    <form method="dialog" id="settings-form">
+      <h2>Settings</h2>
+      <fieldset>
+        <legend>Who plays</legend>
+        <label class="radio"><input type="radio" name="brain" value="claude"> Claude: every blob is its own Claude call each day</label>
+        <label class="radio"><input type="radio" name="brain" value="local"> Local bot: a fast built-in heuristic, no API key needed (not Claude)</label>
+      </fieldset>
+      <label class="field">Anthropic API key
+        <input type="password" name="apiKey" autocomplete="off" placeholder="sk-ant-...">
+        <span class="hint" id="key-hint"></span>
+      </label>
+      <div class="field-row">
+        <label class="field">Model
+          <select name="model" id="model-select"></select>
+        </label>
+        <label class="field">Effort
+          <select name="effort">
+            <option value="low">Low (fast, cheapest)</option>
+            <option value="medium">Medium</option>
+            <option value="high">High (slow, strongest)</option>
+          </select>
+        </label>
+      </div>
+      <div class="field-row">
+        <label class="field">Parallel requests
+          <input type="number" name="concurrency" min="1" max="32">
+        </label>
+        <label class="field">Budget per match (USD, 0 = none)
+          <input type="number" name="budgetUsd" min="0" step="0.5">
+        </label>
+        <label class="field">Day limit (next match)
+          <input type="number" name="maxDays" min="10" max="1000">
+        </label>
+      </div>
+      <p class="hint" id="cost-hint"></p>
+      <div class="dialog-actions">
+        <button class="btn" value="cancel" type="submit" formnovalidate>Cancel</button>
+        <button class="btn primary" value="save" type="submit">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
