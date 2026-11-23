@@ -1,0 +1,4 @@
+# Needed to build the dataset (no GPU libraries).
+requests>=2.31
+pyyaml>=6.0
+numpy>=1.26

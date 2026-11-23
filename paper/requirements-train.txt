@@ -1,0 +1,9 @@
+# Needed to train, run and evaluate the student. Python 3.11 or newer.
+# Install PyTorch with CUDA first (see README), then: pip install -r requirements-train.txt
+-r requirements.txt
+transformers>=5.17
+peft>=0.22
+accelerate>=1.10
+bitsandbytes>=0.45
+# Optional, for the GSM8K seed and benchmark:
+# datasets>=5.0

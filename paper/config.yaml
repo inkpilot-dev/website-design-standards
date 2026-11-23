@@ -1,0 +1,86 @@
+# Paper - distillation settings. Every stage reads this file.
+# Paths are relative to this file's folder.
+
+# What the teacher is asked to do with each question.
+instruction: >-
+  Work through the problem step by step, then give a short explanation of the result.
+  End your reply with a single line of the form "Final answer: <answer>".
+
+# The student's system prompt: its name, then the same instruction the teacher saw.
+identity: You are Paper, a careful reasoning assistant.
+
+teacher:
+  # Any OpenAI-compatible chat endpoint. Default: Ollama on this machine.
+  base_url: http://localhost:11434/v1
+  api_key: local              # ignored by local servers
+  model: deepseek-r1:14b      # 9 GB; its licence explicitly permits distillation
+  license: MIT
+  temperature: 0.6            # DeepSeek's recommended setting
+  top_p: 0.95
+  max_tokens: 2000            # a trace longer than this would be rejected anyway, so stop it early
+  timeout_s: 900
+  concurrency: 2
+  system_in_user: true        # DeepSeek-R1 advises against a system prompt
+  extra_body: {}              # merged into every request
+  direct_body: {}             # fields that switch reasoning off, e.g. {reasoning_effort: none} for qwen3:14b
+
+student:
+  base_model: Qwen/Qwen3-4B   # 4.0B parameters, Apache-2.0, native <think> format
+  license: Apache-2.0
+
+dataset:
+  dir: data
+  seed: 20261123
+  target_size: 12000          # records wanted in train + validation
+  min_size: 10000             # the audit fails below this
+  val_fraction: 0.03
+  mix:                        # share of the final set by source
+    procedural: 0.60          # generated problems with exact ground truth
+    teacher_authored: 0.40    # questions the teacher writes, kept when its answer key and a fresh solve agree
+    public: 0.0               # GSM8K train split (MIT); needs `pip install datasets`
+  direct_share: 0.0           # share of easy questions answered without reasoning (needs teacher.direct_body)
+  oversample: 1.6             # questions prepared per record wanted, to allow for rejected traces
+  max_attempts: 2             # teacher tries per question
+  max_domain_share: 0.14
+  eval_holdout: 600           # generated problems never used for training
+
+authoring:
+  batch_size: 10              # questions requested per teacher call
+  max_tokens: 5000
+  near_duplicate: 0.6         # drop a new question this similar (word-shingle Jaccard) to an earlier one
+
+quality:
+  min_reasoning_words: 15
+  max_reasoning_words: 900    # short traces suit small students; see README
+  max_answer_words: 300
+  max_paragraph_words: 250
+  max_repetition: 0.2
+  english_only: true
+  forbidden_terms: [deepseek, qwen, alibaba, openai, chatgpt]
+
+train:
+  output_dir: out/paper-lora
+  load_4bit: true             # QLoRA, the setup documented to fit 16 GB; false loads bf16 weights (about 8 GB)
+  max_seq_len: 2048
+  tokens_per_batch: 4096      # padded tokens per step; lower this if you run out of memory
+  grad_accum: 8
+  epochs: 3
+  lr: 1.0e-4
+  min_lr_ratio: 0.1           # cosine decay to a tenth of the peak, as DeepSeek reports for its distils
+  warmup_steps: 30
+  weight_decay: 0.0
+  max_grad_norm: 1.0
+  lora_r: 32
+  lora_alpha: 64
+  lora_dropout: 0.05
+  eval_every: 100             # optimiser steps between validation passes
+  log_every: 10
+  seed: 0
+
+inference:
+  temperature: 0.6
+  top_p: 0.95
+  max_new_tokens: 2048
+  think_budget: 1200          # tokens of reasoning before the answer is forced
+  votes: 5                    # samples for majority voting
+  early_stop: 3               # stop sampling once one answer has this many votes
