@@ -180,14 +180,19 @@ class TorchBackend(Backend):
     def generate(self, convs: list[list[dict]], max_new_tokens: int, temperature: float = 0.0, top_p: float = 1.0, n: int = 1, seed: int = 0, use_adapter: bool = True) -> list[list[str]]:
         t = self.torch
         out: list[list[str]] = []
-        bs = 16 if self.device == "cpu" else 8
+        # On a graphics card answers are written many at a time: a run is mostly answering (the
+        # exams, the checks, the practice rounds), and eight at a time took 25 to 30 minutes for a
+        # run on a 16 GB card whose training steps took a small part of that. If the card runs
+        # out of memory the batch is halved and tried again.
+        bs = 16 if self.device == "cpu" else getattr(self, "_gen_batch", 32)
         was_training = self.model.training
         self.model.eval()
         if self.FastLanguageModel is not None:
             self.FastLanguageModel.for_inference(self.model)
         try:
             with self._gen_lock, t.inference_mode():
-                for i in range(0, len(convs), bs):
+                i = 0
+                while i < len(convs):
                     chunk = convs[i : i + bs]
                     prompts = [self.render(c, add_generation_prompt=True) for c in chunk]
                     enc = self.tok(prompts, return_tensors="pt", padding=True, add_special_tokens=False).to(self.device)
@@ -202,15 +207,25 @@ class TorchBackend(Backend):
                         kwargs.update(do_sample=True, temperature=temperature, top_p=top_p)
                     else:
                         kwargs.update(do_sample=False)
-                    if not use_adapter and self.has_adapter:
-                        with self.model.disable_adapter():
+                    try:
+                        if not use_adapter and self.has_adapter:
+                            with self.model.disable_adapter():
+                                gen = self.model.generate(**enc, **kwargs)
+                        else:
                             gen = self.model.generate(**enc, **kwargs)
-                    else:
-                        gen = self.model.generate(**enc, **kwargs)
+                    except RuntimeError as exc:
+                        if "out of memory" not in str(exc).lower() or bs <= 1 or self.device == "cpu":
+                            raise
+                        del enc
+                        t.cuda.empty_cache()
+                        bs = max(1, bs // 2)
+                        self._gen_batch = bs  # remembered for the rest of the run
+                        continue
                     new = gen[:, enc["input_ids"].shape[1] :]
                     texts = self.tok.batch_decode(new, skip_special_tokens=True)
                     for j in range(len(chunk)):
                         out.append([s.strip() for s in texts[j * n : (j + 1) * n]])
+                    i += len(chunk)
         finally:
             if self.FastLanguageModel is not None and was_training:
                 self.FastLanguageModel.for_training(self.model)
