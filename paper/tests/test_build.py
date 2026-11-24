@@ -6,6 +6,8 @@ Nothing it produces is ever shipped as data.
 import json
 import re
 import shutil
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -25,8 +27,21 @@ class ScriptedTeacher:
 
     def __init__(self, sheet):
         self.sheet, self.n, self.authored, self.limits = sheet, 0, 0, []
+        self.lock, self.active, self.peak = threading.Lock(), 0, 0
 
-    def chat(self, messages, *, max_tokens=None, direct=False, temperature=None, reasoning_limit=None):
+    def chat(self, messages, **kw):
+        with self.lock:
+            self.active += 1
+            self.peak = max(self.peak, self.active)
+        try:
+            time.sleep(0.001)  # long enough for requests to overlap
+            with self.lock:
+                return self._reply(messages, **kw)
+        finally:
+            with self.lock:
+                self.active -= 1
+
+    def _reply(self, messages, *, max_tokens=None, direct=False, temperature=None, reasoning_limit=None):
         self.limits.append(reasoning_limit)
         text = messages[-1]["content"]
         if text.startswith("Write "):
@@ -290,3 +305,25 @@ def test_half_written_last_line_is_ignored(tmp_path):
     f.write_text('{"a": 1}\n{"broken\n{"a": 3}\n')
     with pytest.raises(json.JSONDecodeError):
         read_jsonl(f)
+
+
+def test_questions_are_written_in_parallel_without_duplicates(cfg):
+    cfg["teacher"]["concurrency"] = 4
+    teacher = ScriptedTeacher({})
+    build.author(cfg, teacher)
+    rows = read_jsonl(build.paths(cfg)["teacher_authored"])
+    assert teacher.peak > 1                                  # requests really overlapped
+    assert len(rows) >= 240 and len({r["id"] for r in rows}) == len(rows)
+    assert len({r["generator"] for r in rows}) > 30 and {r["difficulty"] for r in rows} == {1, 2, 3, 4, 5}
+    before = teacher.authored
+    build.author(cfg, teacher)                               # already full: nothing more is requested
+    assert teacher.authored == before
+
+
+def test_sample_prints_kept_traces(cfg, capsys):
+    build.sample(cfg)
+    assert "no kept traces yet" in capsys.readouterr().out
+    run(cfg)
+    build.sample(cfg, 3)
+    out = capsys.readouterr().out
+    assert out.count("QUESTION") == 3 and "REASONING (27 words)" in out and "Final answer:" in out

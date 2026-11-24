@@ -8,6 +8,7 @@
     python -m paper_distill.build all       # the five stages in order
     python -m paper_distill.build pilot     # a short trial run, then a time and yield estimate
     python -m paper_distill.build stats     # keep rates so far, by source and difficulty
+    python -m paper_distill.build sample    # print a couple of kept traces in full
 
 Every stage is resumable: stop it at any point and run it again.
 """
@@ -52,6 +53,30 @@ def source_of(seed: dict) -> str:
     return "public" if seed["source"].startswith("public:") else seed["source"]
 
 
+def run_workers(worker, n: int, stop: threading.Event, what: str) -> None:
+    """Run `worker` on n threads until they all return. Ctrl+C sets `stop` and waits for the
+    requests in progress; a second Ctrl+C exits at once. A worker's exception is re-raised."""
+    pool = ThreadPoolExecutor(max_workers=n)
+    futures = [pool.submit(worker) for _ in range(n)]
+    try:
+        while not all(f.done() for f in futures):
+            time.sleep(0.3)  # a short sleep, not a blocking wait, so Ctrl+C is noticed on Windows too
+    except KeyboardInterrupt:
+        stop.set()
+        print(f"{what}: stopping after the requests in progress (Ctrl+C again to quit at once; nothing is lost)",
+              flush=True)
+        try:
+            while not all(f.done() for f in futures):
+                time.sleep(0.3)
+        except KeyboardInterrupt:
+            os._exit(130)
+        raise
+    finally:
+        pool.shutdown(wait=False)
+    for f in futures:
+        f.result()
+
+
 # ---------------------------------------------------------------- prepare
 
 def prepare(cfg: dict) -> None:
@@ -84,6 +109,7 @@ def prepare(cfg: dict) -> None:
 # ---------------------------------------------------------------- author
 
 def author(cfg: dict, teacher=None, limit: int | None = None) -> None:
+    """Have the teacher write new questions, several requests at a time."""
     ds, au, p = cfg["dataset"], cfg["authoring"], paths(cfg)
     want = math.ceil(quotas(cfg)["teacher_authored"] * au.get("oversample", ds["oversample"]))
     if want == 0:
@@ -99,37 +125,66 @@ def author(cfg: dict, teacher=None, limit: int | None = None) -> None:
     weights = dict(zip((1, 2, 3, 4, 5), seedlib.DIFFICULTY_WEIGHTS))
     per_cell = {(t[1], d): math.ceil(want * weights[d] / len(TOPICS)) for t, d in cells}
     have = Counter((r["generator"], r["difficulty"]) for r in rows)
-    calls, misses = 0, Counter()
-    print(f"author: have {len(rows)} of {want} questions")
-    while len(rows) < want:
+    misses, busy = Counter(), set()
+    state = {"calls": 0}
+    lock, stop = threading.Lock(), threading.Event()
+    print(f"author: have {len(rows)} of {want} questions", flush=True)
+
+    def pick():
+        """The emptiest cell nobody is working on. None: finished. False: wait for a busy cell."""
+        if len(rows) >= want or (limit is not None and state["calls"] >= limit):
+            return None
         open_cells = [(t, d) for t, d in cells if have[(t[1], d)] < per_cell[(t[1], d)] and misses[(t[1], d)] < 4]
-        if not open_cells or (limit is not None and calls >= limit):
-            break
-        (domain, skill, brief), d = min(open_cells, key=lambda c: have[(c[0][1], c[1])] / per_cell[(c[0][1], c[1])])
-        recent = [r["question"] for r in by_topic[skill]]
-        msg = [{"role": "user", "content": author_prompt(brief, d, au["batch_size"], recent)}]
-        reply = teacher.chat(msg, max_tokens=au["max_tokens"])
-        calls += 1
-        added = 0
-        for item in parse_authored(reply.content):
-            key = seedlib.question_key(item["question"])
-            sh = _shingles(item["question"], 3)
-            similar = any(len(sh & o["_sh"]) / len(sh | o["_sh"]) >= au["near_duplicate"] for o in by_topic[skill])
-            if key in keys or similar:
+        free = [c for c in open_cells if (c[0][1], c[1]) not in busy]
+        if not free:
+            return False if open_cells else None
+        topic, d = min(free, key=lambda c: have[(c[0][1], c[1])] / per_cell[(c[0][1], c[1])])
+        busy.add((topic[1], d))
+        state["calls"] += 1
+        return topic, d, [r["question"] for r in by_topic[topic[1]]]
+
+    def worker() -> None:
+        while not stop.is_set():
+            with lock:
+                job = pick()
+            if job is None:
+                return
+            if job is False:
+                time.sleep(0.2)
                 continue
-            row = {"id": key, "source": "teacher_authored", "generator": skill, "domain": domain, "skill": skill,
-                   "difficulty": d, "question": item["question"], "ground_truth": item["answer"],
-                   "answer_type": item["answer_type"], "meta": {}, "mode": "think"}
-            append_jsonl(p["teacher_authored"], row)
-            keys.add(key)
-            rows.append(row)
-            by_topic[skill].append({**row, "_sh": sh})
-            have[(skill, d)] += 1
-            added += 1
-        misses[(skill, d)] += added == 0
-        if calls % 10 == 0:
-            print(f"author: {len(rows)}/{want} questions after {calls} calls", flush=True)
-    print(f"author: {len(rows)} questions written by the teacher ({calls} calls this run)")
+            (domain, skill, brief), d, recent = job
+            try:
+                reply = teacher.chat([{"role": "user", "content": author_prompt(brief, d, au["batch_size"], recent)}],
+                                     max_tokens=au["max_tokens"])
+            except BaseException:
+                stop.set()
+                raise
+            with lock:
+                added = 0
+                for item in parse_authored(reply.content):
+                    key = seedlib.question_key(item["question"])
+                    sh = _shingles(item["question"], 3)
+                    similar = any(len(sh & o["_sh"]) / len(sh | o["_sh"]) >= au["near_duplicate"]
+                                  for o in by_topic[skill])
+                    if key in keys or similar:
+                        continue
+                    row = {"id": key, "source": "teacher_authored", "generator": skill, "domain": domain,
+                           "skill": skill, "difficulty": d, "question": item["question"],
+                           "ground_truth": item["answer"], "answer_type": item["answer_type"], "meta": {},
+                           "mode": "think"}
+                    append_jsonl(p["teacher_authored"], row)
+                    keys.add(key)
+                    rows.append(row)
+                    by_topic[skill].append({**row, "_sh": sh})
+                    have[(skill, d)] += 1
+                    added += 1
+                misses[(skill, d)] += added == 0
+                busy.discard((skill, d))
+                if state["calls"] % 10 == 0:
+                    print(f"author: {len(rows)}/{want} questions after {state['calls']} requests", flush=True)
+
+    run_workers(worker, cfg["teacher"]["concurrency"], stop, "author")
+    print(f"author: {len(rows)} questions written by the teacher ({state['calls']} requests this run)", flush=True)
 
 
 # ---------------------------------------------------------------- solve
@@ -321,25 +376,7 @@ def solve(cfg: dict, teacher=None, limit: int | None = None, sources: tuple[str,
                     print(f"solve: {n} answers, kept {stats['kept']} ({rate:.0%}), "
                           f"{stats['tokens'] / el:.0f} tok/s, about {eta:.1f} h to go", flush=True)
 
-    pool = ThreadPoolExecutor(max_workers=tc["concurrency"])
-    futures = [pool.submit(worker) for _ in range(tc["concurrency"])]
-    try:
-        while not all(f.done() for f in futures):
-            time.sleep(0.3)  # a short sleep, not a blocking wait, so Ctrl+C is noticed on Windows too
-    except KeyboardInterrupt:
-        stop.set()
-        print("solve: stopping after the answers in progress (Ctrl+C again to quit at once; nothing is lost)",
-              flush=True)
-        try:
-            while not all(f.done() for f in futures):
-                time.sleep(0.3)
-        except KeyboardInterrupt:
-            os._exit(130)
-        raise
-    finally:
-        pool.shutdown(wait=False)
-    for f in futures:
-        f.result()  # re-raise a worker's error, such as the teacher being unreachable
+    run_workers(worker, tc["concurrency"], stop, "solve")
     stats["seconds"] = time.time() - t0
     stats["remaining"] = max(0, sum(quota.values()) - start_kept - stats["kept"])
     by = ", ".join(f"{d}: {k}/{n}" for d, (k, n) in sorted(stats["by_difficulty"].items()))
@@ -501,6 +538,24 @@ def stats(cfg: dict) -> None:
         print("lowest keep rates: " + ", ".join(f"{g} {gens[g]['kept']}/{gens[g]['calls']}" for g in worst))
 
 
+def sample(cfg: dict, n: int = 2) -> None:
+    """Print a few kept traces in full, for reading. Looking at the data is the best quality check there is."""
+    p = paths(cfg)
+    seeds = {s["id"]: s for src in SOURCES for s in read_jsonl(p[src])}
+    kept = [t for t in read_jsonl(p["traces"]) if t["ok"] and t["seed_id"] in seeds]
+    if not kept:
+        print("sample: no kept traces yet")
+        return
+    for t in random.sample(kept, min(n, len(kept))):
+        s = seeds[t["seed_id"]]
+        print("=" * 78)
+        print(f"{s['source']} | {s['skill']} | difficulty {s['difficulty']} | reference answer: {s['ground_truth']}")
+        print(f"\nQUESTION\n{s['question']}")
+        print(f"\nREASONING ({len(t['reasoning'].split())} words)\n{t['reasoning']}")
+        print(f"\nANSWER\n{t['content']}")
+    print("=" * 78)
+
+
 # ---------------------------------------------------------------- audit
 
 def audit(cfg: dict) -> bool:
@@ -583,11 +638,15 @@ def pilot(cfg: dict, teacher=None, calls: int = 60, author_calls: int = 3) -> No
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("stage", choices=["prepare", "author", "solve", "select", "audit", "all", "pilot", "stats"])
+    ap.add_argument("stage", choices=["prepare", "author", "solve", "select", "audit", "all", "pilot", "stats",
+                                      "sample"])
     ap.add_argument("--config", default="config.yaml")
     ap.add_argument("--limit", type=int, default=None, help="stop after this many teacher calls")
+    ap.add_argument("-n", type=int, default=2, help="how many traces `sample` prints")
     a = ap.parse_args(argv)
     cfg = load(a.config)
+    if hasattr(sys.stdout, "reconfigure"):  # model text can contain symbols a Windows console code page lacks
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     if a.stage == "prepare":
         prepare(cfg)
     elif a.stage == "author":
@@ -598,6 +657,8 @@ def main(argv=None) -> int:
         select(cfg)
     elif a.stage == "stats":
         stats(cfg)
+    elif a.stage == "sample":
+        sample(cfg, a.n)
     elif a.stage == "pilot":
         pilot(cfg, calls=a.limit or 60)
     elif a.stage == "all":

@@ -83,6 +83,14 @@ While it runs, this shows keep rates so far by source and difficulty, from a sec
 python -m paper_distill.build stats
 ```
 
+And this prints a couple of kept traces in full. Reading real examples is the best check on data quality:
+
+```bash
+python -m paper_distill.build sample
+```
+
+Ctrl+C stops the build after the requests in progress; running it again resumes.
+
 ### 4. Train
 
 Install PyTorch with CUDA first. The command depends on your system; take it from the selector at [pytorch.org](https://pytorch.org/get-started/locally/). Then:
@@ -218,7 +226,7 @@ There is also a real chance of no gain. `Qwen3-4B` already reasons in think tags
 
 ## What has and has not been tested
 
-Tested in a CPU-only container (123 tests):
+Tested in a CPU-only container (127 tests):
 
 - Every generator at every difficulty, with independent re-solving of the ordering puzzles and spot checks of the maths.
 - The answer checker, on accepted and rejected cases for every answer type.

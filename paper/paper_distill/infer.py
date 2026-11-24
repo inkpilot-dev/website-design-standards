@@ -194,6 +194,9 @@ def main(argv=None) -> int:
     add_model_args(ap)
     a = ap.parse_args(argv)
     cfg = load(a.config)
+    import sys
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     backend, system = backend_from_args(cfg, a)
     res = solve(backend, system, a.question, cfg["inference"], a.strategy)
     if a.json:
