@@ -3,7 +3,8 @@
 
 # What the teacher is asked to do with each question.
 instruction: >-
-  Work through the problem step by step, then give a short explanation of the result.
+  Work through the problem step by step, keeping your reasoning concise, then give a short
+  explanation of the result.
   End your reply with a single line of the form "Final answer: <answer>".
 
 # The student's system prompt: its name, then the same instruction the teacher saw.
@@ -17,9 +18,10 @@ teacher:
   license: MIT
   temperature: 0.6            # DeepSeek's recommended setting
   top_p: 0.95
-  max_tokens: 2000            # a trace longer than this would be rejected anyway, so stop it early
+  max_tokens: 3200            # ceiling per reply; replies whose reasoning overruns are stopped sooner
   timeout_s: 900
-  concurrency: 2
+  concurrency: 4              # match OLLAMA_NUM_PARALLEL on the server
+  stream: true                # needed to stop over-long reasoning early
   system_in_user: true        # DeepSeek-R1 advises against a system prompt
   extra_body: {}              # merged into every request
   direct_body: {}             # fields that switch reasoning off, e.g. {reasoning_effort: none} for qwen3:14b
@@ -35,23 +37,26 @@ dataset:
   min_size: 10000             # the audit fails below this
   val_fraction: 0.03
   mix:                        # share of the final set by source
-    procedural: 0.60          # generated problems with exact ground truth
-    teacher_authored: 0.40    # questions the teacher writes, kept when its answer key and a fresh solve agree
+    procedural: 0.85          # generated problems with exact ground truth
+    teacher_authored: 0.15    # questions the teacher writes, kept when its answer key and a fresh solve agree
     public: 0.0               # GSM8K train split (MIT); needs `pip install datasets`
   direct_share: 0.0           # share of easy questions answered without reasoning (needs teacher.direct_body)
-  oversample: 1.6             # questions prepared per record wanted, to allow for rejected traces
-  max_attempts: 2             # teacher tries per question
+  oversample: 3.0             # generated problems prepared per record wanted (they cost nothing to make)
+  max_attempts: 1             # teacher tries per question; a fresh problem is a better use of time than a retry
+  max_long_share: 0.25        # at most this share of records may have reasoning over quality.max_reasoning_words
   max_domain_share: 0.14
   eval_holdout: 600           # generated problems never used for training
 
 authoring:
-  batch_size: 10              # questions requested per teacher call
-  max_tokens: 5000
+  batch_size: 6               # questions requested per teacher call
+  max_tokens: 3400
+  oversample: 2.5             # teacher-written questions requested per record wanted
   near_duplicate: 0.6         # drop a new question this similar (word-shingle Jaccard) to an earlier one
 
 quality:
   min_reasoning_words: 15
-  max_reasoning_words: 900    # short traces suit small students; see README
+  max_reasoning_words: 900    # difficulty 1 to 3. Short traces suit small students; see README
+  max_reasoning_words_hard: 1600   # difficulty 4 and 5
   max_answer_words: 300
   max_paragraph_words: 250
   max_repetition: 0.2

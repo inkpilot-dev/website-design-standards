@@ -24,9 +24,10 @@ class ScriptedTeacher:
     """Answers generated problems from an answer sheet, with a fixed share of bad replies."""
 
     def __init__(self, sheet):
-        self.sheet, self.n, self.authored = sheet, 0, 0
+        self.sheet, self.n, self.authored, self.limits = sheet, 0, 0, []
 
-    def chat(self, messages, *, max_tokens=None, direct=False, temperature=None):
+    def chat(self, messages, *, max_tokens=None, direct=False, temperature=None, reasoning_limit=None):
+        self.limits.append(reasoning_limit)
         text = messages[-1]["content"]
         if text.startswith("Write "):
             n = int(re.search(r"Write (\d+)", text).group(1))
@@ -55,8 +56,9 @@ class ScriptedTeacher:
 def cfg(tmp_path):
     shutil.copy(ROOT / "config.yaml", tmp_path / "config.yaml")
     c = load(tmp_path / "config.yaml")
-    c["dataset"].update(target_size=300, min_size=250, eval_holdout=40, oversample=2.0)
-    c["authoring"]["batch_size"] = 5
+    c["dataset"].update(target_size=300, min_size=250, eval_holdout=40, oversample=2.0, max_attempts=2,
+                        mix={"procedural": 0.6, "teacher_authored": 0.4, "public": 0.0})
+    c["authoring"].update(batch_size=5, oversample=2.0)
     c["teacher"]["concurrency"] = 3
     return c
 
@@ -159,3 +161,91 @@ def test_parse_authored_drops_malformed():
     assert [o["answer"] for o in out] == ["8", "B"]
     assert parse_authored("no json here") == []
     assert len(parse_authored(json.dumps(good) + "\n" + json.dumps(choice))) == 2  # not wrapped in an array
+
+
+def test_reasoning_caps_follow_difficulty(cfg):
+    q = cfg["quality"]
+    easy = {"difficulty": 2, "answer_type": "int", "ground_truth": "4", "meta": {}}
+    hard = {**easy, "difficulty": 5}
+    assert build.reasoning_cap(easy, q) == q["max_reasoning_words"] < build.reasoning_cap(hard, q)
+    steps = [f"Step {i}: take value {i} and combine it with {i * 7} to get {i * 8}." for i in range(1, 90)]
+    long_think = "\n\n".join(steps)  # realistic shape: many short, different steps
+    assert q["max_reasoning_words"] < len(long_think.split()) < q["max_reasoning_words_hard"]
+    answer = "It is four.\n\nFinal answer: 4"
+    assert build.judge(easy, long_think, answer, "stop", q) == (False, ["reasoning_too_long"], "4")
+    assert build.judge(hard, long_think, answer, "stop", q)[0] is True
+    # a reply stopped early for length, or cut off, reports that one reason and nothing else
+    assert build.judge(easy, long_think, "", "reasoning_limit", q) == (False, ["reasoning_too_long"], None)
+    assert build.judge(easy, THINK, "", "length", q) == (False, ["truncated"], None)
+
+
+def test_solver_passes_the_cap_to_the_teacher(cfg):
+    teacher, _ = run(cfg)
+    q = cfg["quality"]
+    assert set(teacher.limits) == {None, q["max_reasoning_words"], q["max_reasoning_words_hard"]}  # None: authoring
+
+
+def seed(i, gen, difficulty=1):
+    return {"id": f"{gen}{i}", "source": "procedural", "generator": gen, "difficulty": difficulty}
+
+
+def test_scheduler_does_not_pour_calls_into_a_failing_group():
+    seeds = [seed(i, g) for g in ("easy", "hopeless") for i in range(400)]
+    sched = build.Scheduler(seeds, [], {"procedural": 100, "teacher_authored": 0, "public": 0}, 1)
+    calls = {"easy": 0, "hopeless": 0}
+    while (s := sched.next()) is not None:
+        calls[s["generator"]] += 1
+        sched.done(s, s["generator"] == "easy")
+    assert sched.acc_src["procedural"] == 100
+    assert calls["hopeless"] == build.Scheduler.GIVE_UP_AFTER and sched.skipped > 0
+
+
+def test_scheduler_shares_calls_by_yield_not_only_by_accepted_count():
+    seeds = [seed(i, g) for g in ("good", "poor") for i in range(2000)]
+    sched = build.Scheduler(seeds, [], {"procedural": 300, "teacher_authored": 0, "public": 0}, 1)
+    calls, n = {"good": 0, "poor": 0}, 0
+    while (s := sched.next()) is not None:
+        calls[s["generator"]] += 1
+        n += 1
+        sched.done(s, True if s["generator"] == "good" else n % 5 == 0)  # the poor group keeps about 1 in 5
+    assert sched.acc_grp[("procedural", "poor")] > 30         # still represented
+    assert calls["poor"] < 2.5 * calls["good"]                 # but not at five times the cost
+
+
+def test_scheduler_resumes_its_bookkeeping_from_the_log():
+    seeds = [seed(i, "g", 4) for i in range(20)]
+    traces = [{"seed_id": f"g{i}", "ok": False} for i in range(build.Scheduler.GIVE_UP_AFTER)]
+    sched = build.Scheduler(seeds, traces, {"procedural": 10, "teacher_authored": 0, "public": 0}, 1)
+    assert sched.next() is None and sched.skipped == 20 - build.Scheduler.GIVE_UP_AFTER
+
+
+def test_select_keeps_long_traces_to_a_minority(cfg):
+    cfg["dataset"]["mix"] = {"procedural": 1.0, "teacher_authored": 0.0, "public": 0.0}
+    cfg["dataset"]["max_long_share"] = 0.1
+    cfg["quality"]["max_reasoning_words"] = 20  # the scripted reasoning is 27 words, so hard problems count as long
+    cfg["quality"]["max_reasoning_words_hard"] = 60
+    build.prepare(cfg)
+    p = build.paths(cfg)
+    sheet = {s["question"]: s["ground_truth"] for s in read_jsonl(p["procedural"])}
+    build.solve(cfg, ScriptedTeacher(sheet))
+    build.select(cfg)
+    rows = read_jsonl(p["train"]) + read_jsonl(p["val"])
+    assert rows and all(r["difficulty"] >= 4 for r in rows)  # easy ones were over their cap and rejected
+    assert len(rows) <= 30                                    # 10% of the 300 target
+
+
+def test_stats_and_pilot_report(cfg, capsys):
+    build.prepare(cfg)
+    p = build.paths(cfg)
+    build.stats(cfg)
+    assert "no teacher answers" in capsys.readouterr().out
+    sheet = {s["question"]: s["ground_truth"] for s in read_jsonl(p["procedural"])}
+    build.pilot(cfg, ScriptedTeacher(sheet), calls=40, author_calls=2)
+    out = capsys.readouterr().out
+    assert "pilot: generated problems:" in out and "pilot: teacher-written questions:" in out
+    assert "pilot: projected time for 300 records" in out and "Kept by difficulty" in out
+    traces = read_jsonl(p["traces"])
+    assert len(traces) == 40 + 10  # 40 generated, plus the 10 questions the scripted teacher wrote
+    build.stats(cfg)
+    out = capsys.readouterr().out
+    assert "procedural" in out and "teacher_authored" in out and "total:" in out

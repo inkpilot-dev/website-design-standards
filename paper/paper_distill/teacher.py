@@ -1,6 +1,7 @@
 """Client for the teacher model, over any OpenAI-compatible chat endpoint."""
 from __future__ import annotations
 
+import json
 import re
 import time
 from dataclasses import dataclass
@@ -47,10 +48,19 @@ class Teacher:
         self.session.headers["Authorization"] = f"Bearer {cfg.get('api_key', 'local')}"
 
     def chat(self, messages: list[dict], *, max_tokens: int | None = None, direct: bool = False,
-             temperature: float | None = None) -> Reply:
-        body = {"model": self.cfg["model"], "messages": messages, "stream": False,
+             temperature: float | None = None, reasoning_limit: int | None = None) -> Reply:
+        """One reply from the teacher.
+
+        reasoning_limit: stop the reply as soon as its reasoning passes this many words.
+        A trace that long would be rejected anyway, so there is no point paying for the rest.
+        Such a reply comes back with finish_reason "reasoning_limit".
+        """
+        stream = bool(self.cfg.get("stream", True))
+        body = {"model": self.cfg["model"], "messages": messages, "stream": stream,
                 "temperature": self.cfg["temperature"] if temperature is None else temperature,
                 "top_p": self.cfg.get("top_p", 0.95), "max_tokens": max_tokens or self.cfg["max_tokens"]}
+        if stream:
+            body["stream_options"] = {"include_usage": True}
         body.update(self.cfg.get("extra_body") or {})
         if direct:
             body.update(self.cfg.get("direct_body") or {})
@@ -58,17 +68,60 @@ class Teacher:
         for attempt in range(5):
             t0 = time.time()
             try:
-                r = self.session.post(self.url, json=body, timeout=self.cfg.get("timeout_s", 900))
+                r = self.session.post(self.url, json=body, timeout=self.cfg.get("timeout_s", 900), stream=stream)
                 if r.status_code == 429 or r.status_code >= 500:
                     raise requests.HTTPError(f"{r.status_code}: {r.text[:200]}")
                 if r.status_code >= 400:
                     raise RuntimeError(f"teacher rejected the request ({r.status_code}): {r.text[:500]}")
-                data = r.json()
-                choice = data["choices"][0]
-                reasoning, content = split_reasoning(choice.get("message") or {})
-                return Reply(reasoning, content, choice.get("finish_reason"),
-                             (data.get("usage") or {}).get("completion_tokens"), time.time() - t0)
-            except (requests.ConnectionError, requests.Timeout, requests.HTTPError, KeyError, ValueError) as e:
+                if stream:
+                    message, finish, tokens = self._read_stream(r, reasoning_limit)
+                else:
+                    data = r.json()
+                    choice = data["choices"][0]
+                    message, finish = choice.get("message") or {}, choice.get("finish_reason")
+                    tokens = (data.get("usage") or {}).get("completion_tokens")
+                reasoning, content = split_reasoning(message)
+                return Reply(reasoning, content, finish, tokens, time.time() - t0)
+            except (requests.RequestException, KeyError, ValueError) as e:
                 last = e
                 time.sleep(min(60, 2 ** attempt * 3))
         raise RuntimeError(f"teacher unreachable at {self.url} after 5 tries: {last}")
+
+    @staticmethod
+    def _read_stream(r, reasoning_limit: int | None) -> tuple[dict, str | None, int | None]:
+        """Collect a streamed reply, cutting it short if the reasoning overruns its limit."""
+        reasoning, content, finish, usage, chunks = [], [], None, None, 0
+        try:
+            for raw in r.iter_lines():
+                if not raw or not raw.startswith(b"data:"):
+                    continue
+                payload = raw[5:].strip()
+                if payload == b"[DONE]":
+                    break
+                event = json.loads(payload)
+                usage = (event.get("usage") or {}).get("completion_tokens") or usage
+                for choice in event.get("choices") or []:
+                    delta = choice.get("delta") or {}
+                    piece = delta.get("reasoning_content") or delta.get("reasoning") or delta.get("thinking")
+                    if isinstance(piece, str) and piece:
+                        reasoning.append(piece)
+                        chunks += 1
+                    if delta.get("content"):
+                        content.append(delta["content"])
+                        chunks += 1
+                    finish = choice.get("finish_reason") or finish
+                if reasoning_limit and chunks % 16 == 0:
+                    text = "".join(content)
+                    # some servers leave the think block inline; it is reasoning until the tag closes
+                    thinking = "".join(reasoning)
+                    if not thinking.strip() and "</think>" not in text and text.lstrip().startswith("<think>"):
+                        thinking = text
+                    if len(thinking.split()) > reasoning_limit:
+                        finish = "reasoning_limit"
+                        break
+        finally:
+            r.close()  # closing the connection is what makes the server stop generating
+        if finish is None:
+            raise ValueError("stream ended without a finish reason")
+        # servers that do not report usage: one streamed piece is close to one token
+        return {"content": "".join(content), "reasoning": "".join(reasoning)}, finish, usage or chunks

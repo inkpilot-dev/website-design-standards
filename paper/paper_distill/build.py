@@ -6,7 +6,8 @@
     python -m paper_distill.build select    # dedupe, balance, split, write the final files
     python -m paper_distill.build audit     # validate the final files
     python -m paper_distill.build all       # the five stages in order
-    python -m paper_distill.build pilot     # 60 teacher calls, then a time and yield estimate
+    python -m paper_distill.build pilot     # a short trial run, then a time and yield estimate
+    python -m paper_distill.build stats     # keep rates so far, by source and difficulty
 
 Every stage is resumable: stop it at any point and run it again.
 """
@@ -83,7 +84,7 @@ def prepare(cfg: dict) -> None:
 
 def author(cfg: dict, teacher=None, limit: int | None = None) -> None:
     ds, au, p = cfg["dataset"], cfg["authoring"], paths(cfg)
-    want = math.ceil(quotas(cfg)["teacher_authored"] * ds["oversample"])
+    want = math.ceil(quotas(cfg)["teacher_authored"] * au.get("oversample", ds["oversample"]))
     if want == 0:
         return
     teacher = teacher or Teacher(cfg["teacher"])
@@ -93,6 +94,7 @@ def author(cfg: dict, teacher=None, limit: int | None = None) -> None:
     for r in rows:
         by_topic[r["generator"]].append({**r, "_sh": _shingles(r["question"], 3)})
     cells = [(t, d) for d in (1, 2, 3, 4, 5) for t in TOPICS]
+    random.Random(ds["seed"]).shuffle(cells)  # so even a short run covers a mix of topics and difficulties
     weights = dict(zip((1, 2, 3, 4, 5), seedlib.DIFFICULTY_WEIGHTS))
     per_cell = {(t[1], d): math.ceil(want * weights[d] / len(TOPICS)) for t, d in cells}
     have = Counter((r["generator"], r["difficulty"]) for r in rows)
@@ -131,10 +133,22 @@ def author(cfg: dict, teacher=None, limit: int | None = None) -> None:
 
 # ---------------------------------------------------------------- solve
 
+def reasoning_cap(seed: dict, quality: dict) -> int:
+    """Longest reasoning accepted for this problem, in words. Hard problems get more room;
+    select() later keeps such long traces to a minority."""
+    hard = int(seed["difficulty"]) >= 4
+    return quality["max_reasoning_words_hard"] if hard else quality["max_reasoning_words"]
+
+
 def judge(seed: dict, reasoning: str, content: str, finish_reason, quality: dict) -> tuple[bool, list[str], str | None]:
     """Decide whether a teacher trace is kept. Returns (keep, reasons_if_not, final_answer)."""
     mode = seed.get("mode", "think")
-    reasons = trace_problems(reasoning, content, finish_reason, quality, mode)
+    q = {**quality, "max_reasoning_words": reasoning_cap(seed, quality)}
+    reasons = trace_problems(reasoning, content, finish_reason, q, mode)
+    if finish_reason == "reasoning_limit":
+        return False, ["reasoning_too_long"], None
+    if "truncated" in reasons:
+        return False, ["truncated"], None  # everything else wrong with it follows from being cut off
     final = extract_final_answer(content, strict=True)
     if final is None:
         reasons.append("no_final_answer_line")
@@ -144,56 +158,93 @@ def judge(seed: dict, reasoning: str, content: str, finish_reason, quality: dict
 
 
 class Scheduler:
-    """Hands out the next question so that accepted traces stay balanced across generators.
+    """Hands out the next question.
 
-    Harder generators are rejected more often; without this the kept set would drift
-    toward whatever the teacher finds easy.
+    Groups (one per generator or topic) are kept roughly level, so the kept set does not
+    drift toward whatever the teacher finds easy. A rejected attempt counts for half an
+    accepted one, though, so a group the teacher rarely gets through cannot soak up the
+    run, and a (group, difficulty) cell with no success after several tries is dropped.
     """
+
+    REJECT_WEIGHT = 0.5
+    GIVE_UP_AFTER = 8
 
     def __init__(self, seeds: list[dict], traces: list[dict], quota: dict[str, int], max_attempts: int):
         self.lock = threading.Lock()
         self.quota, self.max_attempts = quota, max_attempts
         self.attempts = Counter(t["seed_id"] for t in traces)
         accepted_ids = {t["seed_id"] for t in traces if t["ok"]}
-        self.acc_src, self.acc_grp = Counter(), Counter()
+        self.acc_src, self.acc_grp, self.rej_grp = Counter(), Counter(), Counter()
         self.fly_src, self.fly_grp = Counter(), Counter()
+        self.cell_try, self.cell_acc = Counter(), Counter()
+        self.skipped = 0
         self.queues: dict[tuple[str, str], deque] = defaultdict(deque)
+        by_id = {s["id"]: s for s in seeds}
+        for t in traces:
+            s = by_id.get(t["seed_id"])
+            if s:
+                self.cell_try[self._cell(s)] += 1
+                if t["ok"]:
+                    self.cell_acc[self._cell(s)] += 1
+                else:
+                    self.rej_grp[self._group(s)] += 1
         for s in seeds:
-            g = (source_of(s), s["generator"])
+            g = self._group(s)
             if s["id"] in accepted_ids:
                 self.acc_src[g[0]] += 1
                 self.acc_grp[g] += 1
             elif self.attempts[s["id"]] < max_attempts:
                 self.queues[g].append(s)
 
+    @staticmethod
+    def _group(seed: dict) -> tuple[str, str]:
+        return source_of(seed), seed["generator"]
+
+    @staticmethod
+    def _cell(seed: dict) -> tuple[str, str, int]:
+        return source_of(seed), seed["generator"], int(seed["difficulty"])
+
+    def _hopeless(self, seed: dict) -> bool:
+        cell = self._cell(seed)
+        return self.cell_acc[cell] == 0 and self.cell_try[cell] >= self.GIVE_UP_AFTER
+
     def next(self):
         with self.lock:
-            open_groups = [g for g, q in self.queues.items()
-                           if q and self.acc_src[g[0]] + self.fly_src[g[0]] < self.quota[g[0]]]
-            if not open_groups:
-                return None
-            g = min(open_groups, key=lambda g: (self.acc_grp[g] + self.fly_grp[g], g))
-            seed = self.queues[g].popleft()
-            self.fly_src[g[0]] += 1
-            self.fly_grp[g] += 1
-            return seed
+            while True:
+                open_groups = [g for g, q in self.queues.items()
+                               if q and self.acc_src[g[0]] + self.fly_src[g[0]] < self.quota[g[0]]]
+                if not open_groups:
+                    return None
+                g = min(open_groups, key=lambda g: (self.acc_grp[g] + self.fly_grp[g]
+                                                    + self.REJECT_WEIGHT * self.rej_grp[g], g))
+                seed = self.queues[g].popleft()
+                if self._hopeless(seed):
+                    self.skipped += 1
+                    continue
+                self.fly_src[g[0]] += 1
+                self.fly_grp[g] += 1
+                return seed
 
     def done(self, seed: dict, ok: bool) -> None:
         with self.lock:
-            g = (source_of(seed), seed["generator"])
+            g = self._group(seed)
             self.fly_src[g[0]] -= 1
             self.fly_grp[g] -= 1
             self.attempts[seed["id"]] += 1
+            self.cell_try[self._cell(seed)] += 1
             if ok:
                 self.acc_src[g[0]] += 1
                 self.acc_grp[g] += 1
-            elif self.attempts[seed["id"]] < self.max_attempts:
-                self.queues[g].append(seed)
+                self.cell_acc[self._cell(seed)] += 1
+            else:
+                self.rej_grp[g] += 1
+                if self.attempts[seed["id"]] < self.max_attempts:
+                    self.queues[g].append(seed)
 
     def release(self, seed: dict) -> None:
         """Put back a question that was handed out but never sent to the teacher."""
         with self.lock:
-            g = (source_of(seed), seed["generator"])
+            g = self._group(seed)
             self.fly_src[g[0]] -= 1
             self.fly_grp[g] -= 1
             self.queues[g].appendleft(seed)
@@ -203,15 +254,15 @@ class Scheduler:
             return sum(self.fly_src.values())
 
 
-def solve(cfg: dict, teacher=None, limit: int | None = None) -> dict:
+def solve(cfg: dict, teacher=None, limit: int | None = None, sources: tuple[str, ...] = SOURCES) -> dict:
     ds, tc, p = cfg["dataset"], cfg["teacher"], paths(cfg)
     teacher = teacher or Teacher(tc)
-    seeds = [s for src in SOURCES for s in read_jsonl(p[src])]
+    seeds = [s for src in sources for s in read_jsonl(p[src])]
     traces = read_jsonl(p["traces"])
     # ask for a little more than the final quota, to cover what select() later drops
-    quota = {s: math.ceil(n * 1.06) for s, n in quotas(cfg).items()}
+    quota = {s: (math.ceil(n * 1.06) if s in sources else 0) for s, n in quotas(cfg).items()}
     sched = Scheduler(seeds, traces, quota, ds["max_attempts"])
-    stats = {"calls": 0, "kept": 0, "tokens": 0, "reasons": Counter()}
+    stats = {"calls": 0, "done": 0, "kept": 0, "tokens": 0, "reasons": Counter(), "by_difficulty": {}}
     lock, t0, stop = threading.Lock(), time.time(), threading.Event()
     start_kept = sum(sched.acc_src.values())
     print(f"solve: {start_kept} traces already kept; target {sum(quota.values())}", flush=True)
@@ -238,7 +289,8 @@ def solve(cfg: dict, teacher=None, limit: int | None = None) -> dict:
             direct = seed.get("mode") == "direct"
             try:
                 reply = teacher.chat(solve_messages(cfg["instruction"], seed["question"], tc["system_in_user"]),
-                                     direct=direct)
+                                     direct=direct,
+                                     reasoning_limit=None if direct else reasoning_cap(seed, cfg["quality"]))
             except BaseException:
                 sched.release(seed)
                 stop.set()  # the teacher is down: let the other workers finish and report the error
@@ -252,16 +304,20 @@ def solve(cfg: dict, teacher=None, limit: int | None = None) -> dict:
                 "model": tc["model"], "temperature": tc["temperature"]})
             sched.done(seed, ok)
             with lock:
+                stats["done"] += 1
                 stats["kept"] += ok
                 stats["tokens"] += reply.completion_tokens or 0
                 stats["reasons"].update(reasons)
-                n = stats["calls"]
+                tally = stats["by_difficulty"].setdefault(int(seed["difficulty"]), [0, 0])
+                tally[0] += ok
+                tally[1] += 1
+                n = stats["done"]
                 if n % 20 == 0:
                     el = time.time() - t0
                     rate = stats["kept"] / n
                     left = sum(quota.values()) - start_kept - stats["kept"]
                     eta = left / max(rate, 1e-6) * (el / n) / 3600
-                    print(f"solve: {n} calls, kept {stats['kept']} ({rate:.0%}), "
+                    print(f"solve: {n} answers, kept {stats['kept']} ({rate:.0%}), "
                           f"{stats['tokens'] / el:.0f} tok/s, about {eta:.1f} h to go", flush=True)
 
     with ThreadPoolExecutor(max_workers=tc["concurrency"]) as pool:
@@ -269,8 +325,11 @@ def solve(cfg: dict, teacher=None, limit: int | None = None) -> dict:
             f.result()
     stats["seconds"] = time.time() - t0
     stats["remaining"] = max(0, sum(quota.values()) - start_kept - stats["kept"])
-    print(f"solve: {stats['calls']} calls this run, {stats['kept']} kept. "
-          f"Rejections: {dict(stats['reasons'].most_common())}")
+    by = ", ".join(f"{d}: {k}/{n}" for d, (k, n) in sorted(stats["by_difficulty"].items()))
+    print(f"solve: {stats['done']} answers this run, {stats['kept']} kept. Kept by difficulty: {by or 'none'}. "
+          f"Rejections: {dict(stats['reasons'].most_common())}", flush=True)
+    if sched.skipped:
+        print(f"solve: skipped {sched.skipped} problems of kinds the teacher had not once solved within the limits")
     if stats["remaining"] and limit is None:
         print(f"solve: ran out of questions {stats['remaining']} short of target. "
               "Raise dataset.oversample and run prepare, author and solve again.")
@@ -311,6 +370,18 @@ def select(cfg: dict) -> dict:
     for r in pool.values():
         by_src[source_of(r)][r["skill"]].append(r)
     q = quotas(cfg)
+    long_left = int(ds.get("max_long_share", 1.0) * ds["target_size"])
+
+    def admit(r: dict) -> bool:
+        """Long traces are allowed only up to a set share of the dataset."""
+        nonlocal long_left
+        if r["stats"]["reasoning_words"] <= cfg["quality"]["max_reasoning_words"]:
+            return True
+        if long_left <= 0:
+            return False
+        long_left -= 1
+        return True
+
     chosen: list[dict] = []
     for src in SOURCES:
         groups = by_src.get(src, {})
@@ -321,7 +392,7 @@ def select(cfg: dict) -> dict:
         picked, i = [], 0
         while len(picked) < q[src] and any(i < len(g) for g in groups.values()):
             for k in sorted(groups):  # round-robin keeps skills balanced
-                if i < len(groups[k]) and len(picked) < q[src]:
+                if i < len(groups[k]) and len(picked) < q[src] and admit(groups[k][i]):
                     picked.append(groups[k][i])
             i += 1
         chosen += picked
@@ -331,7 +402,7 @@ def select(cfg: dict) -> dict:
         ids = {r["id"] for r in chosen}
         spare = [r for r in pool.values() if r["id"] not in ids]
         rng.shuffle(spare)
-        chosen += spare[:short]
+        chosen += [r for r in spare if admit(r)][:short]
     # No single domain may dominate.
     cap = math.ceil(ds["max_domain_share"] * max(len(chosen), 1))
     seen, capped = Counter(), []
@@ -375,6 +446,44 @@ def summarise(rows: list[dict]) -> dict:
             "reasoning_words": {"median": pct(0.5), "p90": pct(0.9), "max": words[-1]}}
 
 
+def stats(cfg: dict) -> None:
+    """Keep rates so far, from the trace log. Safe to run while a build is in progress."""
+    p = paths(cfg)
+    seeds = {s["id"]: s for src in SOURCES for s in read_jsonl(p[src])}
+    rows: dict[tuple, Counter] = defaultdict(Counter)
+    words: dict[tuple, list[int]] = defaultdict(list)
+    gens: dict[str, Counter] = defaultdict(Counter)
+    reasons, n = Counter(), 0
+    for t in read_jsonl(p["traces"]):
+        s = seeds.get(t["seed_id"])
+        if not s:
+            continue
+        n += 1
+        k = (source_of(s), int(s["difficulty"]))
+        rows[k]["calls"] += 1
+        rows[k]["kept"] += t["ok"]
+        rows[k]["tokens"] += t["completion_tokens"] or 0
+        gens[s["generator"]]["calls"] += 1
+        gens[s["generator"]]["kept"] += t["ok"]
+        if t["ok"]:
+            words[k].append(len(t["reasoning"].split()))
+        reasons.update(t["reasons"])
+    if not n:
+        print("stats: no teacher answers logged yet")
+        return
+    print(f"{'source':<18}{'difficulty':>10}{'answers':>9}{'kept':>6}{'rate':>7}{'median words':>14}{'tokens/answer':>15}")
+    for k in sorted(rows):
+        r, w = rows[k], sorted(words[k])
+        med = w[len(w) // 2] if w else 0
+        print(f"{k[0]:<18}{k[1]:>10}{r['calls']:>9}{r['kept']:>6}{r['kept'] / r['calls']:>7.0%}{med:>14}"
+              f"{r['tokens'] / r['calls']:>15.0f}")
+    kept = sum(r["kept"] for r in rows.values())
+    print(f"total: {kept} kept of {n} ({kept / n:.0%}). Rejections: {dict(reasons.most_common())}")
+    worst = sorted((g for g in gens if gens[g]["calls"] >= 4), key=lambda g: gens[g]["kept"] / gens[g]["calls"])[:6]
+    if worst:
+        print("lowest keep rates: " + ", ".join(f"{g} {gens[g]['kept']}/{gens[g]['calls']}" for g in worst))
+
+
 # ---------------------------------------------------------------- audit
 
 def audit(cfg: dict) -> bool:
@@ -411,31 +520,53 @@ def audit(cfg: dict) -> bool:
 
 # ---------------------------------------------------------------- pilot
 
-def pilot(cfg: dict, teacher=None, calls: int = 60) -> None:
+def pilot(cfg: dict, teacher=None, calls: int = 60, author_calls: int = 3) -> None:
+    """A short trial of the whole dataset path, then a projection for the full build."""
     prepare(cfg)
-    stats = solve(cfg, teacher, limit=calls)
-    if not stats["calls"]:
-        print("pilot: nothing left to solve")
-        return
-    rate = stats["kept"] / stats["calls"]
-    per_call = stats["seconds"] / stats["calls"]
-    need = sum(quotas(cfg).values())
-    hours = need / max(rate, 0.01) * per_call / 3600
-    print(f"pilot: {rate:.0%} of traces kept, {per_call:.1f} s per call at concurrency "
-          f"{cfg['teacher']['concurrency']}.")
-    print(f"pilot: reaching {need} records would take roughly {hours:.0f} hours of solving, plus question "
-          "writing. Teacher-written questions are usually kept less often than generated ones.")
-    top = stats["reasons"].most_common(1)
-    if top and top[0][0] == "reasoning_too_short" and top[0][1] > stats["calls"] / 2:
+    teacher = teacher or Teacher(cfg["teacher"])
+    q, p, au = quotas(cfg), paths(cfg), cfg["authoring"]
+    parts, hours = [], 0.0
+
+    gen = solve(cfg, teacher, limit=calls, sources=("procedural",))
+    if gen["done"]:
+        rate, per = gen["kept"] / gen["done"], gen["seconds"] / gen["done"]
+        h = q["procedural"] * 1.06 / max(rate, 0.01) * per / 3600
+        hours += h
+        parts.append(f"generated problems about {h:.0f} h")
+        print(f"pilot: generated problems: {rate:.0%} kept, {per:.1f} s per answer, "
+              f"{gen['tokens'] / gen['seconds']:.0f} tok/s at concurrency {cfg['teacher']['concurrency']}")
+
+    if q["teacher_authored"]:
+        before, t0 = len(read_jsonl(p["teacher_authored"])), time.time()
+        author(cfg, teacher, limit=author_calls)
+        write_secs = time.time() - t0
+        written = len(read_jsonl(p["teacher_authored"])) - before
+        own = solve(cfg, teacher, limit=max(written, 1), sources=("teacher_authored",)) if written else {"done": 0}
+        if written and own["done"]:
+            rate, per = own["kept"] / own["done"], own["seconds"] / own["done"]
+            needed = q["teacher_authored"] * 1.06 / max(rate, 0.01)
+            h = (needed * per + needed / written * write_secs) / 3600
+            hours += h
+            parts.append(f"teacher-written questions about {h:.0f} h")
+            print(f"pilot: teacher-written questions: {written} usable from {author_calls} requests "
+                  f"({write_secs / author_calls:.0f} s each); {rate:.0%} kept after solving")
+        else:
+            print("pilot: the teacher wrote no usable questions in this trial; that part could not be estimated")
+
+    if parts:
+        print(f"pilot: projected time for {sum(q.values())} records: roughly {hours:.0f} hours "
+              f"({'; '.join(parts)}). This is a small sample, so treat it as a rough guide.")
+    top = gen["reasons"].most_common(1) if gen["done"] else []
+    if top and top[0][0] == "reasoning_too_short" and top[0][1] > gen["done"] / 2:
         print("pilot: most replies came back with no reasoning. The server is probably not returning the model's "
               "thinking. For Ollama, try `extra_body: {reasoning_effort: medium}` under teacher in config.yaml.")
-    if top and top[0][0] == "truncated" and top[0][1] > stats["calls"] / 2:
+    if top and top[0][0] == "truncated" and top[0][1] > gen["done"] / 2:
         print("pilot: most replies were cut off. Check the server's context window (see the README, step 1).")
 
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("stage", choices=["prepare", "author", "solve", "select", "audit", "all", "pilot"])
+    ap.add_argument("stage", choices=["prepare", "author", "solve", "select", "audit", "all", "pilot", "stats"])
     ap.add_argument("--config", default="config.yaml")
     ap.add_argument("--limit", type=int, default=None, help="stop after this many teacher calls")
     a = ap.parse_args(argv)
@@ -448,6 +579,8 @@ def main(argv=None) -> int:
         solve(cfg, limit=a.limit)
     elif a.stage == "select":
         select(cfg)
+    elif a.stage == "stats":
+        stats(cfg)
     elif a.stage == "pilot":
         pilot(cfg, calls=a.limit or 60)
     elif a.stage == "all":

@@ -22,6 +22,8 @@ def _repetition(text: str) -> float:
 
 def trace_problems(reasoning: str, answer: str, finish_reason: str | None, q: dict, mode: str = "think") -> list[str]:
     """Reasons to reject this trace; empty means keep. `q` is the `quality` block of the config."""
+    if finish_reason == "reasoning_limit":  # stopped on purpose once the reasoning ran past its cap
+        return ["reasoning_too_long"]
     out: list[str] = []
     if finish_reason not in (None, "stop"):
         out.append("truncated")

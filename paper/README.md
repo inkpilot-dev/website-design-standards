@@ -16,7 +16,7 @@ DeepSeek's licence text says the R1 series allows "distillation for training oth
 - An NVIDIA GPU with 16 GB of memory (built for an RTX 4070 Ti SUPER).
 - Python 3.11 or newer, and [Ollama](https://ollama.com) to serve the teacher.
 - About 30 GB of free disk.
-- Time. Building the dataset is the slow part: for 12,000 kept records the teacher answers roughly 20,000 prompts. With a 14B teacher on one card, expect days rather than hours; my rough guess is three to five. The pilot in step 2 replaces that guess with a measurement on your machine.
+- Time. Building the dataset is the slow part, and with a 14B teacher on one card it takes days, not hours. The teacher is accurate but reasons at length: in a first trial on an RTX 4070 Ti SUPER it produced about 59 tokens a second and more than half its replies ran past 2,000 tokens. The pilot in step 2 measures this on your machine and projects the total.
 
 ## Run it
 
@@ -34,17 +34,19 @@ Activate it (`.venv\Scripts\activate` on Windows, `source .venv/bin/activate` on
 pip install -r requirements.txt
 ```
 
-Start the teacher. Ollama's default context window is 4k tokens on a 16 GB card, which is too small, so set it to 8192 before starting the server. On Windows, quit Ollama from the system tray first, then in PowerShell:
+Start the teacher so that it answers four requests at once, each with a 4,096-token window. On Windows, stop any running Ollama first (`Get-Process ollama* | Stop-Process -Force`), then in PowerShell:
 
 ```bash
-$env:OLLAMA_CONTEXT_LENGTH=8192; ollama serve
+$env:OLLAMA_CONTEXT_LENGTH=4096; $env:OLLAMA_NUM_PARALLEL=4; ollama serve
 ```
 
 On Linux:
 
 ```bash
-OLLAMA_CONTEXT_LENGTH=8192 ollama serve
+OLLAMA_CONTEXT_LENGTH=4096 OLLAMA_NUM_PARALLEL=4 ollama serve
 ```
+
+Leave that window open. Once the model is loaded, `ollama ps` should show `100% GPU`; if it shows a CPU share, lower `OLLAMA_NUM_PARALLEL` and `teacher.concurrency` to 2.
 
 In a second terminal:
 
@@ -58,7 +60,7 @@ ollama pull deepseek-r1:14b
 python -m paper_distill.build pilot
 ```
 
-This sends 60 problems to the teacher and prints the share of traces kept and a projected total time. If the projection is too long, the options are:
+This sends 60 generated problems to the teacher, has it write and solve a few questions of its own, and prints the share of traces kept, the speed, and a projected total time. If the projection is too long, the options are:
 
 - a faster teacher: `deepseek-r1:8b` (5 GB, same licence);
 - a hosted endpoint for an openly licensed model, set with `teacher.base_url`;
@@ -74,6 +76,12 @@ python -m paper_distill.build all
 ```
 
 This can be stopped at any time and run again; it continues where it left off. It ends with an audit that fails if any record is malformed, duplicated, or below the 10,000 minimum. The result is `data/paper_train.jsonl` and `data/paper_val.jsonl`.
+
+While it runs, this shows keep rates so far by source and difficulty, from a second terminal:
+
+```bash
+python -m paper_distill.build stats
+```
 
 ### 4. Train
 
@@ -178,17 +186,21 @@ The student is trained to produce `<think>\n{reasoning}\n</think>\n\n{answer}`, 
 
 Where the questions come from:
 
-- **Procedural (60%).** 27 generators in `paper_distill/seeds/` write multi-step problems and compute the exact answer in code: arithmetic, algebra, number theory, counting and probability, geometry, deduction puzzles with one solution, family and comparison chains, multi-hop facts about invented entities, navigation, object tracking, tables, code tracing, shortest paths, scheduling and search. A trace is kept only if the teacher's final answer equals the computed one.
-- **Teacher-authored (40%).** The teacher writes new questions on 40 topics the generators cannot cover (commonsense, causal, science, verbal, strategy), each with an answer key. A question is kept only if a separate solving pass by the teacher reaches the same answer. This is weaker than exact ground truth: it catches inconsistency, not a mistake the teacher makes twice.
+- **Procedural (85%).** 27 generators in `paper_distill/seeds/` write multi-step problems and compute the exact answer in code: arithmetic, algebra, number theory, counting and probability, geometry, deduction puzzles with one solution, family and comparison chains, multi-hop facts about invented entities, navigation, object tracking, tables, code tracing, shortest paths, scheduling and search. A trace is kept only if the teacher's final answer equals the computed one.
+- **Teacher-authored (15%).** The teacher writes new questions on 40 topics the generators cannot cover (commonsense, causal, science, verbal, strategy), each with an answer key. A question is kept only if a separate solving pass by the teacher reaches the same answer. This is weaker than exact ground truth: it catches inconsistency, not a mistake the teacher makes twice.
 - **Public (off by default).** GSM8K's train split can be mixed in with `dataset.mix.public`.
 
-A trace is also rejected if it was cut off, has almost no reasoning or more than 900 words of it, lacks the final-answer line, mixes languages, loops, has a very long paragraph, or names its own maker. Rejected questions are retried once. The solver keeps accepted traces balanced across generators, so the set does not drift toward whatever the teacher finds easy. 600 generated problems are held out and never trained on.
+A trace is also rejected if it was cut off, has almost no reasoning, lacks the final-answer line, mixes languages, loops, has a very long paragraph, or names its own maker.
+
+Reasoning length is capped: 900 words for difficulty 1 to 3 and 1,600 for difficulty 4 and 5, with long traces limited to a quarter of the final set. A reply is stopped the moment its reasoning passes the cap, so the teacher's time is not spent on text that would be discarded. A rejected problem is not retried; a fresh one is used.
+
+The solver keeps accepted traces roughly level across generators, so the set does not drift toward whatever the teacher finds easy, but it gives up on a kind of problem the teacher has not once solved within the limits. 600 generated problems are held out and never trained on.
 
 ## Why it is built this way
 
 - **Fine-tune on teacher outputs, nothing fancier.** DeepSeek made its own small models by fine-tuning Qwen and Llama checkpoints on 800,000 R1 outputs, with no reinforcement learning. A 32B model distilled this way beat the same model trained with RL (72.6 against 47.0 on AIME 2024). [R1 paper](https://github.com/deepseek-ai/DeepSeek-R1/blob/main/DeepSeek_R1.pdf)
 - **Keep only checked answers.** DeepSeek sampled several responses per prompt and kept the correct ones, also dropping mixed-language reasoning and long paragraphs (same paper). One large study found answer filtering made little difference for big students ([OpenThoughts](https://arxiv.org/abs/2506.04178)); it is kept here because exact checking costs nothing for generated problems.
-- **Short traces.** Students of 3B and under do not reliably benefit from long reasoning chains ([Small Model Learnability Gap](https://arxiv.org/abs/2502.12143)), and 100k pruned traces averaging about 720 tokens beat 800k long ones ([arXiv 2505.19716](https://arxiv.org/abs/2505.19716)). Hence the 900-word cap and the preference for shorter traces when there is a surplus.
+- **Short traces.** Students of 3B and under do not reliably benefit from long reasoning chains ([Small Model Learnability Gap](https://arxiv.org/abs/2502.12143)), and 100k pruned traces averaging about 720 tokens beat 800k long ones ([arXiv 2505.19716](https://arxiv.org/abs/2505.19716)). The same work recommends about one long trace to four short ones. Hence the caps, the quarter limit on long traces, and the preference for shorter traces when there is a surplus.
 - **More than the minimum.** Small models trained on only about 8,000 long traces lost accuracy in one study, while 7B and 14B models recovered at 16,000 to 32,000 ([arXiv 2506.07712](https://arxiv.org/abs/2506.07712)). The default is 12,000 short traces. Raising `dataset.target_size` is the most useful change you can make if you have the time.
 - **A mid-size teacher is fine.** Across many teacher and student pairs, a stronger teacher did not predict a better student ([arXiv 2601.14249](https://arxiv.org/abs/2601.14249)).
 - **Voting at inference.** DeepSeek's 1.5B distil went from 28.9 to 52.7 on AIME 2024 with majority voting over 64 samples (R1 paper, table 5). Paper samples three solutions and draws two more only if they disagree; stopping early when chains agree is both faster and more accurate than always voting over everything ([arXiv 2505.17813](https://arxiv.org/abs/2505.17813)).
@@ -206,18 +218,18 @@ There is also a real chance of no gain. `Qwen3-4B` already reasons in think tags
 
 ## What has and has not been tested
 
-Tested in a CPU-only container (111 tests):
+Tested in a CPU-only container (123 tests):
 
 - Every generator at every difficulty, with independent re-solving of the ordering puzzles and spot checks of the maths.
 - The answer checker, on accepted and rejected cases for every answer type.
 - The full build (prepare, author, solve, select, audit) against a scripted stand-in teacher, including resume, the call limit, a teacher outage, and the audit catching broken records.
-- The teacher client against a local stub server: request shape, reply parsing, retries and failures.
+- The teacher client against a local stub server: request shape, streamed and plain replies, stopping over-long reasoning early, retries and failures.
 - The training text against Qwen3-4B's own chat template, using its real tokenizer: they match exactly.
 - Train, resume, merge, generate and evaluate on a tiny randomly initialised model with the student's architecture. The loss falls, the merged model computes the same outputs as base plus adapter, and budgeted generation and voting run.
 
 Not tested, because it needs a GPU or model weights that could not be downloaded there:
 
-- The real teacher: its keep rate, its speed, and exactly how Ollama returns its reasoning.
+- The real teacher beyond one 60-problem trial: its keep rate and speed under the current settings, how Ollama streams its reasoning, and whether parallel requests fit in memory.
 - 4-bit loading, memory use at these settings, and training time.
 - The GGUF conversion and Ollama's handling of the exported model.
 - Paper's accuracy. Paper does not exist until you run steps 3 and 4.
