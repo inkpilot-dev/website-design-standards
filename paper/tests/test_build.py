@@ -249,3 +249,44 @@ def test_stats_and_pilot_report(cfg, capsys):
     build.stats(cfg)
     out = capsys.readouterr().out
     assert "procedural" in out and "teacher_authored" in out and "total:" in out
+
+
+def test_ctrl_c_stops_cleanly_and_the_run_resumes(cfg, monkeypatch):
+    import threading
+    import time as real_time
+    build.prepare(cfg)
+    p = build.paths(cfg)
+    sheet = {s["question"]: s["ground_truth"] for s in read_jsonl(p["procedural"])}
+    cfg["dataset"]["mix"] = {"procedural": 1.0, "teacher_authored": 0.0, "public": 0.0}
+    teacher = ScriptedTeacher(sheet)
+    real_sleep, state = real_time.sleep, {"fired": False}
+
+    def sleep(seconds):
+        if threading.current_thread() is threading.main_thread() and not state["fired"] and teacher.n >= 30:
+            state["fired"] = True
+            raise KeyboardInterrupt  # as if the user pressed Ctrl+C part-way through
+        real_sleep(min(seconds, 0.001))
+
+    monkeypatch.setattr(build.time, "sleep", sleep)
+    slow = teacher.chat
+    monkeypatch.setattr(teacher, "chat", lambda *a, **k: (real_sleep(0.002), slow(*a, **k))[1])
+    with pytest.raises(KeyboardInterrupt):
+        build.solve(cfg, teacher)
+    done = len(read_jsonl(p["traces"]))
+    assert 30 <= done < 200  # it stopped promptly instead of running to the end
+    monkeypatch.setattr(build.time, "sleep", real_sleep)
+    build.solve(cfg, teacher)
+    from collections import Counter
+    traces = read_jsonl(p["traces"])
+    kept = [t["seed_id"] for t in traces if t["ok"]]
+    assert len(kept) == len(set(kept)) >= 300                       # the resumed run reached its target
+    assert max(Counter(t["seed_id"] for t in traces).values()) <= 2  # and no question went past its two tries
+
+
+def test_half_written_last_line_is_ignored(tmp_path):
+    f = tmp_path / "t.jsonl"
+    f.write_text('{"a": 1}\n{"a": 2}\n{"a": 3, "b": "cut o')
+    assert read_jsonl(f) == [{"a": 1}, {"a": 2}]
+    f.write_text('{"a": 1}\n{"broken\n{"a": 3}\n')
+    with pytest.raises(json.JSONDecodeError):
+        read_jsonl(f)

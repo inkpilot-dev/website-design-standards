@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import math
+import os
 import random
 import sys
 import threading
@@ -320,9 +321,25 @@ def solve(cfg: dict, teacher=None, limit: int | None = None, sources: tuple[str,
                     print(f"solve: {n} answers, kept {stats['kept']} ({rate:.0%}), "
                           f"{stats['tokens'] / el:.0f} tok/s, about {eta:.1f} h to go", flush=True)
 
-    with ThreadPoolExecutor(max_workers=tc["concurrency"]) as pool:
-        for f in [pool.submit(worker) for _ in range(tc["concurrency"])]:
-            f.result()
+    pool = ThreadPoolExecutor(max_workers=tc["concurrency"])
+    futures = [pool.submit(worker) for _ in range(tc["concurrency"])]
+    try:
+        while not all(f.done() for f in futures):
+            time.sleep(0.3)  # a short sleep, not a blocking wait, so Ctrl+C is noticed on Windows too
+    except KeyboardInterrupt:
+        stop.set()
+        print("solve: stopping after the answers in progress (Ctrl+C again to quit at once; nothing is lost)",
+              flush=True)
+        try:
+            while not all(f.done() for f in futures):
+                time.sleep(0.3)
+        except KeyboardInterrupt:
+            os._exit(130)
+        raise
+    finally:
+        pool.shutdown(wait=False)
+    for f in futures:
+        f.result()  # re-raise a worker's error, such as the teacher being unreachable
     stats["seconds"] = time.time() - t0
     stats["remaining"] = max(0, sum(quota.values()) - start_kept - stats["kept"])
     by = ", ".join(f"{d}: {k}/{n}" for d, (k, n) in sorted(stats["by_difficulty"].items()))

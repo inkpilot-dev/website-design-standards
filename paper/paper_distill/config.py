@@ -23,7 +23,16 @@ def read_jsonl(path: Path) -> list[dict]:
     if not Path(path).exists():
         return []
     with open(path, encoding="utf-8") as f:
-        return [json.loads(line) for line in f if line.strip()]
+        lines = [line for line in f if line.strip()]
+    rows = []
+    for i, line in enumerate(lines):
+        try:
+            rows.append(json.loads(line))
+        except json.JSONDecodeError:
+            if i != len(lines) - 1:
+                raise
+            # a half-written last line means the program was killed mid-write; the rest is intact
+    return rows
 
 
 def write_jsonl(path: Path, rows) -> None:
