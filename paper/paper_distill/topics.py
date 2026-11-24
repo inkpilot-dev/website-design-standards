@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import re
 
-from .verify import numeric_value
+from .verify import number_text, numeric_value
 
 TOPICS = [
     ("commonsense", "physical_commonsense", "everyday physical situations (objects, containers, weight, heat, motion) where the outcome must be worked out from the facts given"),
@@ -115,8 +115,11 @@ def parse_authored(content: str) -> list[dict]:
         q, a = q.strip(), a.strip()
         if len(q) < 40 or not a or len(a) > 60:
             continue
-        if t == "number" and numeric_value(a) is None:
-            continue
+        if t == "number":
+            value = numeric_value(a)
+            if value is None:
+                continue
+            a = number_text(value)  # "2.5 cups" and "25%" become "2.5" and "25"
         if t == "yesno" and a.lower().rstrip(".") not in ("yes", "no"):
             continue
         if t == "choice" and not (re.fullmatch(r"\(?[A-Da-d]\)?", a) and all(

@@ -174,6 +174,8 @@ def test_parse_authored_drops_malformed():
             "answer_type": "number"}, "not a dict"]
     out = parse_authored("Sure!\n" + json.dumps([good, choice] + bad))
     assert [o["answer"] for o in out] == ["8", "B"]
+    units = [{**good, "answer": a} for a in ("2.5 cups", "25%", "1,250 dollars")]
+    assert [o["answer"] for o in parse_authored(json.dumps(units))] == ["2.5", "25", "1250"]
     assert parse_authored("no json here") == []
     assert len(parse_authored(json.dumps(good) + "\n" + json.dumps(choice))) == 2  # not wrapped in an array
 
@@ -328,3 +330,49 @@ def test_sample_prints_kept_traces(cfg, capsys):
     build.sample(cfg, 3)
     out = capsys.readouterr().out
     assert out.count("QUESTION") == 3 and "REASONING (27 words)" in out and "Final answer:" in out
+
+
+def test_a_fault_in_checking_one_reply_is_logged_and_the_run_carries_on(cfg, monkeypatch):
+    build.prepare(cfg)
+    p = build.paths(cfg)
+    sheet = {s["question"]: s["ground_truth"] for s in read_jsonl(p["procedural"])}
+    cfg["dataset"]["mix"] = {"procedural": 1.0, "teacher_authored": 0.0, "public": 0.0}
+    real, n = build.judge, {"calls": 0}
+
+    def flaky(*a, **k):
+        n["calls"] += 1
+        if n["calls"] % 9 == 0:
+            raise ValueError("Invalid literal for Fraction: '2.5 cups'")
+        return real(*a, **k)
+
+    monkeypatch.setattr(build, "judge", flaky)
+    stats = build.solve(cfg, ScriptedTeacher(sheet))        # must finish, not hang or raise
+    traces = read_jsonl(p["traces"])
+    assert stats["reasons"]["check_error_ValueError"] > 5
+    # every reply was logged, and the faults cost only the replies they hit
+    assert len(traces) == stats["done"] and sum(t["ok"] for t in traces) == stats["kept"] > 250
+
+
+def test_a_dead_worker_stops_the_others_and_reports_its_error():
+    stop, started = threading.Event(), threading.Event()
+    turn = iter(range(100))
+
+    def worker():
+        if next(turn) == 0:
+            started.wait(2)
+            raise OSError("disk full")
+        started.set()
+        while not stop.is_set():   # like a solver thread waiting on a question that will never come back
+            time.sleep(0.01)
+
+    t0 = time.time()
+    with pytest.raises(OSError, match="disk full"):
+        build.run_workers(worker, 4, stop, "test")
+    assert stop.is_set() and time.time() - t0 < 5
+
+
+def test_units_in_a_teacher_written_key_no_longer_break_solving(cfg):
+    q = cfg["quality"]
+    seed = {"difficulty": 2, "answer_type": "number", "ground_truth": "2.5 cups", "meta": {}, "mode": "think"}
+    assert build.judge(seed, THINK, "Scale the recipe up.\n\nFinal answer: 2.5", "stop", q) == (True, [], "2.5")
+    assert build.judge(seed, THINK, "Scale the recipe up.\n\nFinal answer: 3", "stop", q)[1] == ["wrong_answer"]

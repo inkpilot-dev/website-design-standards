@@ -6,6 +6,7 @@ sample; a wrong trace that is wrongly accepted teaches the student an error.
 from __future__ import annotations
 
 import re
+from decimal import Decimal
 from fractions import Fraction
 
 FINAL_RE = re.compile(r"^[\s>*_#`-]*final answer[\s*_`]*[:：][\s*_`]*(.*?)[\s*_`]*$", re.I)
@@ -70,6 +71,27 @@ def numeric_value(s: str) -> Fraction | None:
     return vals.pop() if len(vals) == 1 else None
 
 
+def reference_number(truth: str) -> Fraction | None:
+    """The reference answer as a number. Teacher-written keys can carry units ("2.5 cups", "25%")."""
+    try:
+        return Fraction(truth.strip())
+    except (ValueError, ZeroDivisionError):
+        return numeric_value(truth)
+
+
+def number_text(x: Fraction) -> str:
+    """A number as plain text: a whole number, an exact decimal, or else a fraction."""
+    if x.denominator == 1:
+        return str(x.numerator)
+    d = x.denominator
+    for f in (2, 5):
+        while d % f == 0:
+            d //= f
+    if d != 1:
+        return f"{x.numerator}/{x.denominator}"
+    return format(Decimal(x.numerator) / Decimal(x.denominator), "f")
+
+
 def _tokens(s: str) -> list[str]:
     s = re.sub(r"\([^()]*\)", " ", clean(s).lower())
     s = re.sub(r"[^\w\s'-]", " ", s)
@@ -120,12 +142,13 @@ def check_answer(answer_type: str, truth: str, candidate: str | None, meta: dict
     if candidate is None or not candidate.strip():
         return False
     meta = meta or {}
-    if answer_type in ("int", "fraction"):
-        v = numeric_value(candidate)
-        return v is not None and v == Fraction(truth)
-    if answer_type == "number":
-        v = numeric_value(candidate)
-        return v is not None and abs(v - Fraction(truth)) < Fraction(1, 2 * 10 ** meta.get("dp", 2))
+    if answer_type in ("int", "fraction", "number"):
+        v, t = numeric_value(candidate), reference_number(truth)
+        if v is None or t is None:
+            return False
+        if answer_type == "number":
+            return abs(v - t) < Fraction(1, 2 * 10 ** meta.get("dp", 2))
+        return v == t
     if answer_type == "yesno":
         return _yesno(candidate) is not None and _yesno(candidate) == _yesno(truth)
     if answer_type == "text":

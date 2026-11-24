@@ -60,6 +60,8 @@ def run_workers(worker, n: int, stop: threading.Event, what: str) -> None:
     futures = [pool.submit(worker) for _ in range(n)]
     try:
         while not all(f.done() for f in futures):
+            if any(f.done() and f.exception() is not None for f in futures):
+                stop.set()  # one worker failed: stop the rest so the error is reported, not sat on
             time.sleep(0.3)  # a short sleep, not a blocking wait, so Ctrl+C is noticed on Windows too
     except KeyboardInterrupt:
         stop.set()
@@ -161,7 +163,11 @@ def author(cfg: dict, teacher=None, limit: int | None = None) -> None:
                 raise
             with lock:
                 added = 0
-                for item in parse_authored(reply.content):
+                try:
+                    items = parse_authored(reply.content)
+                except Exception:  # an unreadable reply counts as a miss, nothing more
+                    items = []
+                for item in items:
                     key = seedlib.question_key(item["question"])
                     sh = _shingles(item["question"], 3)
                     similar = any(len(sh & o["_sh"]) / len(sh | o["_sh"]) >= au["near_duplicate"]
@@ -336,7 +342,7 @@ def solve(cfg: dict, teacher=None, limit: int | None = None, sources: tuple[str,
         while not stop.is_set():
             seed = sched.next()
             if seed is None:
-                if sched.in_flight() == 0:
+                if sched.in_flight() == 0 or stop.is_set():
                     return
                 time.sleep(0.2)
                 continue
@@ -354,12 +360,20 @@ def solve(cfg: dict, teacher=None, limit: int | None = None, sources: tuple[str,
                 stop.set()  # the teacher is down: let the other workers finish and report the error
                 raise
             reasoning = "" if direct else reply.reasoning
-            ok, reasons, final = judge(seed, reasoning, reply.content, reply.finish_reason, cfg["quality"])
-            append_jsonl(p["traces"], {
-                "seed_id": seed["id"], "ok": ok, "reasons": reasons, "final_answer": final,
-                "reasoning": reasoning, "content": reply.content, "finish_reason": reply.finish_reason,
-                "completion_tokens": reply.completion_tokens, "seconds": round(reply.seconds, 2),
-                "model": tc["model"], "temperature": tc["temperature"]})
+            try:
+                ok, reasons, final = judge(seed, reasoning, reply.content, reply.finish_reason, cfg["quality"])
+            except Exception as e:  # a fault in checking one reply must not stop or hang a run of days
+                ok, reasons, final = False, [f"check_error_{type(e).__name__}"], None
+            try:
+                append_jsonl(p["traces"], {
+                    "seed_id": seed["id"], "ok": ok, "reasons": reasons, "final_answer": final,
+                    "reasoning": reasoning, "content": reply.content, "finish_reason": reply.finish_reason,
+                    "completion_tokens": reply.completion_tokens, "seconds": round(reply.seconds, 2),
+                    "model": tc["model"], "temperature": tc["temperature"]})
+            except BaseException:
+                sched.release(seed)
+                stop.set()  # cannot write the log (disk full?): stop cleanly rather than lose answers
+                raise
             sched.done(seed, ok)
             with lock:
                 stats["done"] += 1

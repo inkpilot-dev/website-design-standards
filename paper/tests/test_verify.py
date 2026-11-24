@@ -65,3 +65,16 @@ def test_numeric_and_canonical():
     assert canonical("Yes.") == canonical("yes")
     assert canonical("Callum") != canonical("Felix")
     assert canonical("") is None
+
+
+def test_reference_answers_with_units_do_not_crash():
+    from paper_distill.verify import number_text, reference_number
+    assert check_answer("number", "2.5 cups", "2.5")
+    assert check_answer("number", "25%", "25 percent")
+    assert check_answer("int", "1,250", "1250")
+    assert not check_answer("number", "2.5 cups", "3")
+    assert not check_answer("number", "about ten", "10")   # no number in the reference: reject, do not crash
+    assert not check_answer("fraction", "", "1")
+    assert reference_number("3 to 4") is None
+    from fractions import Fraction
+    assert [number_text(Fraction(x)) for x in ("5/2", "40", "1/8", "1/3", "-7/4")] == ["2.5", "40", "0.125", "1/3", "-1.75"]
