@@ -192,6 +192,7 @@ def test_reasoning_caps_follow_difficulty(cfg):
     # a reply stopped early for length, or cut off, reports that one reason and nothing else
     assert build.judge(easy, long_think, "", "reasoning_limit", q) == (False, ["reasoning_too_long"], None)
     assert build.judge(easy, THINK, "", "length", q) == (False, ["truncated"], None)
+    assert build.judge(easy, "", "", "timeout", q) == (False, ["timed_out"], None)
 
 
 def test_solver_passes_the_cap_to_the_teacher(cfg):

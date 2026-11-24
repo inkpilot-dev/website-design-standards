@@ -64,17 +64,23 @@ class Teacher:
         body.update(self.cfg.get("extra_body") or {})
         if direct:
             body.update(self.cfg.get("direct_body") or {})
+        limit_s = self.cfg.get("timeout_s", 240)
         last = None
         for attempt in range(5):
             t0 = time.time()
             try:
-                r = self.session.post(self.url, json=body, timeout=self.cfg.get("timeout_s", 900), stream=stream)
+                try:
+                    r = self.session.post(self.url, json=body, timeout=(10, limit_s), stream=stream)
+                except requests.ReadTimeout:
+                    # The server accepted the request and then went quiet. Asking again rarely helps and
+                    # would tie this worker up for minutes, so report it and let the caller move on.
+                    return Reply("", "", "timeout", None, time.time() - t0)
                 if r.status_code == 429 or r.status_code >= 500:
                     raise requests.HTTPError(f"{r.status_code}: {r.text[:200]}")
                 if r.status_code >= 400:
                     raise RuntimeError(f"teacher rejected the request ({r.status_code}): {r.text[:500]}")
                 if stream:
-                    message, finish, tokens = self._read_stream(r, reasoning_limit)
+                    message, finish, tokens = self._read_stream(r, reasoning_limit, t0 + limit_s)
                 else:
                     data = r.json()
                     choice = data["choices"][0]
@@ -88,11 +94,15 @@ class Teacher:
         raise RuntimeError(f"teacher unreachable at {self.url} after 5 tries: {last}")
 
     @staticmethod
-    def _read_stream(r, reasoning_limit: int | None) -> tuple[dict, str | None, int | None]:
-        """Collect a streamed reply, cutting it short if the reasoning overruns its limit."""
+    def _read_stream(r, reasoning_limit: int | None, deadline: float) -> tuple[dict, str | None, int | None]:
+        """Collect a streamed reply, cutting it short if the reasoning overruns its limit
+        or the reply takes longer than the time allowed (finish_reason "timeout")."""
         reasoning, content, finish, usage, chunks = [], [], None, None, 0
         try:
             for raw in r.iter_lines():
+                if time.time() > deadline:
+                    finish = "timeout"
+                    break
                 if not raw or not raw.startswith(b"data:"):
                     continue
                 payload = raw[5:].strip()
@@ -119,6 +129,12 @@ class Teacher:
                     if len(thinking.split()) > reasoning_limit:
                         finish = "reasoning_limit"
                         break
+                if finish is not None and usage is not None:
+                    break  # complete; do not wait on a server that is slow to close the stream
+        except requests.ConnectionError as e:
+            if "timed out" not in str(e).lower():
+                raise  # the server went away mid-reply: let the caller retry
+            finish = "timeout"  # the stream stalled
         finally:
             r.close()  # closing the connection is what makes the server stop generating
         if finish is None:

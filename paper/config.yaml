@@ -19,7 +19,7 @@ teacher:
   temperature: 0.6            # DeepSeek's recommended setting
   top_p: 0.95
   max_tokens: 3200            # ceiling per reply; replies whose reasoning overruns are stopped sooner
-  timeout_s: 900
+  timeout_s: 240              # give up on a single reply after this long and move to the next problem
   concurrency: 4              # match OLLAMA_NUM_PARALLEL on the server
   stream: true                # needed to stop over-long reasoning early
   system_in_user: true        # DeepSeek-R1 advises against a system prompt

@@ -14,6 +14,8 @@ import pytest
 from paper_distill import teacher as teacher_mod
 from paper_distill.teacher import Teacher, solve_messages
 
+_sleep = time.sleep  # the real one; the fixture below silences time.sleep to skip retry back-off
+
 
 class Stub(BaseHTTPRequestHandler):
     seen: list = []
@@ -21,11 +23,16 @@ class Stub(BaseHTTPRequestHandler):
     sent_pieces = 0
     inline_tags = False
     send_usage = True
+    stall_after = None   # stop sending after this many pieces, keeping the connection open
+    stall_headers = False
 
     def do_POST(self):  # noqa: N802
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         Stub.seen.append((self.path, self.headers.get("Authorization"), body))
         status, payload = Stub.script.pop(0)
+        if Stub.stall_headers:
+            _sleep(3)
+            return
         if status == 200 and body.get("stream"):
             return self.stream(payload)
         data = json.dumps(payload).encode()
@@ -49,7 +56,10 @@ class Stub(BaseHTTPRequestHandler):
                 for piece in re.findall(r"\S+\s*|\s+", text):  # pieces that join back to the exact text
                     self.event({"choices": [{"delta": {field: piece}, "finish_reason": None}]})
                     Stub.sent_pieces += 1
-                    time.sleep(0.0005)
+                    _sleep(0.0005)
+                    if Stub.stall_after is not None and Stub.sent_pieces >= Stub.stall_after:
+                        _sleep(3)
+                        return
             self.event({"choices": [{"delta": {}, "finish_reason": payload["choices"][0]["finish_reason"]}]})
             if Stub.send_usage:
                 self.event({"choices": [], "usage": payload["usage"]})
@@ -71,7 +81,9 @@ def server(monkeypatch):
     monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
     monkeypatch.setenv("no_proxy", "127.0.0.1,localhost")
     Stub.seen, Stub.script, Stub.sent_pieces, Stub.inline_tags, Stub.send_usage = [], [], 0, False, True
+    Stub.stall_after, Stub.stall_headers = None, False
     srv = ThreadingHTTPServer(("127.0.0.1", 0), Stub)
+    srv.daemon_threads = True
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     yield f"http://127.0.0.1:{srv.server_port}/v1"
     srv.shutdown()
@@ -114,7 +126,7 @@ def test_long_reasoning_is_stopped_early(server, inline):
     r = Teacher(cfg(server)).chat([{"role": "user", "content": "x"}], reasoning_limit=100)
     assert r.finish_reason == "reasoning_limit"
     assert 100 < len((r.reasoning or r.content).split()) < 200  # stopped just past the limit
-    time.sleep(0.2)
+    _sleep(0.2)
     assert Stub.sent_pieces < 1500  # the server did not get to send the rest
 
 
@@ -148,3 +160,26 @@ def test_gives_up_when_unreachable(server):
     Stub.script = [(500, {})] * 5
     with pytest.raises(RuntimeError, match="unreachable"):
         Teacher(cfg(server)).chat([{"role": "user", "content": "x"}])
+
+
+def test_a_stalled_stream_times_out_instead_of_hanging(server):
+    Stub.stall_after = 5
+    Stub.script = [ok({"content": "Final answer: 4", "reasoning": "word " * 50})]
+    t0 = time.time()
+    r = Teacher(cfg(server, timeout_s=0.4)).chat([{"role": "user", "content": "x"}])
+    assert r.finish_reason == "timeout" and time.time() - t0 < 2
+    assert len(Stub.seen) == 1  # it did not ask again
+
+
+def test_a_server_that_never_answers_times_out_without_retrying(server):
+    Stub.stall_headers = True
+    Stub.script = [ok({"content": "x"})]
+    t0 = time.time()
+    r = Teacher(cfg(server, timeout_s=0.4)).chat([{"role": "user", "content": "x"}])
+    assert r.finish_reason == "timeout" and time.time() - t0 < 2 and len(Stub.seen) == 1
+
+
+def test_reply_does_not_wait_for_the_server_to_close_the_stream(server):
+    Stub.script = [ok({"content": "Final answer: 4", "reasoning": "short"})]
+    r = Teacher(cfg(server)).chat([{"role": "user", "content": "x"}])
+    assert (r.finish_reason, r.completion_tokens, r.content) == ("stop", 12, "Final answer: 4")

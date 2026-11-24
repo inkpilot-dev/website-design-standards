@@ -203,6 +203,8 @@ def judge(seed: dict, reasoning: str, content: str, finish_reason, quality: dict
     reasons = trace_problems(reasoning, content, finish_reason, q, mode)
     if finish_reason == "reasoning_limit":
         return False, ["reasoning_too_long"], None
+    if finish_reason == "timeout":
+        return False, ["timed_out"], None
     if "truncated" in reasons:
         return False, ["truncated"], None  # everything else wrong with it follows from being cut off
     final = extract_final_answer(content, strict=True)
