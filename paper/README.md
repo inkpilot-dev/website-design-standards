@@ -103,7 +103,7 @@ pip install -r requirements-train.txt
 python -m paper_distill.train
 ```
 
-Close Ollama first so the teacher is not holding GPU memory. If the run is interrupted, add `--resume`. If it runs out of memory, lower `train.tokens_per_batch` in `config.yaml`.
+Close Ollama first so the teacher is not holding GPU memory. Ctrl+C pauses it after saving a checkpoint; add `--resume` to carry on. If it runs out of memory, lower `train.tokens_per_batch` in `config.yaml`.
 
 ### 5. Evaluate
 
@@ -136,6 +136,14 @@ Add `--set gsm8k --n 300` to any of them for the GSM8K test split (needs `pip in
 ```bash
 python -m paper_distill.infer "A tank fills in 6 hours and drains in 9. With both open, how long to fill?"
 ```
+
+For a back-and-forth session, load the model once and type questions at the prompt. `/reasoning` shows or hides its thinking, `/vote` switches majority voting on or off, `/quit` leaves:
+
+```bash
+python -m paper_distill.infer --chat
+```
+
+Add `--model base` to chat with the untrained base model instead, for comparison. To try Paper partway through training, press Ctrl+C in the training window (it saves a checkpoint and pauses), chat, then run the training command again with `--resume`. Do not chat while training is running: a 16 GB card cannot hold both.
 
 To run without this code, merge the adapter and convert to GGUF. At 4-bit the file is about 2.5 GB and runs on a laptop CPU.
 
@@ -226,7 +234,7 @@ There is also a real chance of no gain. `Qwen3-4B` already reasons in think tags
 
 ## What has and has not been tested
 
-Tested in a CPU-only container (134 tests):
+Tested in a CPU-only container (139 tests):
 
 - Every generator at every difficulty, with independent re-solving of the ordering puzzles and spot checks of the maths.
 - The answer checker, on accepted and rejected cases for every answer type.

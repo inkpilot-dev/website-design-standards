@@ -71,3 +71,70 @@ def test_parse_handles_reopened_reasoning():
     text = "<think>\nfirst\n</think>\n\nwait, more thought\n</think>\n\nDone.\n\nFinal answer: 2"
     reasoning, answer, final = parse(text)
     assert final == "2" and "</think>" not in answer and "first" in reasoning and "more thought" in reasoning
+
+
+class PieceTok:
+    """A stand-in tokenizer whose token i decodes to pieces[i]."""
+
+    def __init__(self, pieces):
+        self.pieces = pieces
+
+    def decode(self, ids, skip_special_tokens=True):
+        return "".join(self.pieces[i] for i in ids)
+
+
+def live_output(pieces, show, in_think=True):
+    import io
+
+    import numpy as np
+
+    from paper_distill.infer import LiveText
+    out = io.StringIO()
+    live = LiveText(PieceTok(pieces), show, in_think=in_think, out=out)
+    live.put(np.array([[0, 1, 2]]))  # the prompt, which must not be printed
+    for i in range(len(pieces)):
+        live.put(np.array([i]))
+    live.end()
+    return out.getvalue()
+
+
+def test_live_text_hides_or_shows_reasoning_and_never_prints_tags():
+    answer = "It is four.\n\nFinal answer: 4"
+    # the closing tag arrives split across tokens, and character by character
+    for pieces in (["<think>", "\n", "Two plus two ", "makes four.", "\n", "</thi", "nk>", "\n\n", "It is four.",
+                    "\n\nFinal answer: 4"],
+                   list("<think>\nTwo plus two makes four.\n</think>\n\n" + answer)):
+        assert live_output(pieces, show=False) == answer
+        shown = live_output(pieces, show=True)
+        assert shown.endswith("\n\n" + answer) and "Two plus two makes four." in shown
+        assert "<think>" not in shown and "</think>" not in shown and "nk>" not in shown.replace("think", "")
+
+
+def test_live_text_shows_dots_for_long_hidden_reasoning_and_handles_no_close_tag():
+    long = ["<think>\n"] + ["step " * 100] * 5 + ["\n</think>\n\n", "Done.\n\nFinal answer: 1"]
+    out = live_output(long, show=False)
+    assert out.startswith("....") and out.endswith("\n\nDone.\n\nFinal answer: 1") and "step" not in out
+    cut_off = ["<think>\n", "still thinking when the budget ran out"]
+    assert live_output(cut_off, show=False) == ""
+    assert live_output(cut_off, show=True).strip() == "still thinking when the budget ran out"
+    assert live_output(["Plain answer, no reasoning."], show=False, in_think=False) == "Plain answer, no reasoning."
+
+
+def test_chat_loop_commands_and_answers():
+    from paper_distill.infer import chat
+    lines = iter(["", "/help", "/reasoning", "What is 2+2?", "/vote", "And 3+3?", "/quit", "never reached"])
+    printed = []
+    chat(Scripted(["4", "6", "6", "6"]), "sys", INF, ask=lambda prompt: next(lines), out=printed.append)
+    text = "\n".join(printed)
+    assert "reasoning is now shown" in text and "majority voting is now on" in text
+    assert "some steps" in text and "Final answer: 4" in text and "Final answer: 6" in text
+    assert "3 samples, 100% agreed" in text and "never reached" not in text
+
+
+def test_chat_loop_ends_quietly_on_ctrl_c_or_end_of_input():
+    from paper_distill.infer import chat
+
+    def interrupted(prompt):
+        raise KeyboardInterrupt
+
+    chat(Scripted([]), "sys", INF, ask=interrupted, out=lambda *_: None)  # must simply return

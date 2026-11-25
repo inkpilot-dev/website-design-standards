@@ -3,6 +3,8 @@
     python -m paper_distill.infer "your question"                       # adaptive majority vote (default)
     python -m paper_distill.infer "your question" --strategy single     # one sample, fastest
     python -m paper_distill.infer "your question" --http http://localhost:11434/v1 --name paper
+    python -m paper_distill.infer --chat                                # interactive chat with the trained Paper
+    python -m paper_distill.infer --chat --model base                   # the same, with the untrained base model
 
 Strategies:
   single  one reasoning pass.
@@ -23,6 +25,64 @@ from .config import load
 from .schema import THINK_CLOSE, THINK_OPEN
 from .teacher import Teacher, split_reasoning
 from .verify import canonical, extract_final_answer
+
+
+class LiveText:
+    """Prints a reply as it is generated. Reasoning is shown, or replaced by a row of dots."""
+
+    HOLD = 12  # characters kept back until more arrive, so a tag is never printed in two halves
+
+    def __init__(self, tok, show_reasoning: bool, in_think: bool = True, out=None):
+        import sys
+        self.tok, self.show, self.in_think = tok, show_reasoning, in_think
+        self.out = out or sys.stdout
+        self.ids: list[int] = []
+        self.printed = 0      # characters of the decoded text already dealt with
+        self.skip = True      # the first thing generate() sends is the prompt
+        self.dots = 0
+        self.trim = False     # drop the blank lines that follow the closing tag
+
+    def put(self, value) -> None:
+        if self.skip:
+            self.skip = False
+            return
+        self.ids.extend(value.reshape(-1).tolist())
+        self._emit(final=False)
+
+    def end(self) -> None:
+        self._emit(final=True)
+        self.out.flush()
+
+    def _reasoning(self, piece: str, total: int) -> None:
+        if self.show:
+            self.out.write(piece)
+        elif total // 400 > self.dots:  # hidden: one dot per few hundred characters, to show it is working
+            self.out.write("." * (total // 400 - self.dots))
+            self.dots = total // 400
+
+    def _emit(self, final: bool) -> None:
+        # opening tags are never shown (an under-trained model can emit several)
+        text = self.tok.decode(self.ids, skip_special_tokens=True).replace(THINK_OPEN, "")
+        safe = len(text) if final else max(self.printed, len(text) - self.HOLD)
+        if self.in_think:
+            at = text.find(THINK_CLOSE, self.printed)
+            if at < 0:
+                self._reasoning(text[self.printed:safe], len(text))
+                self.printed = safe
+                self.out.flush()
+                return
+            self._reasoning(text[self.printed:at], len(text))
+            self.printed = at + len(THINK_CLOSE)
+            self.in_think, self.trim = False, True
+            if self.show or self.dots:
+                self.out.write("\n\n")
+            safe = max(self.printed, safe)
+        chunk, self.printed = text[self.printed:safe], safe
+        if self.trim:
+            chunk = chunk.lstrip("\n")
+            self.trim = not chunk and not final
+        self.out.write(chunk)
+        self.out.flush()
 
 
 class HFBackend:
@@ -46,7 +106,7 @@ class HFBackend:
         self.model.eval()
         self.eot = end_of_turn(self.tok)
 
-    def _generate(self, texts: list[str], max_new: int, temperature: float, top_p: float, stop=None):
+    def _generate(self, texts: list[str], max_new: int, temperature: float, top_p: float, stop=None, live=None):
         """Continue each text. Returns (new_text, finished) pairs; finished means the turn was ended."""
         torch = self.torch
         enc = self.tok(texts, return_tensors="pt", padding=True, add_special_tokens=False).to(self.device)
@@ -55,6 +115,8 @@ class HFBackend:
             kw.update(temperature=temperature, top_p=top_p)
         if stop:
             kw.update(stop_strings=stop, tokenizer=self.tok)
+        if live is not None:
+            kw["streamer"] = live
         with torch.no_grad():
             out = self.model.generate(**enc, **kw)
         results = []
@@ -68,9 +130,15 @@ class HFBackend:
         return results
 
     def complete(self, prompts: list[str], *, temperature: float, top_p: float, max_new_tokens: int,
-                 think_budget: int) -> list[str]:
-        """Full assistant text (think block and answer) for each prompt, under a reasoning budget."""
-        first = self._generate(prompts, min(think_budget, max_new_tokens), temperature, top_p, stop=[THINK_CLOSE])
+                 think_budget: int, show: bool | None = None) -> list[str]:
+        """Full assistant text (think block and answer) for each prompt, under a reasoning budget.
+
+        show: for a single prompt, print the reply as it is generated, with the reasoning
+        visible (True) or reduced to dots (False). None prints nothing.
+        """
+        live = show is not None and len(prompts) == 1
+        first = self._generate(prompts, min(think_budget, max_new_tokens), temperature, top_p, stop=[THINK_CLOSE],
+                               live=LiveText(self.tok, show) if live else None)
         done: dict[int, str] = {}
         pending: list[tuple[int, str]] = []
         for i, (text, finished) in enumerate(first):
@@ -80,9 +148,12 @@ class HFBackend:
                 pending.append((i, text))
             else:  # budget spent while still reasoning: close the block and make it answer
                 pending.append((i, text.rstrip() + f"\n{THINK_CLOSE}\n\n"))
+                if live:
+                    print("\n[reasoning budget reached; answering now]\n", flush=True)
         if pending:
             rest = max(64, max_new_tokens - think_budget)
-            second = self._generate([prompts[i] + t for i, t in pending], rest, temperature, top_p)
+            second = self._generate([prompts[i] + t for i, t in pending], rest, temperature, top_p,
+                                    live=LiveText(self.tok, show, in_think=False) if live else None)
             for (i, t), (more, _) in zip(pending, second):
                 done[i] = t + more
         return [done[i] for i in range(len(prompts))]
@@ -167,6 +238,8 @@ def backend_from_args(cfg: dict, a) -> tuple[object, str]:
         return HTTPBackend(tc), cfg["system_prompt"]
     out = cfg["root"] / cfg["train"]["output_dir"]
     merged = cfg["root"] / "out" / "paper-merged"
+    if a.model == "base":
+        return HFBackend(cfg["student"]["base_model"], None, cfg["train"]["load_4bit"], a.cpu), cfg["system_prompt"]
     if a.model:
         return HFBackend(a.model, a.adapter, cfg["train"]["load_4bit"], a.cpu), cfg["system_prompt"]
     if merged.exists():
@@ -178,16 +251,67 @@ def backend_from_args(cfg: dict, a) -> tuple[object, str]:
 
 def add_model_args(ap) -> None:
     ap.add_argument("--config", default="config.yaml")
-    ap.add_argument("--model", default=None, help="a model folder or hub id (default: the trained Paper)")
+    ap.add_argument("--model", default=None,
+                    help="a model folder or hub id, or `base` for the untrained student (default: the trained Paper)")
     ap.add_argument("--adapter", default=None, help="LoRA adapter folder to apply to --model")
     ap.add_argument("--http", default=None, help="OpenAI-compatible base URL to use instead of loading a model")
     ap.add_argument("--name", default="paper", help="model name on the --http server")
     ap.add_argument("--cpu", action="store_true")
 
 
+HELP = """Type a question and press Enter.
+  /reasoning   show or hide the model's reasoning
+  /vote        turn majority voting on or off (slower, a little more accurate)
+  /quit        leave
+Each question is answered on its own: Paper was trained on single questions, not on follow-up conversation."""
+
+
+def chat(backend, system: str, inf: dict, ask=input, out=print) -> None:
+    """A question-and-answer loop in the terminal."""
+    show, vote = False, False
+    gen = dict(temperature=inf["temperature"], top_p=inf["top_p"], max_new_tokens=inf["max_new_tokens"],
+               think_budget=inf["think_budget"])
+    out(HELP)
+    while True:
+        try:
+            q = ask("\n> ").strip()
+        except (EOFError, KeyboardInterrupt):
+            out("")
+            return
+        if not q:
+            continue
+        if q in ("/quit", "/exit", "/q"):
+            return
+        if q == "/reasoning":
+            show = not show
+            out(f"reasoning is now {'shown' if show else 'hidden'}")
+            continue
+        if q == "/vote":
+            vote = not vote
+            out(f"majority voting is now {'on' if vote else 'off'}")
+            continue
+        if q.startswith("/"):
+            out(HELP)
+            continue
+        try:
+            if vote or not isinstance(backend, HFBackend):
+                res = solve(backend, system, q, inf, "vote" if vote else "single")
+                if show and res["reasoning"]:
+                    out(res["reasoning"] + "\n")
+                out(res["answer"])
+                if vote:
+                    out(f"[{res['samples']} samples, {res['agreement']:.0%} agreed]")
+            else:
+                backend.complete([prompt_text(backend.tok, system, q)], show=show, **gen)
+                out("")
+        except KeyboardInterrupt:
+            out("\n[stopped]")
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("question")
+    ap.add_argument("question", nargs="?")
+    ap.add_argument("--chat", action="store_true", help="interactive chat")
     ap.add_argument("--strategy", choices=["single", "vote"], default="vote")
     ap.add_argument("--show-reasoning", action="store_true")
     ap.add_argument("--json", action="store_true")
@@ -197,6 +321,11 @@ def main(argv=None) -> int:
     import sys
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if a.chat or not a.question:
+        print("Loading the model (the first time, this downloads the base model)...", flush=True)
+        backend, system = backend_from_args(cfg, a)
+        chat(backend, system, cfg["inference"])
+        return 0
     backend, system = backend_from_args(cfg, a)
     res = solve(backend, system, a.question, cfg["inference"], a.strategy)
     if a.json:

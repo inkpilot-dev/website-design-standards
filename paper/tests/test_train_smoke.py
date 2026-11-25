@@ -116,6 +116,46 @@ def test_train_resume_merge_generate(project, capsys):
     assert m.ask(cfg["system_prompt"], ["What is 2+2?"], 1, **greedy) == m.ask(cfg["system_prompt"], ["What is 2+2?"], 1, **greedy)
 
 
+def test_live_chat_output_and_pausing_training(project, capsys, monkeypatch):
+    cfgp = str(project / "config.yaml")
+    out = project / "out" / "paper-lora"
+    if not (out / "adapter_config.json").exists():
+        pytest.skip("needs the training test to have run")
+    cfg = load(cfgp)
+    backend = infer.HFBackend(cfg["student"]["base_model"], str(out), cpu=True)
+    capsys.readouterr()
+    prompt = infer.prompt_text(backend.tok, cfg["system_prompt"], "What is 2+2?")
+    gen = dict(temperature=0.0, top_p=1.0, max_new_tokens=40, think_budget=16)
+    silent = backend.complete([prompt], **gen)
+    assert capsys.readouterr().out == ""                       # nothing is printed unless asked
+    shown = backend.complete([prompt], show=True, **gen)
+    live = capsys.readouterr().out
+    # same reply either way; the live view starts with the reasoning itself, not its opening tag
+    assert shown == silent and len(live.strip()) > 10 and not live.lstrip().startswith("<think>")
+    assert "First I restate" in live
+
+    # Ctrl+C part-way through training saves a checkpoint and the run can be resumed
+    shutil.rmtree(out)
+    real, calls = train.collate, {"n": 0}
+
+    def interrupted(*a, **k):
+        calls["n"] += 1
+        if calls["n"] == 9:
+            raise KeyboardInterrupt
+        return real(*a, **k)
+
+    monkeypatch.setattr(train, "collate", interrupted)
+    assert train.main(["--config", cfgp, "--cpu"]) == 130
+    text = capsys.readouterr().out
+    assert "paused" in text and (out / "last" / "adapter_config.json").exists()
+    paused_at = json.loads((out / "paper_meta.json").read_text())["step"]
+    assert paused_at == 4                                      # eight batches, two per step
+    monkeypatch.setattr(train, "collate", real)
+    assert train.main(["--config", cfgp, "--cpu", "--resume", "--max-steps", "8"]) == 0
+    assert f"resumed at step {paused_at}" in capsys.readouterr().out
+    assert json.loads((out / "paper_meta.json").read_text())["step"] == 8
+
+
 def test_evaluate_runs_and_saves(project, capsys):
     cfgp = str(project / "config.yaml")
     if not (project / "out" / "paper-lora" / "adapter_config.json").exists():

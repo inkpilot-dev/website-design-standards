@@ -202,7 +202,7 @@ def main(argv=None) -> int:
 
     model.train()
     t0, seen_tokens, running, done, step0 = time.time(), 0, [], False, step
-    stopped_at = (t["epochs"], 0)
+    stopped_at = (start_epoch, start_batch)  # where a resumed run would pick up; moves on after every step
     try:
         for epoch in range(start_epoch, t["epochs"]):
             batches = make_batches(lengths, t["tokens_per_batch"], random.Random(t["seed"] + epoch))
@@ -220,6 +220,7 @@ def main(argv=None) -> int:
                     sched.step()
                     opt.zero_grad(set_to_none=True)
                     step += 1
+                    stopped_at = (epoch, i + 1)
                     if step % t.get("log_every", 10) == 0 or step == 1:
                         el = time.time() - t0
                         rate = seen_tokens / el
@@ -231,13 +232,21 @@ def main(argv=None) -> int:
                     if step % t["eval_every"] == 0:
                         checkpoint(epoch, i + 1)
                     if a.max_steps and step >= a.max_steps:
-                        done, stopped_at = True, (epoch, i + 1)
+                        done = True
                         break
             if done:
                 break
+        else:
+            stopped_at = (t["epochs"], 0)  # ran every epoch to the end
     except torch.cuda.OutOfMemoryError:
         raise SystemExit("Out of GPU memory. Lower train.tokens_per_batch (try 2048) or train.max_seq_len in "
                          "config.yaml, close other programs using the GPU, then run again with --resume.")
+    except KeyboardInterrupt:
+        print("train: stopping. Saving a checkpoint first; this takes a minute...", flush=True)
+        opt.zero_grad(set_to_none=True)
+        checkpoint(*stopped_at)
+        print("train: paused. Run the same command with --resume to carry on.", flush=True)
+        return 130
     checkpoint(*stopped_at)  # an early stop records where it got to, so --resume carries on from there
     print(f"train: {'stopped early' if done else 'finished'}. Best adapter is in {out}")
     return 0
