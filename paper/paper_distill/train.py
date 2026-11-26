@@ -11,6 +11,7 @@ can be stopped and resumed.
 from __future__ import annotations
 
 import argparse
+import gc
 import json
 import math
 import random
@@ -142,6 +143,10 @@ def main(argv=None) -> int:
     print(f"train: {len(train)} examples ({skipped} too long for max_seq_len and left out), {len(val)} validation, "
           f"{sum(lengths) / 1e6:.2f}M tokens per epoch, device {device}, 4-bit {load_4bit}", flush=True)
 
+    if device == "cuda" and t.get("gpu_memory_fraction"):
+        # On Windows, a process that outgrows the card's own memory is silently moved into ordinary
+        # system memory and slows to a crawl. With a cap, PyTorch frees its spare blocks first instead.
+        torch.cuda.set_per_process_memory_fraction(float(t["gpu_memory_fraction"]), 0)
     model = load_base(base, load_4bit, device)
     state_path, last = out / "state.pt", out / "last"
     if a.resume and state_path.exists():
@@ -183,6 +188,11 @@ def main(argv=None) -> int:
         model.train()
         return loss_sum / max(1, tok_sum)
 
+    def free_gpu() -> None:
+        if device == "cuda":
+            gc.collect()
+            torch.cuda.empty_cache()
+
     def checkpoint(epoch: int, batch_i: int) -> None:
         nonlocal best
         v = validate() if val else float("nan")
@@ -199,9 +209,11 @@ def main(argv=None) -> int:
             "train_examples": len(train), "config": {k: v for k, v in t.items()}}, indent=2, default=str))
         print(f"train: step {step}/{total} validation loss {v:.4f}" + (" (best so far, saved)" if improved else ""),
               flush=True)
+        free_gpu()  # validation uses differently shaped batches; hand their memory back
 
     model.train()
-    t0, seen_tokens, running, done, step0 = time.time(), 0, [], False, step
+    running, done = [], False
+    mark_time, mark_step, mark_tokens, seen_tokens, best_rate = time.time(), step, 0, 0, 0.0
     stopped_at = (start_epoch, start_batch)  # where a resumed run would pick up; moves on after every step
     try:
         for epoch in range(start_epoch, t["epochs"]):
@@ -209,9 +221,18 @@ def main(argv=None) -> int:
             first = start_batch if epoch == start_epoch else 0
             for i in range(first, len(batches)):
                 batch = collate([train[j] for j in batches[i]], tok.pad_token_id, device)
-                with autocast():
-                    loss = model(**batch).loss
-                (loss / t["grad_accum"]).backward()
+                retried = False
+                while True:
+                    try:
+                        with autocast():
+                            loss = model(**batch).loss
+                        (loss / t["grad_accum"]).backward()
+                        break
+                    except torch.cuda.OutOfMemoryError:
+                        if retried:
+                            raise
+                        retried = True
+                    free_gpu()  # outside the except block, so the failed attempt's memory is released first
                 running.append(loss.item())
                 seen_tokens += int(batch["attention_mask"].sum())
                 if (i + 1) % t["grad_accum"] == 0 or i + 1 == len(batches):
@@ -222,15 +243,24 @@ def main(argv=None) -> int:
                     step += 1
                     stopped_at = (epoch, i + 1)
                     if step % t.get("log_every", 10) == 0 or step == 1:
-                        el = time.time() - t0
-                        rate = seen_tokens / el
-                        left = (total - step) * el / max(1, step - step0)
+                        # speed over the steps since the last line, so a slowdown shows at once
+                        el = max(time.time() - mark_time, 1e-6)
+                        rate = (seen_tokens - mark_tokens) / el
+                        left = (total - step) * el / max(1, step - mark_step)
+                        mem = f", {torch.cuda.memory_reserved() / 2 ** 30:.1f} GB" if device == "cuda" else ""
                         print(f"train: step {step}/{total} loss {sum(running) / len(running):.4f} "
-                              f"lr {sched.get_last_lr()[0]:.2e} {rate:.0f} tok/s, about {left / 3600:.1f} h left",
+                              f"lr {sched.get_last_lr()[0]:.2e} {rate:.0f} tok/s{mem}, about {left / 3600:.1f} h left",
                               flush=True)
+                        if rate < 0.4 * best_rate:
+                            print("train: speed has dropped sharply. The graphics card is probably out of memory or "
+                                  "shared with another program. Close other GPU programs; if it stays slow, pause "
+                                  "with Ctrl+C and run again with --resume.", flush=True)
+                        best_rate = max(best_rate, rate)
                         running = []
+                        mark_time, mark_step, mark_tokens = time.time(), step, seen_tokens
                     if step % t["eval_every"] == 0:
                         checkpoint(epoch, i + 1)
+                        mark_time, mark_step, mark_tokens = time.time(), step, seen_tokens  # leave validation out
                     if a.max_steps and step >= a.max_steps:
                         done = True
                         break
@@ -239,8 +269,8 @@ def main(argv=None) -> int:
         else:
             stopped_at = (t["epochs"], 0)  # ran every epoch to the end
     except torch.cuda.OutOfMemoryError:
-        raise SystemExit("Out of GPU memory. Lower train.tokens_per_batch (try 2048) or train.max_seq_len in "
-                         "config.yaml, close other programs using the GPU, then run again with --resume.")
+        raise SystemExit("Out of GPU memory. Close other programs using the GPU and run again with --resume. "
+                         "If it happens again, lower train.tokens_per_batch in config.yaml (try 3072) first.")
     except KeyboardInterrupt:
         print("train: stopping. Saving a checkpoint first; this takes a minute...", flush=True)
         opt.zero_grad(set_to_none=True)

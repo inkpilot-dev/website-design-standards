@@ -68,6 +68,7 @@ train:
   load_4bit: true             # QLoRA, the setup documented to fit 16 GB; false loads bf16 weights (about 8 GB)
   max_seq_len: 3072           # the teacher writes about 1.8 tokens per word, so a 1,600-word trace needs this
   tokens_per_batch: 4096      # padded tokens per step; lower this if you run out of memory
+  gpu_memory_fraction: 0.85   # share of the card training may use; the rest is for the desktop and other apps
   grad_accum: 8
   epochs: 3
   lr: 1.0e-4

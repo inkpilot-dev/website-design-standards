@@ -155,6 +155,31 @@ def test_live_chat_output_and_pausing_training(project, capsys, monkeypatch):
     assert f"resumed at step {paused_at}" in capsys.readouterr().out
     assert json.loads((out / "paper_meta.json").read_text())["step"] == 8
 
+    # a batch that runs out of GPU memory is retried once after freeing memory, and training carries on
+    from transformers import Qwen3ForCausalLM
+    real_forward, fails = Qwen3ForCausalLM.forward, {"n": 0}
+
+    def flaky_forward(self, *a, **k):
+        if self.training and fails["n"] == 0:
+            fails["n"] += 1
+            raise torch.cuda.OutOfMemoryError("CUDA out of memory (simulated)")
+        return real_forward(self, *a, **k)
+
+    monkeypatch.setattr(Qwen3ForCausalLM, "forward", flaky_forward)
+    assert train.main(["--config", cfgp, "--cpu", "--resume", "--max-steps", "10"]) == 0
+    assert fails["n"] == 1 and json.loads((out / "paper_meta.json").read_text())["step"] == 10
+
+    # two failures in a row on the same batch stop the run with advice, not a traceback
+    def always_fails(self, *a, **k):
+        if self.training:
+            raise torch.cuda.OutOfMemoryError("CUDA out of memory (simulated)")
+        return real_forward(self, *a, **k)
+
+    monkeypatch.setattr(Qwen3ForCausalLM, "forward", always_fails)
+    with pytest.raises(SystemExit, match="Out of GPU memory"):
+        train.main(["--config", cfgp, "--cpu", "--resume", "--max-steps", "12"])
+    monkeypatch.setattr(Qwen3ForCausalLM, "forward", real_forward)
+
 
 def test_evaluate_runs_and_saves(project, capsys):
     cfgp = str(project / "config.yaml")
