@@ -156,29 +156,63 @@ def test_live_chat_output_and_pausing_training(project, capsys, monkeypatch):
     assert json.loads((out / "paper_meta.json").read_text())["step"] == 8
 
     # a batch that runs out of GPU memory is retried once after freeing memory, and training carries on
-    from transformers import Qwen3ForCausalLM
-    real_forward, fails = Qwen3ForCausalLM.forward, {"n": 0}
+    real_loss, fails = train.chunked_loss, {"n": 0}
 
-    def flaky_forward(self, *a, **k):
-        if self.training and fails["n"] == 0:
+    def fails_once(*a, **k):
+        if k.get("backward", a[3] if len(a) > 3 else True) and fails["n"] == 0:
             fails["n"] += 1
             raise torch.cuda.OutOfMemoryError("CUDA out of memory (simulated)")
-        return real_forward(self, *a, **k)
+        return real_loss(*a, **k)
 
-    monkeypatch.setattr(Qwen3ForCausalLM, "forward", flaky_forward)
+    monkeypatch.setattr(train, "chunked_loss", fails_once)
     assert train.main(["--config", cfgp, "--cpu", "--resume", "--max-steps", "10"]) == 0
-    assert fails["n"] == 1 and json.loads((out / "paper_meta.json").read_text())["step"] == 10
+    text = capsys.readouterr().out
+    assert fails["n"] == 1 and "left out one batch" not in text
+    assert json.loads((out / "paper_meta.json").read_text())["step"] == 10
 
-    # two failures in a row on the same batch stop the run with advice, not a traceback
-    def always_fails(self, *a, **k):
-        if self.training:
+    # a batch that fails twice is left out with a notice; if that keeps happening the run stops with advice
+    def never_fits(*a, **k):
+        if k.get("backward", a[3] if len(a) > 3 else True):
             raise torch.cuda.OutOfMemoryError("CUDA out of memory (simulated)")
-        return real_forward(self, *a, **k)
+        return real_loss(*a, **k)
 
-    monkeypatch.setattr(Qwen3ForCausalLM, "forward", always_fails)
+    monkeypatch.setattr(train, "chunked_loss", never_fits)
     with pytest.raises(SystemExit, match="Out of GPU memory"):
-        train.main(["--config", cfgp, "--cpu", "--resume", "--max-steps", "12"])
-    monkeypatch.setattr(Qwen3ForCausalLM, "forward", real_forward)
+        train.main(["--config", cfgp, "--cpu", "--resume", "--max-steps", "14"])
+    assert "left out one batch" in capsys.readouterr().out
+    monkeypatch.setattr(train, "chunked_loss", real_loss)
+
+
+def test_sliced_loss_matches_the_standard_loss_and_gradients(project):
+    """The memory-light loss must be the same number, with the same gradients, as the ordinary one."""
+    cfg = load(str(project / "config.yaml"))
+    tok = transformers.AutoTokenizer.from_pretrained(cfg["student"]["base_model"])
+    rows = read_jsonl(cfg["data_dir"] / "paper_train.jsonl")[:5]
+    examples, _ = train.encode_all(tok, rows, 512)
+    batch = train.collate(examples, tok.pad_token_id, "cpu")
+    torch.manual_seed(0)
+    model = train.add_lora(train.load_base(cfg["student"]["base_model"], False, "cpu"),
+                           {"lora_r": 8, "lora_alpha": 16, "lora_dropout": 0.0}, False)
+    for name, prm in model.named_parameters():  # LoRA's B matrices start at zero; give them values so
+        if "lora_B" in name:                     # that every adapter weight receives a real gradient
+            torch.nn.init.normal_(prm, std=0.05)
+    model.train()
+    params = {n: p_ for n, p_ in model.named_parameters() if p_.requires_grad}
+
+    standard = model(**batch).loss
+    (standard * 0.25).backward()
+    want = {n: p_.grad.clone() for n, p_ in params.items()}
+    model.zero_grad(set_to_none=True)
+
+    for chunk in (7, 512):  # several slices, and one slice
+        got_loss = train.chunked_loss(model, batch, scale=0.25, backward=True, chunk=chunk)
+        assert abs(got_loss - standard.item()) < 1e-4, (got_loss, standard.item())
+        for n, p_ in params.items():
+            assert torch.allclose(p_.grad, want[n], rtol=2e-3, atol=1e-6), n
+        model.zero_grad(set_to_none=True)
+    with torch.no_grad():
+        assert abs(train.chunked_loss(model, batch, backward=False, chunk=50) - standard.item()) < 1e-4
+    assert all(p_.grad is None for p_ in params.values())  # the no-gradient call left nothing behind
 
 
 def test_evaluate_runs_and_saves(project, capsys):

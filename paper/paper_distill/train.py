@@ -97,6 +97,49 @@ def collate(examples: list[dict], pad_id: int, device: str):
     return {"input_ids": ids.to(device), "attention_mask": mask.to(device), "labels": labels.to(device)}
 
 
+def lm_parts(model):
+    """The transformer body and the output head of a causal language model, LoRA-wrapped or not."""
+    hf = model.get_base_model() if hasattr(model, "get_base_model") else model
+    return hf.base_model, hf.get_output_embeddings()
+
+
+def chunked_loss(model, batch: dict, scale: float = 1.0, backward: bool = True, chunk: int = 512,
+                 autocast=None) -> float:
+    """Mean next-token loss over the labelled positions and, if asked, its gradients times `scale`.
+
+    The result is the same as `model(**batch).loss` followed by `(loss * scale).backward()`. The
+    difference is memory: the usual route builds scores over the whole vocabulary for every position
+    at once (several GB for a 150,000-word vocabulary), whereas this builds them a few hundred
+    positions at a time, and only for positions that have a label.
+    """
+    import contextlib
+
+    import torch.nn.functional as F
+
+    autocast = autocast or contextlib.nullcontext
+    body, head = lm_parts(model)
+    with autocast():
+        hidden = body(input_ids=batch["input_ids"], attention_mask=batch["attention_mask"]).last_hidden_state
+    labels = batch["labels"][:, 1:]
+    keep = labels != -100
+    h, y = hidden[:, :-1][keep], labels[keep]  # the states that predict a labelled token, and those tokens
+    n = int(y.numel())
+    if n == 0:
+        return 0.0
+    leaf = h.detach().requires_grad_(backward)
+    total = 0.0
+    for i in range(0, n, chunk):
+        with autocast():
+            logits = head(leaf[i:i + chunk])
+        part = F.cross_entropy(logits.float(), y[i:i + chunk], reduction="sum") / n
+        if backward:
+            part.backward()  # the head is frozen, so this only fills leaf.grad
+        total += part.item()
+    if backward:
+        h.backward(leaf.grad * scale)  # now carry that gradient back through the body, once
+    return total
+
+
 def lr_factor(step: int, total: int, warmup: int, floor: float) -> float:
     if step < warmup:
         return (step + 1) / warmup
@@ -181,10 +224,9 @@ def main(argv=None) -> int:
         vl = [len(e["input_ids"]) for e in val]
         for b in make_batches(vl, t["tokens_per_batch"], random.Random(0)):
             batch = collate([val[i] for i in b], tok.pad_token_id, device)
-            with autocast():
-                loss = model(**batch).loss
-            n = int((batch["labels"] != -100).sum())
-            loss_sum, tok_sum = loss_sum + loss.item() * n, tok_sum + n
+            loss = chunked_loss(model, batch, backward=False, chunk=t.get("loss_chunk", 512), autocast=autocast)
+            n = int((batch["labels"][:, 1:] != -100).sum())
+            loss_sum, tok_sum = loss_sum + loss * n, tok_sum + n
         model.train()
         return loss_sum / max(1, tok_sum)
 
@@ -212,7 +254,7 @@ def main(argv=None) -> int:
         free_gpu()  # validation uses differently shaped batches; hand their memory back
 
     model.train()
-    running, done = [], False
+    running, done, skipped = [], False, 0
     mark_time, mark_step, mark_tokens, seen_tokens, best_rate = time.time(), step, 0, 0, 0.0
     stopped_at = (start_epoch, start_batch)  # where a resumed run would pick up; moves on after every step
     try:
@@ -221,20 +263,28 @@ def main(argv=None) -> int:
             first = start_batch if epoch == start_epoch else 0
             for i in range(first, len(batches)):
                 batch = collate([train[j] for j in batches[i]], tok.pad_token_id, device)
-                retried = False
-                while True:
+                loss, tries = None, 0
+                while loss is None and tries < 2:
                     try:
-                        with autocast():
-                            loss = model(**batch).loss
-                        (loss / t["grad_accum"]).backward()
-                        break
+                        loss = chunked_loss(model, batch, 1.0 / t["grad_accum"], True, t.get("loss_chunk", 512),
+                                            autocast)
                     except torch.cuda.OutOfMemoryError:
-                        if retried:
-                            raise
-                        retried = True
-                    free_gpu()  # outside the except block, so the failed attempt's memory is released first
-                running.append(loss.item())
-                seen_tokens += int(batch["attention_mask"].sum())
+                        tries += 1
+                    if loss is None:
+                        free_gpu()  # outside the except block, so the failed attempt's memory is released first
+                if loss is None:
+                    skipped += 1
+                    print(f"train: left out one batch of {batch['input_ids'].numel()} tokens that does not fit in "
+                          f"GPU memory ({skipped} so far)", flush=True)
+                    if skipped > max(2, 0.02 * len(batches) * t["epochs"]):
+                        raise torch.cuda.OutOfMemoryError("too many batches do not fit")
+                    del batch
+                    free_gpu()
+                    if not ((i + 1) % t["grad_accum"] == 0 or i + 1 == len(batches)):
+                        continue  # otherwise fall through and take the optimiser step with what was gathered
+                else:
+                    running.append(loss)
+                    seen_tokens += int(batch["attention_mask"].sum())
                 if (i + 1) % t["grad_accum"] == 0 or i + 1 == len(batches):
                     torch.nn.utils.clip_grad_norm_(params, t["max_grad_norm"])
                     opt.step()
@@ -248,7 +298,7 @@ def main(argv=None) -> int:
                         rate = (seen_tokens - mark_tokens) / el
                         left = (total - step) * el / max(1, step - mark_step)
                         mem = f", {torch.cuda.memory_reserved() / 2 ** 30:.1f} GB" if device == "cuda" else ""
-                        print(f"train: step {step}/{total} loss {sum(running) / len(running):.4f} "
+                        print(f"train: step {step}/{total} loss {sum(running) / max(1, len(running)):.4f} "
                               f"lr {sched.get_last_lr()[0]:.2e} {rate:.0f} tok/s{mem}, about {left / 3600:.1f} h left",
                               flush=True)
                         if rate < 0.4 * best_rate:

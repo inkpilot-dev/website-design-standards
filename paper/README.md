@@ -234,14 +234,14 @@ There is also a real chance of no gain. `Qwen3-4B` already reasons in think tags
 
 ## What has and has not been tested
 
-Tested in a CPU-only container (139 tests):
+Tested in a CPU-only container (140 tests):
 
 - Every generator at every difficulty, with independent re-solving of the ordering puzzles and spot checks of the maths.
 - The answer checker, on accepted and rejected cases for every answer type.
 - The full build (prepare, author, solve, select, audit) against a scripted stand-in teacher, including resume, the call limit, a teacher outage, and the audit catching broken records.
 - The teacher client against a local stub server: request shape, streamed and plain replies, stopping over-long reasoning early, giving up on a stalled reply, retries and failures.
 - The training text against Qwen3-4B's own chat template, using its real tokenizer: they match exactly.
-- Train, resume, merge, generate and evaluate on a tiny randomly initialised model with the student's architecture. The loss falls, the merged model computes the same outputs as base plus adapter, and budgeted generation and voting run.
+- Train, pause, resume, merge, generate and evaluate on a tiny randomly initialised model with the student's architecture. The memory-light loss used in training is checked to give the same value and gradients as the standard one. The loss falls, the merged model computes the same outputs as base plus adapter, and budgeted generation and voting run.
 
 Not tested, because it needs a GPU or model weights that could not be downloaded there:
 
