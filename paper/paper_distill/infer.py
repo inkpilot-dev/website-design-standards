@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from collections import Counter
 from pathlib import Path
 
@@ -85,6 +86,49 @@ class LiveText:
         self.out.flush()
 
 
+FINAL_LINE_DONE = re.compile(r"final answer\s*\**\s*[:：][^\n]*\S[^\n]*\n", re.I)
+LOOP_SPAN = 24    # tokens: a stretch this long seen before, word for word, counts as one repeat
+LOOP_LIMIT = 40   # repeats tolerated before the text is judged to be going round in circles
+
+
+def stop_rules(tok, start: int, final_line: bool):
+    """Stopping rules for generation. `start` is where the newly generated tokens begin.
+
+    Loop: a row is stopped once it has repeated itself at length, which is what a small model does
+    when it cannot settle a question. FinalLine: a row is stopped once it has written a complete
+    `Final answer:` line, because nothing useful follows it.
+    """
+    import torch
+    from transformers import StoppingCriteria, StoppingCriteriaList
+
+    class Loop(StoppingCriteria):
+        def __init__(self):
+            self.seen, self.hits, self.tripped = None, None, None
+
+        def __call__(self, input_ids, scores, **kw):
+            rows, width = input_ids.shape
+            if self.seen is None:
+                self.seen, self.hits = [set() for _ in range(rows)], [0] * rows
+                self.tripped = [False] * rows
+            if width - start >= LOOP_SPAN:
+                for r, tail in enumerate(input_ids[:, -LOOP_SPAN:].tolist()):
+                    key = tuple(tail)
+                    if key in self.seen[r]:
+                        self.hits[r] += 1
+                        self.tripped[r] = self.tripped[r] or self.hits[r] >= LOOP_LIMIT
+                    self.seen[r].add(key)
+            return torch.tensor(self.tripped, device=input_ids.device)
+
+    class FinalLine(StoppingCriteria):
+        def __call__(self, input_ids, scores, **kw):
+            lo = max(start, input_ids.shape[1] - 96)
+            texts = tok.batch_decode(input_ids[:, lo:], skip_special_tokens=True)
+            return torch.tensor([bool(FINAL_LINE_DONE.search(t)) for t in texts], device=input_ids.device)
+
+    loop = Loop()
+    return StoppingCriteriaList([loop] + ([FinalLine()] if final_line else [])), loop
+
+
 class HFBackend:
     """The student loaded with transformers: a merged model folder, or a base model plus LoRA adapter."""
 
@@ -106,11 +150,16 @@ class HFBackend:
         self.model.eval()
         self.eot = end_of_turn(self.tok)
 
-    def _generate(self, texts: list[str], max_new: int, temperature: float, top_p: float, stop=None, live=None):
-        """Continue each text. Returns (new_text, finished) pairs; finished means the turn was ended."""
+    def _generate(self, texts: list[str], max_new: int, temperature: float, top_p: float, stop=None, live=None,
+                  final_line: bool = False):
+        """Continue each text. Returns (new_text, finished, looped) per text: finished means the model
+        ended its turn, looped means it was cut off for repeating itself."""
         torch = self.torch
         enc = self.tok(texts, return_tensors="pt", padding=True, add_special_tokens=False).to(self.device)
-        kw = dict(max_new_tokens=max_new, pad_token_id=self.tok.pad_token_id, do_sample=temperature > 0)
+        start = enc["input_ids"].shape[1]
+        rules, loop = stop_rules(self.tok, start, final_line)
+        kw = dict(max_new_tokens=max_new, pad_token_id=self.tok.pad_token_id, do_sample=temperature > 0,
+                  stopping_criteria=rules)
         if temperature > 0:
             kw.update(temperature=temperature, top_p=top_p)
         if stop:
@@ -119,14 +168,18 @@ class HFBackend:
             kw["streamer"] = live
         with torch.no_grad():
             out = self.model.generate(**enc, **kw)
+        looped = loop.tripped or [False] * len(texts)
         results = []
-        for row in out[:, enc["input_ids"].shape[1]:]:
+        for r, row in enumerate(out[:, start:]):
             text = self.tok.decode(row, skip_special_tokens=False)
             finished = self.eot in text
             text = text.split(self.eot, 1)[0]
             for special in {self.tok.pad_token, self.tok.eos_token} - {None}:
                 text = text.replace(special, "")
-            results.append((text, finished))
+            if final_line:  # keep nothing after the first complete final-answer line
+                m = FINAL_LINE_DONE.search(text)
+                text = text[:m.end()].rstrip() if m else text
+            results.append((text, finished, looped[r] and not finished))
         return results
 
     def complete(self, prompts: list[str], *, temperature: float, top_p: float, max_new_tokens: int,
@@ -141,20 +194,22 @@ class HFBackend:
                                live=LiveText(self.tok, show) if live else None)
         done: dict[int, str] = {}
         pending: list[tuple[int, str]] = []
-        for i, (text, finished) in enumerate(first):
+        for i, (text, finished, looped) in enumerate(first):
             if finished:
                 done[i] = text
             elif THINK_CLOSE in text:
                 pending.append((i, text))
-            else:  # budget spent while still reasoning: close the block and make it answer
+            else:  # still reasoning when the budget ran out, or going in circles: close the block
                 pending.append((i, text.rstrip() + f"\n{THINK_CLOSE}\n\n"))
                 if live:
-                    print("\n[reasoning budget reached; answering now]\n", flush=True)
+                    why = "reasoning was repeating itself" if looped else "reasoning budget reached"
+                    print(f"\n[{why}; answering now]\n", flush=True)
         if pending:
             rest = max(64, max_new_tokens - think_budget)
             second = self._generate([prompts[i] + t for i, t in pending], rest, temperature, top_p,
-                                    live=LiveText(self.tok, show, in_think=False) if live else None)
-            for (i, t), (more, _) in zip(pending, second):
+                                    live=LiveText(self.tok, show, in_think=False) if live else None,
+                                    final_line=True)
+            for (i, t), (more, _, _) in zip(pending, second):
                 done[i] = t + more
         return [done[i] for i in range(len(prompts))]
 

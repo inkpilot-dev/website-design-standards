@@ -220,7 +220,7 @@ The solver keeps accepted traces roughly level across generators, so the set doe
 - **More than the minimum.** Small models trained on only about 8,000 long traces lost accuracy in one study, while 7B and 14B models recovered at 16,000 to 32,000 ([arXiv 2506.07712](https://arxiv.org/abs/2506.07712)). The default is 12,000 short traces. Raising `dataset.target_size` is the most useful change you can make if you have the time.
 - **A mid-size teacher is fine.** Across many teacher and student pairs, a stronger teacher did not predict a better student ([arXiv 2601.14249](https://arxiv.org/abs/2601.14249)).
 - **Voting at inference.** DeepSeek's 1.5B distil went from 28.9 to 52.7 on AIME 2024 with majority voting over 64 samples (R1 paper, table 5). Paper samples three solutions and draws two more only if they disagree; stopping early when chains agree is both faster and more accurate than always voting over everything ([arXiv 2505.17813](https://arxiv.org/abs/2505.17813)).
-- **A reasoning budget.** If the model is still thinking when its budget runs out, the think block is closed and it must answer ([budget forcing](https://arxiv.org/abs/2501.19393)).
+- **A reasoning budget.** If the model is still thinking when its budget runs out, the think block is closed and it must answer ([budget forcing](https://arxiv.org/abs/2501.19393)). The same happens if its reasoning starts repeating itself word for word, and a reply ends as soon as it has written its `Final answer:` line.
 - **No self-checking pass.** Asking a small model to review its own answer mostly makes it worse ([arXiv 2310.01798](https://arxiv.org/abs/2310.01798)).
 - **Training settings.** Three epochs, learning rate 1e-4 with cosine decay to a tenth, in line with what DeepSeek reports for its distils ([arXiv 2501.12948](https://arxiv.org/abs/2501.12948)).
 
@@ -234,7 +234,7 @@ There is also a real chance of no gain. `Qwen3-4B` already reasons in think tags
 
 ## What has and has not been tested
 
-Tested in a CPU-only container (140 tests):
+Tested in a CPU-only container (141 tests):
 
 - Every generator at every difficulty, with independent re-solving of the ordering puzzles and spot checks of the maths.
 - The answer checker, on accepted and rejected cases for every answer type.

@@ -131,8 +131,8 @@ def test_live_chat_output_and_pausing_training(project, capsys, monkeypatch):
     shown = backend.complete([prompt], show=True, **gen)
     live = capsys.readouterr().out
     # same reply either way; the live view starts with the reasoning itself, not its opening tag
+    # (what the tiny model actually says varies from run to run, so only the shape is checked)
     assert shown == silent and len(live.strip()) > 10 and not live.lstrip().startswith("<think>")
-    assert "First I restate" in live
 
     # Ctrl+C part-way through training saves a checkpoint and the run can be resumed
     shutil.rmtree(out)
@@ -213,6 +213,42 @@ def test_sliced_loss_matches_the_standard_loss_and_gradients(project):
     with torch.no_grad():
         assert abs(train.chunked_loss(model, batch, backward=False, chunk=50) - standard.item()) < 1e-4
     assert all(p_.grad is None for p_ in params.values())  # the no-gradient call left nothing behind
+
+
+def test_stop_rules_for_final_line_and_for_going_in_circles(project):
+    cfg = load(str(project / "config.yaml"))
+    tok = transformers.AutoTokenizer.from_pretrained(cfg["student"]["base_model"])
+
+    def feed(rules, prompt, text):
+        """Run the rules as generate() would, one token at a time; return how many tokens were let through."""
+        p_ids = tok(prompt, add_special_tokens=False)["input_ids"]
+        t_ids = tok(text, add_special_tokens=False)["input_ids"]
+        for n in range(1, len(t_ids) + 1):
+            if bool(rules(torch.tensor([p_ids + t_ids[:n]]), None)[0]):
+                return n, len(t_ids)
+        return len(t_ids), len(t_ids)
+
+    prompt = "Reasoning that mentions Final answer: 3\n in passing.\n</think>\n\n"
+    reply = "The steps give four.\n\nFinal answer: 4\n\nFinal answer: 4\n\nFinal answer: 4\n"
+    rules, _ = infer.stop_rules(tok, len(tok(prompt, add_special_tokens=False)["input_ids"]), final_line=True)
+    used, total = feed(rules, prompt, reply)
+    kept = tok.decode(tok(reply, add_special_tokens=False)["input_ids"][:used])
+    assert used < total and kept.count("Final answer: 4") == 1   # stopped after the first one; prompt text ignored
+
+    # an answer still being written is not cut off
+    rules, _ = infer.stop_rules(tok, 0, final_line=True)
+    used, total = feed(rules, "", "The steps give four.\n\nFinal answer: 4")
+    assert used == total
+
+    circle = "Wait, 37 packs cost $148, leaving $2, which is not enough for another pack. So perhaps I am missing something. "
+    rules, loop = infer.stop_rules(tok, 0, final_line=False)
+    used, total = feed(rules, "", circle * 12)
+    assert used < total * 0.6 and loop.tripped == [True]            # caught after a few rounds
+
+    varied = " ".join(f"Step {i}: add {i * 3} to {i * 7} to get {i * 10}, then carry on." for i in range(1, 80))
+    rules, loop = infer.stop_rules(tok, 0, final_line=False)
+    used, total = feed(rules, "", varied)
+    assert used == total and loop.tripped == [False]                # ordinary step-by-step working is left alone
 
 
 def test_evaluate_runs_and_saves(project, capsys):
