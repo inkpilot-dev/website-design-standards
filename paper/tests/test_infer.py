@@ -1,3 +1,4 @@
+import json
 """Voting logic, tested with a scripted backend (no model needed)."""
 from paper_distill.infer import parse, solve, tally
 from paper_distill.train import lr_factor, make_batches
@@ -138,3 +139,43 @@ def test_chat_loop_ends_quietly_on_ctrl_c_or_end_of_input():
         raise KeyboardInterrupt
 
     chat(Scripted([]), "sys", INF, ask=interrupted, out=lambda *_: None)  # must simply return
+
+
+def test_retry_only_touches_unanswered_problems_and_summary_pairs_runs(tmp_path, capsys):
+    from paper_distill import evaluate
+
+    problems = {str(i): {"id": str(i), "question": f"q{i}", "answer_type": "int", "ground_truth": str(i), "meta": {}}
+                for i in range(5)}
+    rows = [{"id": "0", "domain": "d", "difficulty": 1, "final": "0", "correct": True},
+            {"id": "1", "domain": "d", "difficulty": 1, "final": "9", "correct": False},   # wrong, but answered
+            {"id": "2", "domain": "d", "difficulty": 2, "final": None, "correct": False},
+            {"id": "3", "domain": "d", "difficulty": 2, "final": None, "correct": False},
+            {"id": "4", "domain": "d", "difficulty": 2, "final": None, "correct": False}]
+
+    class Second:
+        """Answers problem 2 on the first retry, problem 3 on the second, and never answers problem 4."""
+        calls = []
+
+        def ask(self, system, questions, n=1, **gen):
+            Second.calls.append(list(questions))
+            out = []
+            for q in questions:
+                ok = q == "q2" or (q == "q3" and len(Second.calls) == 2)
+                out.append([reply(q[1:]) if ok else "<think>\nround and round\n</think>\n\nNot sure."])
+            return out
+
+    res = evaluate.retry_unanswered(Second(), "sys", {"rows": rows}, problems, INF)
+    assert Second.calls == [["q2", "q3", "q4"], ["q3", "q4"]]
+    assert [r["correct"] for r in res["rows"]] == [True, False, True, True, False]
+    assert res["overall"]["correct"] == 3 and res["no_answer"] == 1
+    assert rows[2]["final"] is None                      # the saved run itself is not altered
+
+    out = tmp_path / "out"
+    out.mkdir()
+    base = {"label": "base", "set": "procedural", "strategy": "single", "no_answer": 3, **evaluate.tabulate(rows)}
+    mine = {"label": "paper", "set": "procedural", "strategy": "single", "no_answer": 1, **res}
+    (out / "eval_base_procedural_single.json").write_text(json.dumps(base))
+    (out / "eval_paper_procedural_single.json").write_text(json.dumps(mine))
+    evaluate.summary({"root": tmp_path})
+    text = capsys.readouterr().out
+    assert "base alone was right on 0, paper alone on 2; they agreed on the other 3" in text

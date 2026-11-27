@@ -6,6 +6,7 @@ its own base model and with its teacher on the same questions.
     python -m paper_distill.evaluate --strategy vote                  # Paper with majority voting
     python -m paper_distill.evaluate --teacher                        # the teacher, via its endpoint
     python -m paper_distill.evaluate --set gsm8k --n 300              # GSM8K test split
+    python -m paper_distill.evaluate --retry-unanswered               # re-ask only what got no final answer
     python -m paper_distill.evaluate --summary                        # table of every saved result
 
 The procedural set is generated with a different seed from the training problems and is
@@ -63,6 +64,11 @@ def run(backend, system: str, problems: list[dict], inf: dict, strategy: str, ba
         print(f"evaluate: {done}/{len(problems)} done, {sum(r['correct'] for r in rows) / done:.1%} correct so far, "
               f"{el / done:.1f} s each, about {(len(problems) - done) * el / done / 60:.0f} min left", flush=True)
 
+    return {**tabulate(rows), "seconds_per_question": (time.time() - t0) / max(1, len(rows))}
+
+
+def tabulate(rows: list[dict]) -> dict:
+    """Accuracy overall, by difficulty and by domain, from per-problem rows."""
     def score(sub: list[dict]) -> dict:
         k, n = sum(r["correct"] for r in sub), len(sub)
         lo, hi = wilson(k, n)
@@ -74,8 +80,29 @@ def run(backend, system: str, problems: list[dict], inf: dict, strategy: str, ba
         by_diff[r["difficulty"]].append(r)
     return {"overall": score(rows), "no_answer": sum(r["final"] is None for r in rows),
             "by_difficulty": {str(k): score(v) for k, v in sorted(by_diff.items())},
-            "by_domain": {k: score(v) for k, v in sorted(by_domain.items())},
-            "seconds_per_question": (time.time() - t0) / max(1, len(rows)), "rows": rows}
+            "by_domain": {k: score(v) for k, v in sorted(by_domain.items())}, "rows": rows}
+
+
+def retry_unanswered(backend, system: str, saved: dict, problems: dict[str, dict], inf: dict, rounds: int = 2) -> dict:
+    """Ask again, up to `rounds` times, only the problems that produced no final answer in a saved run.
+
+    The result is what that run would have scored had the harness always retried a reply that
+    never reached an answer. Problems that were answered, rightly or wrongly, are left untouched.
+    """
+    gen = dict(temperature=inf["temperature"], top_p=inf["top_p"], max_new_tokens=inf["max_new_tokens"],
+               think_budget=inf["think_budget"])
+    rows = [dict(r) for r in saved["rows"]]
+    for attempt in range(rounds):
+        todo = [r for r in rows if r["final"] is None]
+        if not todo:
+            break
+        print(f"evaluate: asking {len(todo)} unanswered problem(s) again (try {attempt + 1} of {rounds})", flush=True)
+        replies = backend.ask(system, [problems[r["id"]]["question"] for r in todo], 1, **gen)
+        for r, texts in zip(todo, replies):
+            p = problems[r["id"]]
+            r["final"] = parse(texts[0])[2]
+            r["correct"] = check_answer(p["answer_type"], p["ground_truth"], r["final"], p.get("meta"))
+    return tabulate(rows)
 
 
 def summary(cfg: dict) -> None:
@@ -83,12 +110,27 @@ def summary(cfg: dict) -> None:
     if not files:
         print("No saved results yet.")
         return
-    print(f"{'model':<28}{'set':<12}{'strategy':<9}{'n':>5}{'accuracy':>10}   95% interval")
-    for f in files:
-        r = json.loads(f.read_text())
+    runs = [json.loads(f.read_text()) for f in files]
+    print(f"{'model':<28}{'set':<12}{'strategy':<9}{'n':>5}{'accuracy':>10}   {'95% interval':<17}no answer")
+    for r in runs:
         o = r["overall"]
+        interval = f"{o['ci95'][0]:.1%} to {o['ci95'][1]:.1%}"
         print(f"{r['label']:<28}{r['set']:<12}{r['strategy']:<9}{o['n']:>5}{o['accuracy']:>10.1%}   "
-              f"{o['ci95'][0]:.1%} to {o['ci95'][1]:.1%}")
+              f"{interval:<17}{r.get('no_answer', 0)}")
+    # Same problems, two models: count where one was right and the other wrong. That is a sharper
+    # comparison than two separate percentages.
+    for i, x in enumerate(runs):
+        for y in runs[i + 1:]:
+            if x["label"] == y["label"] or (x["set"], x["strategy"]) != (y["set"], y["strategy"]):
+                continue
+            xr, yr = {r["id"]: r["correct"] for r in x["rows"]}, {r["id"]: r["correct"] for r in y["rows"]}
+            both = xr.keys() & yr.keys()
+            if not both:
+                continue
+            only_x = sum(xr[k] and not yr[k] for k in both)
+            only_y = sum(yr[k] and not xr[k] for k in both)
+            print(f"\n{x['strategy']}, on the same {len(both)} problems: {x['label']} alone was right on {only_x}, "
+                  f"{y['label']} alone on {only_y}; they agreed on the other {len(both) - only_x - only_y}.")
 
 
 def main(argv=None) -> int:
@@ -98,6 +140,9 @@ def main(argv=None) -> int:
     ap.add_argument("--strategy", choices=["single", "vote"], default="single")
     ap.add_argument("--teacher", action="store_true", help="evaluate the teacher configured in config.yaml")
     ap.add_argument("--summary", action="store_true")
+    ap.add_argument("--retry-unanswered", action="store_true",
+                    help="re-ask only the problems that got no final answer in the saved single run; "
+                         "saves the outcome as strategy `retry`")
     ap.add_argument("--batch", type=int, default=8)
     add_model_args(ap)
     a = ap.parse_args(argv)
@@ -114,11 +159,20 @@ def main(argv=None) -> int:
     else:
         backend, system = backend_from_args(cfg, a)
         label = a.name if a.http else (a.model or "paper")
-    res = run(backend, system, load_set(cfg, a.set, a.n), cfg["inference"], a.strategy, a.batch)
-    res.update(label=label, set=a.set, strategy=a.strategy)
     out = cfg["root"] / "out"
     out.mkdir(exist_ok=True)
     safe = "".join(c if c.isalnum() else "-" for c in label)
+    if a.retry_unanswered:
+        first = out / f"eval_{safe}_{a.set}_single.json"
+        if not first.exists():
+            raise SystemExit(f"No saved single run for {label} on {a.set}. Run the evaluation without "
+                             "--retry-unanswered first.")
+        problems = {p["id"]: p for p in load_set(cfg, a.set, None)}
+        res = retry_unanswered(backend, system, json.loads(first.read_text()), problems, cfg["inference"])
+        a.strategy = "retry"
+    else:
+        res = run(backend, system, load_set(cfg, a.set, a.n), cfg["inference"], a.strategy, a.batch)
+    res.update(label=label, set=a.set, strategy=a.strategy)
     path = out / f"eval_{safe}_{a.set}_{a.strategy}.json"
     path.write_text(json.dumps(res, indent=2))
     o = res["overall"]

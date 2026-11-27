@@ -286,3 +286,16 @@ def test_evaluate_runs_and_saves(project, capsys):
     assert res["overall"]["n"] == 6 and 0.0 <= res["overall"]["accuracy"] <= 1.0
     assert evaluate.main(["--config", cfgp, "--summary"]) == 0
     assert "accuracy" in capsys.readouterr().out
+
+    # re-asking only the unanswered problems leaves answered ones alone and saves a separate result
+    before = {r["id"]: r for r in res["rows"]}
+    assert evaluate.main(["--config", cfgp, "--cpu", "--retry-unanswered"]) == 0
+    again = json.loads((project / "out" / "eval_paper_procedural_retry.json").read_text())
+    assert again["strategy"] == "retry" and again["overall"]["n"] == 6
+    for r in again["rows"]:
+        if before[r["id"]]["final"] is not None:
+            assert r == before[r["id"]]
+    assert again["no_answer"] <= res["no_answer"]
+    capsys.readouterr()
+    assert evaluate.main(["--config", cfgp, "--summary"]) == 0
+    assert "retry" in capsys.readouterr().out

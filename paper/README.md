@@ -234,7 +234,7 @@ There is also a real chance of no gain. `Qwen3-4B` already reasons in think tags
 
 ## What has and has not been tested
 
-Tested in a CPU-only container (142 tests):
+Tested in a CPU-only container (143 tests):
 
 - Every generator at every difficulty, with independent re-solving of the ordering puzzles and spot checks of the maths.
 - The answer checker, on accepted and rejected cases for every answer type.
