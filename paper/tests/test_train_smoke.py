@@ -251,6 +251,30 @@ def test_stop_rules_for_final_line_and_for_going_in_circles(project):
     assert used == total and loop.tripped == [False]                # ordinary step-by-step working is left alone
 
 
+def test_an_oversized_batch_is_split_instead_of_failing(project, monkeypatch):
+    cfg = load(str(project / "config.yaml"))
+    backend = infer.HFBackend(cfg["student"]["base_model"], cpu=True)
+    sizes = []
+
+    def fits_two_at_most(texts, *a, **k):
+        sizes.append(len(texts))
+        if len(texts) > 2:
+            raise torch.cuda.OutOfMemoryError("CUDA out of memory (simulated)")
+        return [(t.upper(), True, False) for t in texts]
+
+    monkeypatch.setattr(backend, "_generate", fits_two_at_most)
+    out = backend._generate_safe(list("abcdefg"), 10, 0.0, 1.0)
+    assert [t for t, _, _ in out] == list("ABCDEFG")        # every prompt answered, in order
+    assert sizes[0] == 7 and sizes.count(1) + 2 * sizes.count(2) == 7  # the batches that fitted cover all seven
+
+    def never_fits(texts, *a, **k):
+        raise torch.cuda.OutOfMemoryError("CUDA out of memory (simulated)")
+
+    monkeypatch.setattr(backend, "_generate", never_fits)
+    with pytest.raises(torch.cuda.OutOfMemoryError):       # a single prompt that cannot fit is a real error
+        backend._generate_safe(["a", "b"], 10, 0.0, 1.0)
+
+
 def test_evaluate_runs_and_saves(project, capsys):
     cfgp = str(project / "config.yaml")
     if not (project / "out" / "paper-lora" / "adapter_config.json").exists():

@@ -48,6 +48,8 @@ def run(backend, system: str, problems: list[dict], inf: dict, strategy: str, ba
     gen = dict(temperature=inf["temperature"], top_p=inf["top_p"], max_new_tokens=inf["max_new_tokens"],
                think_budget=inf["think_budget"])
     rows, t0 = [], time.time()
+    print(f"evaluate: {len(problems)} problems, {batch} at a time. The first line appears when the first "
+          f"{batch} are done, which can take a few minutes.", flush=True)
     for start in range(0, len(problems), batch):
         chunk = problems[start:start + batch]
         if strategy == "single":
@@ -57,9 +59,9 @@ def run(backend, system: str, problems: list[dict], inf: dict, strategy: str, ba
         for p, final in zip(chunk, finals):
             rows.append({"id": p["id"], "domain": p["domain"], "difficulty": p["difficulty"], "final": final,
                          "correct": check_answer(p["answer_type"], p["ground_truth"], final, p.get("meta"))})
-        done = len(rows)
-        print(f"evaluate: {done}/{len(problems)} correct so far {sum(r['correct'] for r in rows) / done:.1%} "
-              f"({(time.time() - t0) / done:.1f} s each)", flush=True)
+        done, el = len(rows), time.time() - t0
+        print(f"evaluate: {done}/{len(problems)} done, {sum(r['correct'] for r in rows) / done:.1%} correct so far, "
+              f"{el / done:.1f} s each, about {(len(problems) - done) * el / done / 60:.0f} min left", flush=True)
 
     def score(sub: list[dict]) -> dict:
         k, n = sum(r["correct"] for r in sub), len(sub)

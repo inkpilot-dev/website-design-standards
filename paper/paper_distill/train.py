@@ -32,7 +32,10 @@ def load_base(name: str, load_4bit: bool, device: str):
         from transformers import BitsAndBytesConfig
         q = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_quant_type="nf4", bnb_4bit_use_double_quant=True,
                                bnb_4bit_compute_dtype=torch.bfloat16)
-        return AutoModelForCausalLM.from_pretrained(name, quantization_config=q, device_map={"": 0})
+        # bf16 for the parts that are not quantised (embeddings, norms), so that activations and the
+        # generation cache are half the size of the float32 default. Training re-casts what it needs.
+        return AutoModelForCausalLM.from_pretrained(name, quantization_config=q, device_map={"": 0},
+                                                    dtype=torch.bfloat16)
     dtype = torch.bfloat16 if device == "cuda" else torch.float32
     return AutoModelForCausalLM.from_pretrained(name, dtype=dtype).to(device)
 

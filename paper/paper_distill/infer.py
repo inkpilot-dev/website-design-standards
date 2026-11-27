@@ -149,6 +149,27 @@ class HFBackend:
             self.model = PeftModel.from_pretrained(self.model, adapter)
         self.model.eval()
         self.eot = end_of_turn(self.tok)
+        if self.device == "cuda":
+            # Keep within the card's own memory. Past it, Windows moves the work into ordinary system
+            # memory and generation slows to a crawl; with a cap, an oversized batch is split instead.
+            torch.cuda.set_per_process_memory_fraction(0.85, 0)
+
+    def _free(self) -> None:
+        if self.device == "cuda":
+            import gc
+            gc.collect()
+            self.torch.cuda.empty_cache()
+
+    def _generate_safe(self, texts: list[str], *a, **k):
+        """_generate, halving the batch whenever it does not fit in GPU memory."""
+        try:
+            return self._generate(texts, *a, **k)
+        except self.torch.cuda.OutOfMemoryError:
+            if len(texts) == 1:
+                raise
+        self._free()  # outside the except block, so the failed attempt's memory is released first
+        mid = len(texts) // 2
+        return self._generate_safe(texts[:mid], *a, **k) + self._generate_safe(texts[mid:], *a, **k)
 
     def _generate(self, texts: list[str], max_new: int, temperature: float, top_p: float, stop=None, live=None,
                   final_line: bool = False):
@@ -166,7 +187,7 @@ class HFBackend:
             kw.update(stop_strings=stop, tokenizer=self.tok)
         if live is not None:
             kw["streamer"] = live
-        with torch.no_grad():
+        with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16, enabled=self.device == "cuda"):
             out = self.model.generate(**enc, **kw)
         looped = loop.tripped or [False] * len(texts)
         results = []
@@ -190,8 +211,8 @@ class HFBackend:
         visible (True) or reduced to dots (False). None prints nothing.
         """
         live = show is not None and len(prompts) == 1
-        first = self._generate(prompts, min(think_budget, max_new_tokens), temperature, top_p, stop=[THINK_CLOSE],
-                               live=LiveText(self.tok, show) if live else None)
+        first = self._generate_safe(prompts, min(think_budget, max_new_tokens), temperature, top_p,
+                                    stop=[THINK_CLOSE], live=LiveText(self.tok, show) if live else None)
         done: dict[int, str] = {}
         pending: list[tuple[int, str]] = []
         for i, (text, finished, looped) in enumerate(first):
@@ -206,9 +227,9 @@ class HFBackend:
                     print(f"\n[{why}; answering now]\n", flush=True)
         if pending:
             rest = max(64, max_new_tokens - think_budget)
-            second = self._generate([prompts[i] + t for i, t in pending], rest, temperature, top_p,
-                                    live=LiveText(self.tok, show, in_think=False) if live else None,
-                                    final_line=True)
+            second = self._generate_safe([prompts[i] + t for i, t in pending], rest, temperature, top_p,
+                                         live=LiveText(self.tok, show, in_think=False) if live else None,
+                                         final_line=True)
             for (i, t), (more, _, _) in zip(pending, second):
                 done[i] = t + more
         return [done[i] for i in range(len(prompts))]
